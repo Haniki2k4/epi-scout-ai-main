@@ -1,0 +1,13 @@
+fastapi
+uvicorn
+sqlalchemy
+pyodbc
+pydantic
+feedparser
+requests
+beautifulsoup4
+nltk
+rapidfuzz
+python-multipart
+
+python-dotenv
