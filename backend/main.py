@@ -36,7 +36,7 @@ def get_db():
 @app.post("/api/scan", response_model=schemas.ScanResult)
 def scan_news(request: schemas.ScanRequest, db: Session = Depends(get_db)):
     # Trigger scan logic
-    return crawler.scan_news(db, request.fetch_unknown)
+    return crawler.scan_news(db, request.fetch_unknown, request.days_limit, request.max_execution_time)
 
 @app.get("/api/articles", response_model=List[schemas.ArticleDTO])
 def read_articles(

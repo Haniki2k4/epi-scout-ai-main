@@ -47,6 +47,8 @@ class KeywordDTO(KeywordBase):
 
 class ScanRequest(BaseModel):
     fetch_unknown: bool = False # If true, also returns unknown articles
+    days_limit: int = 3
+    max_execution_time: int = 0 # In minutes. 0 means unlimited (or bounded by days_limit)
 
 class ScanResult(BaseModel):
     saved_trusted_count: int

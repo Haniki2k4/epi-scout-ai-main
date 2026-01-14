@@ -9,6 +9,7 @@ import { useToast } from "@/components/ui/use-toast";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { ScanResultModal } from "./ScanResultModal";
+import { Slider } from "@/components/ui/slider";
 import { Article, Keyword } from "@/types";
 
 const KeywordMonitoring = () => {
@@ -20,6 +21,9 @@ const KeywordMonitoring = () => {
   const [scanAll, setScanAll] = useState(false);
   const [unknownArticles, setUnknownArticles] = useState<Article[]>([]);
   const [showModal, setShowModal] = useState(false);
+  const [scanMode, setScanMode] = useState<'days' | 'time'>('days');
+  const [daysLimit, setDaysLimit] = useState("3");
+  const [timeLimit, setTimeLimit] = useState("15");
 
   // Initial Fetch
   useEffect(() => {
@@ -99,10 +103,16 @@ const KeywordMonitoring = () => {
     });
 
     try {
+      const payload = {
+        fetch_unknown: scanAll,
+        days_limit: scanMode === 'days' ? parseInt(daysLimit) : 180,
+        max_execution_time: scanMode === 'time' ? parseInt(timeLimit) : 0
+      };
+
       const res = await fetch("/api/scan", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fetch_unknown: scanAll }),
+        body: JSON.stringify(payload),
       });
 
       if (res.ok) {
@@ -120,7 +130,7 @@ const KeywordMonitoring = () => {
           if (result.unknown_articles.length === 0) {
             toast({
               title: "Quét hoàn tất",
-              description: "Không tìm thấy bài viết mới phù hợp.",
+              description: "Không tìm thấy bài viết mới.",
             });
           }
         }
@@ -223,7 +233,75 @@ const KeywordMonitoring = () => {
               </div>
             </div>
 
-            <div className="flex items-center gap-4">
+            {/* UI for Scan Config */}
+            <div className="space-y-4 border-t pt-4">
+              <div>
+                <Label className="mb-2 block">Chế độ quét</Label>
+                <div className="flex gap-4">
+                  <div className="flex items-center space-x-2">
+                    <input
+                      type="radio" id="mode-days" name="scanMode"
+                      checked={scanMode === 'days'} onChange={() => setScanMode('days')}
+                      className="h-4 w-4 border-gray-300 text-primary focus:ring-primary"
+                    />
+                    <Label htmlFor="mode-days">Theo phạm vi ngày</Label>
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <input
+                      type="radio" id="mode-time" name="scanMode"
+                      checked={scanMode === 'time'} onChange={() => setScanMode('time')}
+                      className="h-4 w-4 border-gray-300 text-primary focus:ring-primary"
+                    />
+                    <Label htmlFor="mode-time">Theo thời gian chạy</Label>
+                  </div>
+                </div>
+              </div>
+
+              {scanMode === "days" && (
+                <div className="space-y-2">
+                  <Label>Phạm vi (ngày)</Label>
+                  <div className="flex gap-2">
+                    {["3", "5", "10"].map(val => (
+                      <Button
+                        key={val}
+                        variant={daysLimit === val ? "default" : "outline"}
+                        size="sm"
+                        onClick={() => setDaysLimit(val)}
+                        className="flex-1"
+                      >
+                        {val} ngày
+                      </Button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {scanMode === "time" && (
+                <div className="space-y-4">
+                  <div className="flex justify-between items-center">
+                    <Label>Chạy trong (phút)</Label>
+                    <span className="text-sm font-medium text-muted-foreground">{timeLimit} phút</span>
+                  </div>
+                  <Slider
+                    value={[parseInt(timeLimit)]}
+                    onValueChange={(val) => setTimeLimit(val[0].toString())}
+                    min={5}
+                    max={60}
+                    step={1}
+                    className="w-full"
+                  />
+                  <div className="flex justify-between text-xs text-muted-foreground">
+                    <span>5p</span>
+                    <span>15p</span>
+                    <span>30p</span>
+                    <span>45p</span>
+                    <span>60p</span>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="flex items-center gap-4 pt-2">
               <Button
                 onClick={handleStartScan}
                 className="flex-1"
