@@ -1,6 +1,5 @@
 from sqlalchemy.orm import Session
-from . import models, schemas
-from datetime import datetime
+from backend.app.modules.news import models, schemas
 
 # --- Articles ---
 

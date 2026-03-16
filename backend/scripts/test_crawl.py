@@ -1,5 +1,5 @@
-from backend import crawler, database, models, crud
-from backend.database import SessionLocal, engine
+from backend.app.modules.news import crawler, crud, models
+from backend.app.core.database import SessionLocal, engine
 
 # Ensure tables exist
 models.Base.metadata.create_all(bind=engine)

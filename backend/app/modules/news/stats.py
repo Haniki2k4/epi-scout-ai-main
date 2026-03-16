@@ -1,6 +1,6 @@
 from sqlalchemy.orm import Session
 from sqlalchemy import func
-from . import models
+from backend.app.modules.news import models
 from datetime import datetime, timedelta
 
 def get_overview_stats(db: Session):

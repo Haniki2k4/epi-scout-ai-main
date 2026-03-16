@@ -1,6 +1,6 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, Text, ForeignKey, Unicode, UnicodeText
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Unicode, UnicodeText
 from sqlalchemy.orm import relationship
-from .database import Base
+from backend.app.core.database import Base
 from datetime import datetime
 
 class ArticleIdentity(Base):

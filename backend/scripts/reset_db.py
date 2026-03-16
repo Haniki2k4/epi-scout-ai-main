@@ -1,4 +1,5 @@
-from backend import database, models
+from backend.app.core import database
+from backend.app.modules.news import models
 import logging
 
 # Configure logging
