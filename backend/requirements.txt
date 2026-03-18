@@ -10,5 +10,5 @@ beautifulsoup4
 nltk
 rapidfuzz
 python-multipart
-
+loguru
 python-dotenv

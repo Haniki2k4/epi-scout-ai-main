@@ -5,9 +5,11 @@ from typing import List
 import re
 from .core import database
 from .core.database import get_db
+from .core.logger import get_logger
 from .modules.news import crawler, crud, models, schemas, stats
 
 app = FastAPI()
+logger = get_logger("backend.main")
 
 KEYWORD_MAX_LENGTH = 255
 
@@ -35,6 +37,8 @@ def parse_keywords_input(text: str) -> list[str]:
 @app.on_event("startup")
 def init_database() -> None:
     models.Base.metadata.create_all(bind=database.engine)
+    logger.info("Backend startup complete, database metadata ensured")
+    crawler.log_llm_preflight_status(force_refresh=True)
 
 # CORS configuration
 origins = [
@@ -56,8 +60,14 @@ app.add_middleware(
 
 @app.post("/api/scan", response_model=schemas.ScanResult)
 def scan_news(request: schemas.ScanRequest, db: Session = Depends(get_db)):
-    # Trigger scan logic
-    return crawler.scan_news(db, request.fetch_unknown)
+    logger.info("Scan requested | fetch_unknown={}", request.fetch_unknown)
+    result = crawler.scan_news(db, request.fetch_unknown)
+    logger.info(
+        "Scan completed | saved_trusted_count={} unknown_articles={}",
+        result.saved_trusted_count,
+        len(result.unknown_articles),
+    )
+    return result
 
 @app.get("/api/articles", response_model=List[schemas.ArticleDTO])
 def read_articles(
@@ -65,41 +75,58 @@ def read_articles(
     limit: int = 100, 
     db: Session = Depends(get_db)
 ):
+    logger.info("Read articles requested | skip={} limit={}", skip, limit)
     articles = crud.get_articles(db, skip=skip, limit=limit)
+    logger.info("Read articles completed | count={}", len(articles))
     return articles
 
 @app.post("/api/articles/save", response_model=schemas.ArticleDTO)
 def save_article(article: schemas.ArticleCreate, db: Session = Depends(get_db)):
-    # Check if exists
+    logger.info("Save article requested | link={} title={}", article.link, article.title)
     existing = crud.get_article_by_link(db, article.link)
     if existing:
+        logger.warning("Save article rejected, already exists | link={}", article.link)
         raise HTTPException(status_code=400, detail="Article already saved")
-    return crud.create_article(db, article)
+    saved_article = crud.create_article(db, article)
+    logger.info("Article saved | id={} link={}", saved_article.id, article.link)
+    return saved_article
 
 # --- Stats ---
 
 @app.get("/api/stats/overview")
 def get_stats_overview(db: Session = Depends(get_db)):
-    return stats.get_overview_stats(db)
+    logger.info("Stats overview requested")
+    result = stats.get_overview_stats(db)
+    logger.info("Stats overview completed | total_articles={}", result.get("total_articles"))
+    return result
 
 @app.get("/api/stats/trends")
 def get_stats_trends(days: int = 7, db: Session = Depends(get_db)):
-    return stats.get_trend_data(db, days)
+    logger.info("Stats trends requested | days={}", days)
+    result = stats.get_trend_data(db, days)
+    logger.info("Stats trends completed | points={}", len(result))
+    return result
 
 # --- Resources ---
 
 @app.get("/api/keywords", response_model=List[schemas.KeywordDTO])
 def read_keywords(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    return crud.get_keywords(db, skip=skip, limit=limit)
+    logger.info("Read keywords requested | skip={} limit={}", skip, limit)
+    keywords = crud.get_keywords(db, skip=skip, limit=limit)
+    logger.info("Read keywords completed | count={}", len(keywords))
+    return keywords
 
 @app.post("/api/keywords", response_model=schemas.KeywordDTO | List[schemas.KeywordDTO])
 def create_keyword(keyword: schemas.KeywordCreate, db: Session = Depends(get_db)):
+    logger.info("Create keyword requested | raw_text={}", keyword.text)
     keywords = parse_keywords_input(keyword.text)
     if not keywords:
+        logger.warning("Create keyword rejected | reason=empty_input")
         raise HTTPException(status_code=400, detail="Keyword is required")
 
     too_long = [item for item in keywords if len(item) > KEYWORD_MAX_LENGTH]
     if too_long:
+        logger.warning("Create keyword rejected | reason=keyword_too_long keyword={}", too_long[0][:60])
         raise HTTPException(
             status_code=400,
             detail=f"Keyword exceeds {KEYWORD_MAX_LENGTH} characters: {too_long[0][:60]}",
@@ -109,28 +136,41 @@ def create_keyword(keyword: schemas.KeywordCreate, db: Session = Depends(get_db)
     for item in keywords:
         existing = crud.get_keyword_by_text(db, item)
         if existing:
+            logger.info("Create keyword skipped | reason=already_exists keyword={}", item)
             continue
         created_keywords.append(crud.create_keyword(db, schemas.KeywordCreate(text=item)))
 
     if not created_keywords:
+        logger.warning("Create keyword rejected | reason=all_keywords_exist")
         raise HTTPException(status_code=400, detail="Keyword already exists")
 
+    logger.info("Create keyword completed | created_count={}", len(created_keywords))
     return created_keywords[0] if len(created_keywords) == 1 else created_keywords
 
 @app.delete("/api/keywords/{keyword_id}")
 def delete_keyword(keyword_id: int, db: Session = Depends(get_db)):
+    logger.info("Delete keyword requested | keyword_id={}", keyword_id)
     success = crud.delete_keyword(db, keyword_id)
     if not success:
+        logger.warning("Delete keyword failed | keyword_id={} reason=not_found", keyword_id)
         raise HTTPException(status_code=404, detail="Keyword not found")
+    logger.info("Delete keyword completed | keyword_id={}", keyword_id)
     return {"status": "success", "id": keyword_id}
 
 @app.get("/api/whitelist", response_model=List[schemas.WhitelistDTO])
 def read_whitelist(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    return crud.get_whitelisted_domains(db, skip=skip, limit=limit)
+    logger.info("Read whitelist requested | skip={} limit={}", skip, limit)
+    domains = crud.get_whitelisted_domains(db, skip=skip, limit=limit)
+    logger.info("Read whitelist completed | count={}", len(domains))
+    return domains
 
 @app.post("/api/whitelist", response_model=schemas.WhitelistDTO)
 def create_whitelist(domain: schemas.WhitelistCreate, db: Session = Depends(get_db)):
+    logger.info("Create whitelist requested | domain={}", domain.domain)
     existing = crud.get_whitelist_by_name(db, domain.domain)
     if existing:
+        logger.warning("Create whitelist rejected | domain={} reason=already_exists", domain.domain)
         raise HTTPException(status_code=400, detail="Domain already whitelisted")
-    return crud.create_whitelist_domain(db, domain)
+    created_domain = crud.create_whitelist_domain(db, domain)
+    logger.info("Create whitelist completed | id={} domain={}", created_domain.id, created_domain.domain)
+    return created_domain
