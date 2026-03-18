@@ -1,5 +1,5 @@
 from sqlalchemy.orm import Session
-from backend.app.modules.news import models, schemas
+from . import models, schemas
 
 # --- Articles ---
 

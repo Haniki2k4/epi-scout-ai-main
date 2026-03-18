@@ -2,13 +2,16 @@ from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from typing import List
-from backend.app.core import database
-from backend.app.core.database import get_db
-from backend.app.modules.news import crawler, crud, models, schemas, stats
-
-models.Base.metadata.create_all(bind=database.engine)
+from .core import database
+from .core.database import get_db
+from .modules.news import crawler, crud, models, schemas, stats
 
 app = FastAPI()
+
+
+@app.on_event("startup")
+def init_database() -> None:
+    models.Base.metadata.create_all(bind=database.engine)
 
 # CORS configuration
 origins = [

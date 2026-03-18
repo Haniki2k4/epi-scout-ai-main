@@ -1,7 +1,8 @@
 from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Unicode, UnicodeText
 from sqlalchemy.orm import relationship
-from backend.app.core.database import Base
 from datetime import datetime
+
+from ...core.database import Base
 
 class ArticleIdentity(Base):
     __tablename__ = "article_identity"

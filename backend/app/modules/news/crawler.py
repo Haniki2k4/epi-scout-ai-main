@@ -1,6 +1,6 @@
 import feedparser
 from sqlalchemy.orm import Session
-from backend.app.modules.news import schemas, crud, models
+from . import crud, models, schemas
 from datetime import datetime, timedelta
 import logging
 from urllib.parse import urlparse
