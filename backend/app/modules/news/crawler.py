@@ -5,21 +5,34 @@ from datetime import datetime, timedelta
 import logging
 from urllib.parse import urlparse
 import re
+import html
 
 logger = logging.getLogger(__name__)
 
-# List of common Vietnamese health RSS feeds
+# List of common Vietnamese RSS feeds.
+# Health-only feeds miss some outbreak articles that are published under
+# current affairs or world sections, so we include a broader news mix.
 RSS_FEEDS = [
     "https://vnexpress.net/rss/suc-khoe.rss",
+    "https://vnexpress.net/rss/thoi-su.rss",
+    "https://vnexpress.net/rss/the-gioi.rss",
     "https://dantri.com.vn/rss/suc-khoe.rss",
+    "https://dantri.com.vn/rss/the-gioi.rss",
     "https://tuoitre.vn/rss/suc-khoe.rss",
+    "https://tuoitre.vn/rss/the-gioi.rss",
     "https://thanhnien.vn/rss/suc-khoe.rss",
+    "https://thanhnien.vn/rss/the-gioi.rss",
     "https://suckhoedoisong.vn/rss/suc-khoe.rss",
     "https://vov.vn/rss/suc-khoe.rss",
+    "https://vov.vn/rss/the-gioi.rss",
     "https://tienphong.vn/rss/suc-khoe-210.rss",
     "https://laodong.vn/rss/suc-khoe.rss",
+    "https://laodong.vn/rss/thoi-su.rss",
     "https://vietnamnet.vn/rss/suc-khoe.rss",
+    "https://vietnamnet.vn/rss/thoi-su.rss",
+    "https://vietnamnet.vn/rss/the-gioi.rss",
     "https://nhandan.vn/rss/y-te.rss",
+    "https://nhandan.vn/rss/the-gioi.rss",
     "http://cand.com.vn/rss/suc-khoe-c-5"
 ]
 
@@ -37,10 +50,15 @@ def get_domain(url: str) -> str:
     except:
         return ""
 
+def normalize_text(text: str) -> str:
+    if not text:
+        return ""
+    return re.sub(r"\s+", " ", html.unescape(text)).strip()
+
 def matches_keywords(text: str, keywords: list[str]) -> str | None:
     if not text:
         return None
-    text_lower = text.lower()
+    text_lower = normalize_text(text).lower()
     
     # Check exclusion first
     for ex in EXCLUDED_KEYWORDS:
@@ -56,6 +74,8 @@ def matches_keywords(text: str, keywords: list[str]) -> str | None:
 def parse_date(entry) -> datetime:
     if hasattr(entry, 'published_parsed') and entry.published_parsed:
         return datetime(*entry.published_parsed[:6])
+    if hasattr(entry, 'updated_parsed') and entry.updated_parsed:
+        return datetime(*entry.updated_parsed[:6])
     return datetime.utcnow()
 
 def extract_case_count(text: str, disease_keywords: list[str]) -> int:
@@ -130,23 +150,19 @@ def scan_news(db: Session, fetch_unknown: bool) -> schemas.ScanResult:
                     continue
                 seen_links.add(link)
 
-                title = entry.get('title', '')
-                summary = entry.get('summary', '') or entry.get('description', '')
-                
-                # Keyword check
-                matched_kw_str = matches_keywords(title, keywords)
-                if not matched_kw_str:
-                     # Check summary if title failed? (Optional simplification: focus on title for accuracy)
-                     pass
-                
-                if not matched_kw_str:
-                    continue
-
                 # Publish Date
                 pub_date = parse_date(entry)
                 
-                # Limit to 5 days
-                if pub_date < datetime.utcnow() - timedelta(days=5):
+                # Limit to 14 days to avoid missing slower-moving outbreak reports.
+                if pub_date < datetime.utcnow() - timedelta(days=14):
+                    continue
+
+                title = normalize_text(entry.get('title', ''))
+                summary = normalize_text(entry.get('summary', '') or entry.get('description', ''))
+
+                # Keyword check on both title and summary.
+                matched_kw_str = matches_keywords(f"{title}\n{summary}", keywords)
+                if not matched_kw_str:
                     continue
 
                 # Prepare Data

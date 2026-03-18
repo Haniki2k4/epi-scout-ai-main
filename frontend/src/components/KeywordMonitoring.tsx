@@ -51,26 +51,74 @@ const KeywordMonitoring = () => {
     }
   };
 
+  const parseKeywordInput = (input: string) => {
+    const normalized = input.trim();
+    if (!normalized) {
+      return [];
+    }
+
+    const hasSeparator = normalized.includes(",") || normalized.includes("\n");
+    const rawKeywords = hasSeparator ? normalized.split(/[,\n]/) : [normalized];
+
+    return rawKeywords
+      .map((keyword) => keyword.trim())
+      .filter(Boolean);
+  };
+
   const handleAddKeyword = async () => {
-    if (newKeyword.trim()) {
-      try {
+    const keywordsToAdd = parseKeywordInput(newKeyword);
+    if (keywordsToAdd.length === 0) {
+      return;
+    }
+
+    const existingKeywords = new Set(activeKeywords.map((keyword) => keyword.text.toLowerCase()));
+    const uniqueKeywords = keywordsToAdd.filter((keyword, index) => {
+      const lowerKeyword = keyword.toLowerCase();
+      return keywordsToAdd.findIndex((item) => item.toLowerCase() === lowerKeyword) === index
+        && !existingKeywords.has(lowerKeyword);
+    });
+
+    if (uniqueKeywords.length === 0) {
+      toast({
+        title: "Không có từ khóa mới",
+        description: "Danh sách bạn nhập chỉ chứa các từ khóa đã tồn tại.",
+      });
+      setNewKeyword("");
+      return;
+    }
+
+    try {
+      const createdKeywords: Keyword[] = [];
+
+      for (const keyword of uniqueKeywords) {
         const res = await fetch("/api/keywords", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text: newKeyword.trim() }),
+          body: JSON.stringify({ text: keyword }),
         });
+
         if (res.ok) {
-          const keyword = await res.json();
-          setActiveKeywords([...activeKeywords, keyword]);
-          setNewKeyword("");
-          toast({
-            title: "Đã thêm từ khóa",
-            description: `Từ khóa "${keyword.text}" đã được thêm vào hệ thống.`,
-          });
+          const payload = await res.json();
+          if (Array.isArray(payload)) {
+            createdKeywords.push(...payload);
+          } else {
+            createdKeywords.push(payload);
+          }
         }
-      } catch (e) {
-        toast({ title: "Lỗi", description: "Không thể thêm từ khóa.", variant: "destructive" });
       }
+
+      if (createdKeywords.length > 0) {
+        setActiveKeywords([...activeKeywords, ...createdKeywords]);
+        setNewKeyword("");
+        toast({
+          title: "Đã thêm từ khóa",
+          description: createdKeywords.length === 1
+            ? `Từ khóa "${createdKeywords[0].text}" đã được thêm vào hệ thống.`
+            : `Đã thêm ${createdKeywords.length} từ khóa vào hệ thống.`,
+        });
+      }
+    } catch (e) {
+      toast({ title: "Lỗi", description: "Không thể thêm từ khóa.", variant: "destructive" });
     }
   };
 
@@ -92,6 +140,17 @@ const KeywordMonitoring = () => {
   };
 
   const handleStartScan = async () => {
+    if (activeKeywords.length === 0) {
+      toast({
+        title: "Chưa có từ khóa giám sát",
+        description: newKeyword.trim()
+          ? `Bạn đã nhập "${newKeyword.trim()}" nhưng chưa lưu. Nhấn dấu + để thêm từ khóa trước khi quét.`
+          : "Hãy thêm ít nhất một từ khóa vào hệ thống trước khi bắt đầu quét.",
+        variant: "destructive",
+      });
+      return;
+    }
+
     setIsScanning(true);
     toast({
       title: "Đang quét tin tức...",
@@ -185,7 +244,7 @@ const KeywordMonitoring = () => {
           <CardContent className="space-y-4">
             <div className="flex gap-2">
               <Input
-                placeholder="Nhập từ khóa mới..."
+                placeholder="Nhập 1 từ khóa hoặc nhiều từ khóa, ngăn cách bằng dấu phẩy..."
                 value={newKeyword}
                 onChange={(e) => setNewKeyword(e.target.value)}
                 onKeyPress={(e) => e.key === 'Enter' && handleAddKeyword()}
@@ -206,6 +265,11 @@ const KeywordMonitoring = () => {
                   </button>
                 </Badge>
               ))}
+              {activeKeywords.length === 0 && (
+                <div className="text-sm text-muted-foreground">
+                  Chưa có từ khóa nào được lưu. Bạn có thể nhập nhiều từ khóa, ngăn cách bằng dấu phẩy hoặc xuống dòng.
+                </div>
+              )}
             </div>
           </CardContent>
         </Card>
