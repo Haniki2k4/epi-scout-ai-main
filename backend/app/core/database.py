@@ -1,29 +1,33 @@
-from sqlalchemy import create_engine
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
-import urllib.parse
 import os
+
 from dotenv import load_dotenv
+from sqlalchemy import create_engine
+from sqlalchemy.engine import URL
+from sqlalchemy.orm import declarative_base, sessionmaker
 
 # Load .env file
 load_dotenv()
 
-# Default to local MSSQL with SQL Server Authentication
-# Override this with environment variable DATABASE_URL if needed
+# Prefer a full DATABASE_URL when provided. Otherwise build a local MySQL URL.
 SERVER_NAME = os.getenv("DB_SERVER", "localhost")
+DB_PORT = os.getenv("DB_PORT", "3306")
 DATABASE_NAME = os.getenv("DB_NAME", "EpiScoutDB")
-DB_USER = os.getenv("DB_USER")
-DB_PASSWORD = os.getenv("DB_PASSWORD")
+DB_USER = os.getenv("DB_USER", "root")
+DB_PASSWORD = os.getenv("DB_PASSWORD", "")
 
-# Connection string for ODBC Driver 17 for SQL Server
-params = urllib.parse.quote_plus(
-    f"DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={SERVER_NAME};DATABASE={DATABASE_NAME};UID={DB_USER};PWD={DB_PASSWORD}"
+SQLALCHEMY_DATABASE_URL = os.getenv("DATABASE_URL") or str(
+    URL.create(
+        drivername="mysql+pymysql",
+        username=DB_USER,
+        password=DB_PASSWORD,
+        host=SERVER_NAME,
+        port=int(DB_PORT),
+        database=DATABASE_NAME,
+    )
 )
 
-SQLALCHEMY_DATABASE_URL = f"mssql+pyodbc:///?odbc_connect={params}"
-
 # Create engine
-engine = create_engine(SQLALCHEMY_DATABASE_URL)
+engine = create_engine(SQLALCHEMY_DATABASE_URL, pool_pre_ping=True)
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 

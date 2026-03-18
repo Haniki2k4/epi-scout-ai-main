@@ -1,0 +1,5 @@
+IF DB_ID('$(DB_NAME)') IS NULL
+BEGIN
+    EXEC('CREATE DATABASE [' + '$(DB_NAME)' + ']');
+END
+GO
