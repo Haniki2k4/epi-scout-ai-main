@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
-import { Search, Plus, X, Play, Pause, Download, Settings } from "lucide-react";
+import { Search, Plus, X, Play, Pause, Download, Settings, Trash2, CheckSquare, Square } from "lucide-react";
 import { useToast } from "@/components/ui/use-toast";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
@@ -20,6 +20,8 @@ const KeywordMonitoring = () => {
   const [scanAll, setScanAll] = useState(false);
   const [unknownArticles, setUnknownArticles] = useState<Article[]>([]);
   const [showModal, setShowModal] = useState(false);
+  const [keywordFilter, setKeywordFilter] = useState("");
+  const [selectedKeywordIds, setSelectedKeywordIds] = useState<number[]>([]);
 
   // Initial Fetch
   useEffect(() => {
@@ -139,6 +141,63 @@ const KeywordMonitoring = () => {
     }
   };
 
+  const toggleKeywordSelection = (id: number) => {
+    setSelectedKeywordIds((current) =>
+      current.includes(id) ? current.filter((item) => item !== id) : [...current, id]
+    );
+  };
+
+  const handleSelectFilteredKeywords = () => {
+    const filteredIds = filteredKeywords
+      .map((keyword) => keyword.id)
+      .filter((id): id is number => id !== undefined);
+
+    const allFilteredSelected = filteredIds.length > 0 && filteredIds.every((id) => selectedKeywordIds.includes(id));
+    setSelectedKeywordIds((current) =>
+      allFilteredSelected
+        ? current.filter((id) => !filteredIds.includes(id))
+        : Array.from(new Set([...current, ...filteredIds]))
+    );
+  };
+
+  const handleDeleteSelectedKeywords = async () => {
+    if (selectedKeywordIds.length === 0) {
+      toast({
+        title: "Chưa chọn từ khóa",
+        description: "Hãy chọn ít nhất một từ khóa để xóa hàng loạt.",
+      });
+      return;
+    }
+
+    try {
+      const results = await Promise.all(
+        selectedKeywordIds.map((id) =>
+          fetch(`/api/keywords/${id}`, {
+            method: "DELETE",
+          })
+        )
+      );
+
+      const deletedCount = results.filter((result) => result.ok).length;
+      if (deletedCount > 0) {
+        setActiveKeywords((current) => current.filter((keyword) => !selectedKeywordIds.includes(keyword.id!)));
+        setSelectedKeywordIds([]);
+        toast({
+          title: "Đã xóa từ khóa",
+          description: `Đã xóa ${deletedCount} từ khóa khỏi hệ thống.`,
+        });
+      } else {
+        toast({
+          title: "Không thể xóa",
+          description: "Không có từ khóa nào được xóa.",
+          variant: "destructive",
+        });
+      }
+    } catch (e) {
+      toast({ title: "Lỗi", description: "Không thể xóa hàng loạt từ khóa.", variant: "destructive" });
+    }
+  };
+
   const handleStartScan = async () => {
     if (activeKeywords.length === 0) {
       toast({
@@ -224,6 +283,17 @@ const KeywordMonitoring = () => {
     }
   };
 
+  const filteredKeywords = activeKeywords.filter((keyword) =>
+    keyword.text.toLowerCase().includes(keywordFilter.trim().toLowerCase())
+  );
+
+  const filteredKeywordIds = filteredKeywords
+    .map((keyword) => keyword.id)
+    .filter((id): id is number => id !== undefined);
+
+  const allFilteredSelected =
+    filteredKeywordIds.length > 0 && filteredKeywordIds.every((id) => selectedKeywordIds.includes(id));
+
   return (
     <div className="space-y-6">
       <ScanResultModal
@@ -253,12 +323,49 @@ const KeywordMonitoring = () => {
                 <Plus className="h-4 w-4" />
               </Button>
             </div>
+            <div className="flex flex-col gap-3">
+              <div className="flex gap-2">
+                <div className="relative flex-1">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    placeholder="Lọc từ khóa..."
+                    value={keywordFilter}
+                    onChange={(e) => setKeywordFilter(e.target.value)}
+                    className="pl-9"
+                  />
+                </div>
+                <Button type="button" variant="outline" onClick={handleSelectFilteredKeywords} disabled={filteredKeywordIds.length === 0}>
+                  {allFilteredSelected ? <Square className="mr-2 h-4 w-4" /> : <CheckSquare className="mr-2 h-4 w-4" />}
+                  {allFilteredSelected ? "Bỏ chọn" : "Chọn hết"}
+                </Button>
+                <Button
+                  type="button"
+                  variant="destructive"
+                  onClick={handleDeleteSelectedKeywords}
+                  disabled={selectedKeywordIds.length === 0}
+                >
+                  <Trash2 className="mr-2 h-4 w-4" />
+                  Xóa đã chọn
+                </Button>
+              </div>
+              <div className="text-xs text-muted-foreground">
+                Hiển thị {filteredKeywords.length}/{activeKeywords.length} từ khóa. Đã chọn {selectedKeywordIds.length}.
+              </div>
+            </div>
             <div className="flex flex-wrap gap-2">
-              {activeKeywords.map((keyword) => (
-                <Badge key={keyword.id} variant="secondary" className="gap-1 pr-1 pl-2 py-1 flex items-center">
+              {filteredKeywords.map((keyword) => (
+                <Badge
+                  key={keyword.id}
+                  variant={selectedKeywordIds.includes(keyword.id!) ? "default" : "secondary"}
+                  className="gap-1 pr-1 pl-2 py-1 flex items-center cursor-pointer"
+                  onClick={() => toggleKeywordSelection(keyword.id!)}
+                >
                   {keyword.text}
                   <button
-                    onClick={() => handleDeleteKeyword(keyword.id!)}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      handleDeleteKeyword(keyword.id!);
+                    }}
                     className="ml-1 hover:bg-destructive/10 hover:text-destructive rounded-full p-0.5 transition-colors"
                   >
                     <X className="h-3 w-3" />
@@ -268,6 +375,11 @@ const KeywordMonitoring = () => {
               {activeKeywords.length === 0 && (
                 <div className="text-sm text-muted-foreground">
                   Chưa có từ khóa nào được lưu. Bạn có thể nhập nhiều từ khóa, ngăn cách bằng dấu phẩy hoặc xuống dòng.
+                </div>
+              )}
+              {activeKeywords.length > 0 && filteredKeywords.length === 0 && (
+                <div className="text-sm text-muted-foreground">
+                  Không tìm thấy từ khóa nào khớp với bộ lọc hiện tại.
                 </div>
               )}
             </div>
