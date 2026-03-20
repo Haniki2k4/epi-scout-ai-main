@@ -9,8 +9,9 @@ import { Search, Plus, X, Play, Pause, Download, Settings, Trash2, CheckSquare, 
 import { useToast } from "@/components/ui/use-toast";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { ScanResultModal } from "./ScanResultModal";
-import { Article, Keyword } from "@/types";
+import { Article, Keyword, NewsEvent, NewsEventDetail } from "@/types";
 
 const KeywordMonitoring = () => {
   const { toast } = useToast();
@@ -23,6 +24,10 @@ const KeywordMonitoring = () => {
   const [showModal, setShowModal] = useState(false);
   const [keywordFilter, setKeywordFilter] = useState("");
   const [selectedKeywordIds, setSelectedKeywordIds] = useState<number[]>([]);
+  const [events, setEvents] = useState<NewsEvent[]>([]);
+  const [selectedEvent, setSelectedEvent] = useState<NewsEventDetail | null>(null);
+  const [eventDialogOpen, setEventDialogOpen] = useState(false);
+  const [loadingEventId, setLoadingEventId] = useState<number | null>(null);
   const [articleSearch, setArticleSearch] = useState("");
   const [articleSourceFilter, setArticleSourceFilter] = useState("all");
   const [articleKeywordFilter, setArticleKeywordFilter] = useState("all");
@@ -35,6 +40,7 @@ const KeywordMonitoring = () => {
   useEffect(() => {
     fetchKeywords();
     fetchArticles();
+    fetchEvents();
   }, []);
 
   const fetchKeywords = async () => {
@@ -58,6 +64,18 @@ const KeywordMonitoring = () => {
       }
     } catch (e) {
       console.error("Failed to fetch articles", e);
+    }
+  };
+
+  const fetchEvents = async () => {
+    try {
+      const res = await fetch("/api/events?limit=20");
+      if (res.ok) {
+        const data = await res.json();
+        setEvents(data);
+      }
+    } catch (e) {
+      console.error("Failed to fetch events", e);
     }
   };
 
@@ -236,6 +254,7 @@ const KeywordMonitoring = () => {
 
         // Refresh articles list
         fetchArticles();
+        fetchEvents();
 
         if (result.saved_trusted_count > 0) {
           toast({
@@ -278,6 +297,7 @@ const KeywordMonitoring = () => {
       const savedCount = results.filter((result) => result.ok).length;
       if (savedCount > 0) {
         await fetchArticles();
+        await fetchEvents();
         toast({
           title: "Thành công",
           description: `Đã lưu ${savedCount}/${articlesToSave.length} bài viết.`,
@@ -324,6 +344,32 @@ const KeywordMonitoring = () => {
 
   const allFilteredSelected =
     filteredKeywordIds.length > 0 && filteredKeywordIds.every((id) => selectedKeywordIds.includes(id));
+
+  const handleOpenEvent = async (eventId: number) => {
+    try {
+      setLoadingEventId(eventId);
+      const res = await fetch(`/api/events/${eventId}`);
+      if (res.ok) {
+        const data = await res.json();
+        setSelectedEvent(data);
+        setEventDialogOpen(true);
+      } else {
+        toast({
+          title: "Không tải được sự kiện",
+          description: "Chi tiết sự kiện hiện không khả dụng.",
+          variant: "destructive",
+        });
+      }
+    } catch (e) {
+      toast({
+        title: "Lỗi",
+        description: "Không thể tải chi tiết sự kiện.",
+        variant: "destructive",
+      });
+    } finally {
+      setLoadingEventId(null);
+    }
+  };
 
   const articleSources = Array.from(
     new Set(articles.map((article) => article.source).filter(Boolean))
@@ -420,6 +466,47 @@ const KeywordMonitoring = () => {
         onSaveArticles={handleSaveUnknown}
         onAddWhitelist={handleAddWhitelist}
       />
+      <Dialog open={eventDialogOpen} onOpenChange={setEventDialogOpen}>
+        <DialogContent className="max-h-[80vh] max-w-3xl overflow-hidden">
+          <DialogHeader>
+            <DialogTitle>{selectedEvent?.canonical_title || "Chi tiết sự kiện"}</DialogTitle>
+            <DialogDescription>
+              {selectedEvent?.disease_name}
+              {selectedEvent?.location ? ` • ${selectedEvent.location}` : ""}
+              {selectedEvent?.event_date ? ` • ${new Date(selectedEvent.event_date).toLocaleString()}` : ""}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 overflow-y-auto pr-2">
+            {selectedEvent?.articles.map((article) => (
+              <div key={article.id || article.link} className="rounded-lg border p-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="space-y-1">
+                    <a href={article.link} target="_blank" rel="noreferrer" className="font-medium hover:underline">
+                      {article.title}
+                    </a>
+                    <div className="text-sm text-muted-foreground">
+                      {article.source} • {new Date(article.published_date).toLocaleString()}
+                    </div>
+                  </div>
+                  <Badge variant="outline">
+                    {typeof article.event_match_score === "number" ? `score ${article.event_match_score.toFixed(2)}` : "new event"}
+                  </Badge>
+                </div>
+                {article.dedupe_reason && (
+                  <div className="mt-2 text-xs text-muted-foreground">
+                    {article.dedupe_reason}
+                  </div>
+                )}
+              </div>
+            ))}
+            {selectedEvent && selectedEvent.articles.length === 0 && (
+              <div className="py-4 text-center text-sm text-muted-foreground">
+                Sự kiện này chưa có bài viết nào.
+              </div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Control Panel */}
       <div className="grid gap-6 md:grid-cols-2">
@@ -708,6 +795,45 @@ const KeywordMonitoring = () => {
               </Button>
             </div>
           )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Sự kiện đã gom</CardTitle>
+          <CardDescription>Mỗi sự kiện có thể gồm nhiều bài viết từ nhiều nguồn khác nhau</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="space-y-3">
+            {events.length === 0 ? (
+              <div className="py-4 text-center text-muted-foreground">
+                Chưa có sự kiện nào được gom.
+              </div>
+            ) : (
+              events.map((event) => (
+                <div key={event.id} className="flex items-start justify-between gap-4 rounded-lg border p-4">
+                  <div className="space-y-2">
+                    <div className="font-medium">{event.canonical_title}</div>
+                    <div className="flex flex-wrap gap-2 text-sm text-muted-foreground">
+                      <span>{event.disease_name}</span>
+                      {event.location && <span>• {event.location}</span>}
+                      <span>• {new Date(event.event_date).toLocaleDateString()}</span>
+                      <span>• {event.article_count} bài</span>
+                      {event.case_count > 0 && <span>• {event.case_count} ca</span>}
+                    </div>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => void handleOpenEvent(event.id)}
+                    disabled={loadingEventId === event.id}
+                  >
+                    {loadingEventId === event.id ? "Đang tải..." : "Xem bài viết"}
+                  </Button>
+                </div>
+              ))
+            )}
+          </div>
         </CardContent>
       </Card>
 

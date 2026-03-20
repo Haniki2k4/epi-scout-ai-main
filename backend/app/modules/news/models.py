@@ -1,8 +1,42 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Unicode, UnicodeText
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Unicode, UnicodeText, Float, inspect, text
 from sqlalchemy.orm import relationship
 from datetime import datetime
 
 from ...core.database import Base
+
+
+class NewsEvent(Base):
+    __tablename__ = "news_events"
+
+    id = Column(Integer, primary_key=True, index=True)
+    canonical_title = Column(Unicode(500), nullable=False)
+    disease_name = Column(Unicode(255), index=True, nullable=False)
+    location = Column(Unicode(255), nullable=True)
+    event_date = Column(DateTime, default=datetime.utcnow, index=True)
+    case_count = Column(Integer, default=0)
+    severity = Column(Unicode(50), nullable=True)
+    status = Column(Unicode(50), default="active")
+    fingerprint = Column(String(255), index=True, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    articles = relationship("ArticleIdentity", back_populates="event")
+
+    @property
+    def article_count(self):
+        return len(self.articles or [])
+
+    @property
+    def unique_sources(self):
+        return sorted({article.source for article in (self.articles or []) if article.source})
+
+    @property
+    def source_count(self):
+        return len(self.unique_sources)
+
+    @property
+    def sources_preview(self):
+        return self.unique_sources[:5]
 
 class ArticleIdentity(Base):
     __tablename__ = "article_identity"
@@ -11,12 +45,16 @@ class ArticleIdentity(Base):
     title = Column(Unicode(500), nullable=True) # NVARCHAR
     link = Column(String(500), unique=True, index=True) # Link is usually ASCII, but String is fine
     published_date = Column(DateTime, default=datetime.utcnow)
+    event_id = Column(Integer, ForeignKey("news_events.id"), nullable=True, index=True)
+    event_match_score = Column(Float, nullable=True)
+    dedupe_reason = Column(Unicode(255), nullable=True)
 
     # Relationship 1-1 with details
     details = relationship("ArticleDetails", back_populates="identity", uselist=False, cascade="all, delete-orphan")
     
     # Relationship 1-n with disease cases
     cases = relationship("DiseaseCase", back_populates="article", cascade="all, delete-orphan")
+    event = relationship("NewsEvent", back_populates="articles")
 
     @property
     def summary(self):
@@ -78,3 +116,22 @@ class Keyword(Base):
     id = Column(Integer, primary_key=True, index=True)
     text = Column(Unicode(255), unique=True, index=True) # Support Vietnamese keywords
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+def ensure_news_schema(engine) -> None:
+    inspector = inspect(engine)
+    tables = set(inspector.get_table_names())
+
+    if "news_events" not in tables:
+        NewsEvent.__table__.create(bind=engine)
+
+    article_columns = {column["name"] for column in inspector.get_columns("article_identity")}
+    if "event_id" not in article_columns:
+        with engine.begin() as connection:
+            connection.execute(text("ALTER TABLE article_identity ADD COLUMN event_id INTEGER NULL"))
+    if "event_match_score" not in article_columns:
+        with engine.begin() as connection:
+            connection.execute(text("ALTER TABLE article_identity ADD COLUMN event_match_score FLOAT NULL"))
+    if "dedupe_reason" not in article_columns:
+        with engine.begin() as connection:
+            connection.execute(text("ALTER TABLE article_identity ADD COLUMN dedupe_reason VARCHAR(255) NULL"))

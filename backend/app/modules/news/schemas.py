@@ -12,6 +12,9 @@ class ArticleBase(BaseModel):
     keywords_matched: Optional[str] = None
     tags: Optional[str] = None
     is_whitelisted: bool = False
+    event_id: Optional[int] = None
+    event_match_score: Optional[float] = None
+    dedupe_reason: Optional[str] = None
 
 # --- API Models ---
 class ArticleCreate(ArticleBase):
@@ -51,3 +54,30 @@ class ScanRequest(BaseModel):
 class ScanResult(BaseModel):
     saved_trusted_count: int
     unknown_articles: List[ArticleBase]
+
+
+class NewsEventBase(BaseModel):
+    canonical_title: str
+    disease_name: str
+    location: Optional[str] = None
+    event_date: Optional[datetime] = None
+    case_count: int = 0
+    severity: Optional[str] = None
+    status: Optional[str] = None
+    fingerprint: str
+
+
+class NewsEventDTO(NewsEventBase):
+    id: int
+    article_count: int = 0
+
+    class Config:
+        from_attributes = True
+
+
+class NewsEventDetailDTO(NewsEventBase):
+    id: int
+    articles: List[ArticleDTO] = []
+
+    class Config:
+        from_attributes = True

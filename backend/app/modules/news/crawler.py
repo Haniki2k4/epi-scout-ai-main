@@ -7,6 +7,7 @@ import re
 import html
 import json
 import os
+import unicodedata
 
 import requests
 from ...core.logger import get_logger
@@ -187,6 +188,12 @@ def normalize_text(text: str) -> str:
     return re.sub(r"\s+", " ", without_tags).strip()
 
 
+def slugify_text(text: str) -> str:
+    normalized = unicodedata.normalize("NFKD", normalize_text(text).lower())
+    ascii_text = normalized.encode("ascii", "ignore").decode("ascii")
+    return re.sub(r"[^a-z0-9]+", "-", ascii_text).strip("-")
+
+
 def text_contains_term(text: str, term: str) -> bool:
     normalized_term = re.escape(term.lower().strip())
     if not normalized_term:
@@ -263,6 +270,187 @@ def detect_tags(title: str, pub_date: datetime) -> list[str]:
     if any(k in title.lower() for k in alert_keywords):
         tags.append("Cảnh báo")
     return tags
+
+
+def extract_primary_keyword(matched_keywords: str | None) -> str | None:
+    if not matched_keywords:
+        return None
+    first = matched_keywords.split(",")[0].strip()
+    return first or None
+
+
+def compute_title_similarity(title_a: str, title_b: str) -> float:
+    stopwords = {
+        "va", "voi", "cua", "cho", "sau", "tai", "tu", "tren", "trong", "khi",
+        "the", "co", "da", "mot", "nhung", "nhieu", "nhu", "la", "bi",
+    }
+    tokens_a = {token for token in slugify_text(title_a).split("-") if len(token) > 2 and token not in stopwords}
+    tokens_b = {token for token in slugify_text(title_b).split("-") if len(token) > 2 and token not in stopwords}
+    if not tokens_a or not tokens_b:
+        return 0.0
+    intersection = len(tokens_a & tokens_b)
+    union = len(tokens_a | tokens_b)
+    return intersection / union if union else 0.0
+
+
+def build_event_fingerprint(
+    primary_keyword: str,
+    location: str | None,
+    pub_date: datetime,
+) -> str:
+    location_part = slugify_text(location or "unknown") or "unknown"
+    disease_part = slugify_text(primary_keyword) or "unknown"
+    return f"{disease_part}|{location_part}|{pub_date.strftime('%Y-%m-%d')}"
+
+
+def compute_event_similarity_score(
+    title: str,
+    pub_date: datetime,
+    location: str | None,
+    case_count: int,
+    event,
+) -> tuple[float, dict[str, float]]:
+    title_similarity = compute_title_similarity(title, event.canonical_title)
+    title_score = min(title_similarity / 0.6, 1.0) * 0.45
+
+    normalized_location = normalize_text(location or "")
+    event_location = normalize_text(event.location or "")
+    if normalized_location and event_location:
+        if normalized_location == event_location:
+            location_score = 0.25
+        elif normalized_location in event_location or event_location in normalized_location:
+            location_score = 0.15
+        else:
+            location_score = 0.0
+    elif not normalized_location and not event_location:
+        location_score = 0.1
+    else:
+        location_score = 0.05
+
+    day_diff = abs((pub_date.date() - event.event_date.date()).days)
+    if day_diff == 0:
+        date_score = 0.2
+    elif day_diff == 1:
+        date_score = 0.14
+    elif day_diff == 2:
+        date_score = 0.08
+    else:
+        date_score = 0.0
+
+    if case_count > 0 and (event.case_count or 0) > 0:
+        delta = abs(case_count - event.case_count)
+        tolerance = max(3, int(max(case_count, event.case_count) * 0.3))
+        if delta == 0:
+            case_score = 0.1
+        elif delta <= tolerance:
+            case_score = 0.07
+        else:
+            case_score = 0.0
+    else:
+        case_score = 0.04
+
+    breakdown = {
+        "title": round(title_score, 3),
+        "location": round(location_score, 3),
+        "date": round(date_score, 3),
+        "case_count": round(case_score, 3),
+    }
+    return round(sum(breakdown.values()), 3), breakdown
+
+
+def format_dedupe_reason(breakdown: dict[str, float], matched: bool) -> str:
+    status = "matched_existing_event" if matched else "new_event_created"
+    parts = ", ".join(f"{key}={value}" for key, value in breakdown.items())
+    return f"{status}: {parts}"
+
+
+def resolve_event_for_article(
+    db: Session,
+    title: str,
+    matched_keywords: str,
+    pub_date: datetime,
+    location: str | None,
+    case_count: int,
+    severity: str | None,
+) -> tuple[models.NewsEvent | None, float | None, str | None]:
+    MATCH_SCORE_THRESHOLD = 0.6
+    primary_keyword = extract_primary_keyword(matched_keywords)
+    if not primary_keyword:
+        return None, None, None
+
+    normalized_location = normalize_text(location or "") or None
+    start_date = pub_date - timedelta(days=2)
+    end_date = pub_date + timedelta(days=2)
+    recent_events = crud.get_recent_events(
+        db,
+        disease_name=primary_keyword,
+        location=normalized_location,
+        start_date=start_date,
+        end_date=end_date,
+    )
+    if not recent_events and normalized_location not in {None, "Việt Nam"}:
+        recent_events = crud.get_recent_events(
+            db,
+            disease_name=primary_keyword,
+            location=None,
+            start_date=start_date,
+            end_date=end_date,
+        )
+
+    best_match = None
+    best_score = 0.0
+    best_breakdown: dict[str, float] | None = None
+    for event in recent_events:
+        score, breakdown = compute_event_similarity_score(
+            title=title,
+            pub_date=pub_date,
+            location=normalized_location,
+            case_count=case_count,
+            event=event,
+        )
+        if score > best_score:
+            best_match = event
+            best_score = score
+            best_breakdown = breakdown
+
+    if best_match and best_score >= MATCH_SCORE_THRESHOLD:
+        logger.debug(
+            "Event matched | event_id={} score={} breakdown={} title={}",
+            best_match.id,
+            best_score,
+            best_breakdown,
+            title,
+        )
+        updated_event = crud.update_news_event(
+            db,
+            best_match,
+            canonical_title=title,
+            case_count=case_count if case_count > 0 else None,
+            severity=severity,
+        )
+        return updated_event, best_score, format_dedupe_reason(best_breakdown or {}, True)
+
+    if best_match:
+        logger.debug(
+            "Event below threshold | candidate_event_id={} score={} threshold={} breakdown={} title={}",
+            best_match.id,
+            best_score,
+            MATCH_SCORE_THRESHOLD,
+            best_breakdown,
+            title,
+        )
+
+    created_event = crud.create_news_event(
+        db,
+        canonical_title=title,
+        disease_name=primary_keyword,
+        location=normalized_location,
+        event_date=pub_date,
+        case_count=case_count,
+        severity=severity,
+        fingerprint=build_event_fingerprint(primary_keyword, normalized_location, pub_date),
+    )
+    return created_event, None, format_dedupe_reason(best_breakdown or {}, False)
 
 
 # ===========================================================================
@@ -790,6 +978,18 @@ def scan_news(db: Session, fetch_unknown: bool) -> schemas.ScanResult:
                     article_dto.is_whitelisted = True
                     existing = crud.get_article_by_link(db, link)
                     if not existing:
+                        event, event_match_score, dedupe_reason = resolve_event_for_article(
+                            db=db,
+                            title=title,
+                            matched_keywords=matched_kw_str,
+                            pub_date=pub_date,
+                            location=location,
+                            case_count=case_count,
+                            severity=llm_meta.get("severity"),
+                        )
+                        article_dto.event_id = event.id if event else None
+                        article_dto.event_match_score = event_match_score
+                        article_dto.dedupe_reason = dedupe_reason
                         saved_article = crud.create_article(db, article_dto)
 
                         if case_count > 0:

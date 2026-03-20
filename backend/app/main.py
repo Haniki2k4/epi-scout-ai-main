@@ -2,6 +2,7 @@ from fastapi import FastAPI, Depends, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from typing import List
+from datetime import datetime
 import re
 from .core import database
 from .core.database import get_db
@@ -37,6 +38,7 @@ def parse_keywords_input(text: str) -> list[str]:
 @app.on_event("startup")
 def init_database() -> None:
     models.Base.metadata.create_all(bind=database.engine)
+    models.ensure_news_schema(database.engine)
     logger.info("Backend startup complete, database metadata ensured")
     crawler.log_llm_preflight_status(force_refresh=True)
 
@@ -87,6 +89,23 @@ def save_article(article: schemas.ArticleCreate, db: Session = Depends(get_db)):
     if existing:
         logger.warning("Save article rejected, already exists | link={}", article.link)
         raise HTTPException(status_code=400, detail="Article already saved")
+    matched_keywords = article.keywords_matched or ""
+    if matched_keywords:
+        inferred_event, event_match_score, dedupe_reason = crawler.resolve_event_for_article(
+            db=db,
+            title=article.title,
+            matched_keywords=matched_keywords,
+            pub_date=article.published_date or datetime.utcnow(),
+            location="Việt Nam",
+            case_count=crawler.extract_case_count(
+                f"{article.title} {article.summary or ''}",
+                [kw.strip() for kw in matched_keywords.split(",") if kw.strip()],
+            ),
+            severity=None,
+        )
+        article.event_id = inferred_event.id if inferred_event else None
+        article.event_match_score = event_match_score
+        article.dedupe_reason = dedupe_reason
     saved_article = crud.create_article(db, article)
     logger.info("Article saved | id={} link={}", saved_article.id, article.link)
     return saved_article
@@ -163,6 +182,25 @@ def read_whitelist(skip: int = 0, limit: int = 100, db: Session = Depends(get_db
     domains = crud.get_whitelisted_domains(db, skip=skip, limit=limit)
     logger.info("Read whitelist completed | count={}", len(domains))
     return domains
+
+
+@app.get("/api/events", response_model=List[schemas.NewsEventDTO])
+def read_events(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+    logger.info("Read events requested | skip={} limit={}", skip, limit)
+    events = crud.get_events(db, skip=skip, limit=limit)
+    logger.info("Read events completed | count={}", len(events))
+    return events
+
+
+@app.get("/api/events/{event_id}", response_model=schemas.NewsEventDetailDTO)
+def read_event_detail(event_id: int, db: Session = Depends(get_db)):
+    logger.info("Read event detail requested | event_id={}", event_id)
+    event = crud.get_event_by_id(db, event_id)
+    if not event:
+        logger.warning("Read event detail failed | event_id={} reason=not_found", event_id)
+        raise HTTPException(status_code=404, detail="Event not found")
+    logger.info("Read event detail completed | event_id={} article_count={}", event_id, len(event.articles))
+    return event
 
 @app.post("/api/whitelist", response_model=schemas.WhitelistDTO, status_code=201)
 def create_whitelist(domain: schemas.WhitelistCreate, response: Response, db: Session = Depends(get_db)):

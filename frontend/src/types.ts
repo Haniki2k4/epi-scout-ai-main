@@ -7,6 +7,9 @@ export interface Article {
   published_date: string;
   keywords_matched: string;
   is_whitelisted: boolean;
+  event_id?: number | null;
+  event_match_score?: number | null;
+  dedupe_reason?: string | null;
 }
 
 export interface WhitelistDomain {
@@ -23,4 +26,21 @@ export interface ScanResult {
 export interface Keyword {
   id?: number;
   text: string;
+}
+
+export interface NewsEvent {
+  id: number;
+  canonical_title: string;
+  disease_name: string;
+  location?: string | null;
+  event_date: string;
+  case_count: number;
+  severity?: string | null;
+  status?: string | null;
+  fingerprint: string;
+  article_count: number;
+}
+
+export interface NewsEventDetail extends Omit<NewsEvent, "article_count"> {
+  articles: Article[];
 }
