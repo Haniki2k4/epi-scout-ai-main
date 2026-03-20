@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from typing import List
@@ -164,13 +164,14 @@ def read_whitelist(skip: int = 0, limit: int = 100, db: Session = Depends(get_db
     logger.info("Read whitelist completed | count={}", len(domains))
     return domains
 
-@app.post("/api/whitelist", response_model=schemas.WhitelistDTO)
-def create_whitelist(domain: schemas.WhitelistCreate, db: Session = Depends(get_db)):
+@app.post("/api/whitelist", response_model=schemas.WhitelistDTO, status_code=201)
+def create_whitelist(domain: schemas.WhitelistCreate, response: Response, db: Session = Depends(get_db)):
     logger.info("Create whitelist requested | domain={}", domain.domain)
     existing = crud.get_whitelist_by_name(db, domain.domain)
     if existing:
-        logger.warning("Create whitelist rejected | domain={} reason=already_exists", domain.domain)
-        raise HTTPException(status_code=400, detail="Domain already whitelisted")
+        logger.info("Create whitelist skipped | domain={} reason=already_exists", domain.domain)
+        response.status_code = 200
+        return existing
     created_domain = crud.create_whitelist_domain(db, domain)
     logger.info("Create whitelist completed | id={} domain={}", created_domain.id, created_domain.domain)
     return created_domain

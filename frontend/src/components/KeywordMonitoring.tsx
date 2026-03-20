@@ -4,7 +4,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
-import { Search, Plus, X, Play, Pause, Download, Settings, Trash2, CheckSquare, Square } from "lucide-react";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Search, Plus, X, Play, Pause, Download, Settings, Trash2, CheckSquare, Square, ChevronLeft, ChevronRight } from "lucide-react";
 import { useToast } from "@/components/ui/use-toast";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
@@ -22,6 +23,13 @@ const KeywordMonitoring = () => {
   const [showModal, setShowModal] = useState(false);
   const [keywordFilter, setKeywordFilter] = useState("");
   const [selectedKeywordIds, setSelectedKeywordIds] = useState<number[]>([]);
+  const [articleSearch, setArticleSearch] = useState("");
+  const [articleSourceFilter, setArticleSourceFilter] = useState("all");
+  const [articleKeywordFilter, setArticleKeywordFilter] = useState("all");
+  const [articleTrustFilter, setArticleTrustFilter] = useState("all");
+  const [articleSort, setArticleSort] = useState("newest");
+  const [articlePage, setArticlePage] = useState(1);
+  const articlePageSize = 8;
 
   // Initial Fetch
   useEffect(() => {
@@ -257,29 +265,52 @@ const KeywordMonitoring = () => {
 
   const handleSaveUnknown = async (articlesToSave: Article[]) => {
     try {
-      const res = await fetch("/api/articles/save", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(articlesToSave),
-      });
-      if (res.ok) {
-        toast({ title: "Thành công", description: `Đã lưu ${articlesToSave.length} bài viết.` });
-        fetchArticles();
+      const results = await Promise.all(
+        articlesToSave.map((article) =>
+          fetch("/api/articles/save", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(article),
+          })
+        )
+      );
+
+      const savedCount = results.filter((result) => result.ok).length;
+      if (savedCount > 0) {
+        await fetchArticles();
+        toast({
+          title: "Thành công",
+          description: `Đã lưu ${savedCount}/${articlesToSave.length} bài viết.`,
+        });
+        return true;
       }
+
+      toast({
+        title: "Không thể lưu",
+        description: "Không có bài viết nào được lưu.",
+        variant: "destructive",
+      });
+      return false;
     } catch (e) {
       toast({ title: "Lỗi", description: "Lưu thất bại.", variant: "destructive" });
+      return false;
     }
   };
 
   const handleAddWhitelist = async (domain: string) => {
     try {
-      await fetch("/api/whitelist", {
+      const res = await fetch("/api/whitelist", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ domain: domain, is_active: true }),
       });
+      if (res.ok) {
+        return res.status === 201 ? "created" : "exists";
+      }
+      return "error";
     } catch (e) {
       console.error(e);
+      return "error";
     }
   };
 
@@ -293,6 +324,92 @@ const KeywordMonitoring = () => {
 
   const allFilteredSelected =
     filteredKeywordIds.length > 0 && filteredKeywordIds.every((id) => selectedKeywordIds.includes(id));
+
+  const articleSources = Array.from(
+    new Set(articles.map((article) => article.source).filter(Boolean))
+  ).sort((a, b) => a.localeCompare(b, "vi"));
+
+  const articleKeywords = Array.from(
+    new Set(
+      articles.flatMap((article) =>
+        (article.keywords_matched || "")
+          .split(",")
+          .map((keyword) => keyword.trim())
+          .filter(Boolean)
+      )
+    )
+  ).sort((a, b) => a.localeCompare(b, "vi"));
+
+  const filteredArticles = [...articles]
+    .filter((article) => {
+      const normalizedSearch = articleSearch.trim().toLowerCase();
+      if (!normalizedSearch) {
+        return true;
+      }
+
+      const haystack = [
+        article.title,
+        article.source,
+        article.summary,
+        article.keywords_matched,
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+
+      return haystack.includes(normalizedSearch);
+    })
+    .filter((article) => articleSourceFilter === "all" || article.source === articleSourceFilter)
+    .filter((article) => {
+      if (articleKeywordFilter === "all") {
+        return true;
+      }
+
+      const articleKeywordList = (article.keywords_matched || "")
+        .split(",")
+        .map((keyword) => keyword.trim().toLowerCase());
+      return articleKeywordList.includes(articleKeywordFilter.toLowerCase());
+    })
+    .filter((article) => {
+      if (articleTrustFilter === "trusted") {
+        return article.is_whitelisted;
+      }
+      if (articleTrustFilter === "manual") {
+        return !article.is_whitelisted;
+      }
+      return true;
+    })
+    .sort((a, b) => {
+      const dateA = new Date(a.published_date).getTime();
+      const dateB = new Date(b.published_date).getTime();
+
+      if (articleSort === "oldest") {
+        return dateA - dateB;
+      }
+      if (articleSort === "title-asc") {
+        return a.title.localeCompare(b.title, "vi");
+      }
+      if (articleSort === "title-desc") {
+        return b.title.localeCompare(a.title, "vi");
+      }
+      return dateB - dateA;
+    });
+
+  const totalArticlePages = Math.max(1, Math.ceil(filteredArticles.length / articlePageSize));
+  const paginatedArticles = filteredArticles.slice(
+    (articlePage - 1) * articlePageSize,
+    articlePage * articlePageSize
+  );
+
+  useEffect(() => {
+    setArticlePage(1);
+  }, [articleSearch, articleSourceFilter, articleKeywordFilter, articleTrustFilter, articleSort]);
+
+  useEffect(() => {
+    if (articlePage > totalArticlePages) {
+      setArticlePage(totalArticlePages);
+    }
+  }, [articlePage, totalArticlePages]);
 
   return (
     <div className="space-y-6">
@@ -442,11 +559,93 @@ const KeywordMonitoring = () => {
           <CardDescription>Danh sách bài viết trong cơ sở dữ liệu</CardDescription>
         </CardHeader>
         <CardContent>
+          <div className="mb-4 space-y-3">
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+              <div className="relative md:col-span-2">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  placeholder="Tìm theo tiêu đề, nguồn, keyword..."
+                  value={articleSearch}
+                  onChange={(e) => setArticleSearch(e.target.value)}
+                  className="pl-9"
+                />
+              </div>
+              <Select value={articleSourceFilter} onValueChange={setArticleSourceFilter}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Lọc theo nguồn" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Tất cả nguồn</SelectItem>
+                  {articleSources.map((source) => (
+                    <SelectItem key={source} value={source}>
+                      {source}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Select value={articleKeywordFilter} onValueChange={setArticleKeywordFilter}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Lọc theo keyword" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Tất cả keyword</SelectItem>
+                  {articleKeywords.map((keyword) => (
+                    <SelectItem key={keyword} value={keyword}>
+                      {keyword}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Select value={articleSort} onValueChange={setArticleSort}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Sắp xếp" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="newest">Mới nhất</SelectItem>
+                  <SelectItem value="oldest">Cũ nhất</SelectItem>
+                  <SelectItem value="title-asc">Tiêu đề A-Z</SelectItem>
+                  <SelectItem value="title-desc">Tiêu đề Z-A</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <div className="flex gap-2">
+                <Button
+                  type="button"
+                  variant={articleTrustFilter === "all" ? "default" : "outline"}
+                  onClick={() => setArticleTrustFilter("all")}
+                >
+                  Tất cả
+                </Button>
+                <Button
+                  type="button"
+                  variant={articleTrustFilter === "trusted" ? "default" : "outline"}
+                  onClick={() => setArticleTrustFilter("trusted")}
+                >
+                  Uy tín
+                </Button>
+                <Button
+                  type="button"
+                  variant={articleTrustFilter === "manual" ? "default" : "outline"}
+                  onClick={() => setArticleTrustFilter("manual")}
+                >
+                  Thủ công
+                </Button>
+              </div>
+              <div className="text-sm text-muted-foreground">
+                Hiển thị {filteredArticles.length}/{articles.length} bài viết • Trang {articlePage}/{totalArticlePages}
+              </div>
+            </div>
+          </div>
           <div className="space-y-4">
             {articles.length === 0 ? (
               <div className="text-center text-muted-foreground py-4">Chưa có bài viết nào. Hãy thêm từ khóa và quét ngay!</div>
+            ) : filteredArticles.length === 0 ? (
+              <div className="text-center text-muted-foreground py-4">
+                Không có bài viết nào khớp với bộ lọc hiện tại.
+              </div>
             ) : (
-              articles.map((article, index) => (
+              paginatedArticles.map((article, index) => (
                 <div
                   key={index}
                   className="flex items-start justify-between p-4 border border-border rounded-lg hover:bg-secondary/50 transition-colors"
@@ -482,6 +681,33 @@ const KeywordMonitoring = () => {
               ))
             )}
           </div>
+          {filteredArticles.length > 0 && (
+            <div className="mt-4 flex items-center justify-end gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setArticlePage((current) => Math.max(1, current - 1))}
+                disabled={articlePage === 1}
+              >
+                <ChevronLeft className="mr-1 h-4 w-4" />
+                Trước
+              </Button>
+              <div className="text-sm text-muted-foreground">
+                Trang {articlePage} / {totalArticlePages}
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setArticlePage((current) => Math.min(totalArticlePages, current + 1))}
+                disabled={articlePage === totalArticlePages}
+              >
+                Sau
+                <ChevronRight className="ml-1 h-4 w-4" />
+              </Button>
+            </div>
+          )}
         </CardContent>
       </Card>
 

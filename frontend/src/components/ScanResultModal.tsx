@@ -19,8 +19,8 @@ interface ScanResultModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   unknownArticles: Article[];
-  onSaveArticles: (articles: Article[]) => void;
-  onAddWhitelist: (domain: string) => void;
+  onSaveArticles: (articles: Article[]) => Promise<boolean>;
+  onAddWhitelist: (domain: string) => Promise<"created" | "exists" | "error">;
 }
 
 export function ScanResultModal({
@@ -43,23 +43,40 @@ export function ScanResultModal({
     setSelectedLinks(newSelected);
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     const articlesToSave = unknownArticles.filter((a) => selectedLinks.has(a.link));
-    onSaveArticles(articlesToSave);
-    onOpenChange(false);
+    const saved = await onSaveArticles(articlesToSave);
+    if (saved) {
+      onOpenChange(false);
+    }
   };
 
-  const handleAddWhitelist = (domain: string) => {
-    onAddWhitelist(domain);
+  const handleAddWhitelist = async (domain: string) => {
+    const result = await onAddWhitelist(domain);
+    if (result === "created") {
+      toast({
+        title: "Đã thêm vào Whitelist",
+        description: `Domain ${domain} đã được thêm vào danh sách tin cậy.`,
+      });
+      return;
+    }
+    if (result === "exists") {
+      toast({
+        title: "Nguồn đã tồn tại",
+        description: `Domain ${domain} đã có trong danh sách tin cậy.`,
+      });
+      return;
+    }
     toast({
-      title: "Đã thêm vào Whitelist",
-      description: `Domain ${domain} đã được thêm vào danh sách tin cậy.`,
+      title: "Không thể thêm Whitelist",
+      description: `Domain ${domain} chưa được thêm vào danh sách tin cậy.`,
+      variant: "destructive",
     });
   };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-3xl max-h-[80vh] flex flex-col">
+      <DialogContent className="flex max-h-[80vh] max-w-3xl flex-col overflow-hidden">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <ShieldAlert className="w-5 h-5 text-yellow-500" />
@@ -71,7 +88,7 @@ export function ScanResultModal({
           </DialogDescription>
         </DialogHeader>
 
-        <ScrollArea className="flex-1 pr-4 py-4">
+        <ScrollArea className="min-h-0 flex-1 py-4 pr-4">
           <div className="space-y-4">
             {unknownArticles.map((article, index) => (
               <div
@@ -108,7 +125,7 @@ export function ScanResultModal({
                       variant="ghost"
                       size="sm"
                       className="h-6 text-xs gap-1 text-primary"
-                      onClick={() => handleAddWhitelist(article.source)}
+                      onClick={() => void handleAddWhitelist(article.source)}
                     >
                       <PlusCircle className="w-3 h-3" />
                       Thêm Whitelist
@@ -128,7 +145,7 @@ export function ScanResultModal({
             <Button variant="outline" onClick={() => onOpenChange(false)}>
               Bỏ qua tất cả
             </Button>
-            <Button onClick={handleSave} disabled={selectedLinks.size === 0}>
+            <Button onClick={() => void handleSave()} disabled={selectedLinks.size === 0}>
               Lưu bài đã chọn
             </Button>
           </div>
