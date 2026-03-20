@@ -388,25 +388,27 @@ const DataAnalysis = () => {
                   </div>
                 </div>
 
-                <div className="grid gap-4 md:grid-cols-3">
-                  <div className="rounded-xl border bg-card p-4">
-                    <Database className="mb-3 h-8 w-8 text-primary" />
-                    <h4 className="font-medium text-foreground">Nguồn dữ liệu</h4>
-                    <p className="mt-1 text-sm text-muted-foreground">Articles, Events, Trends, cảnh báo và whitelist nội bộ</p>
-                  </div>
-                  <div className="rounded-xl border bg-card p-4">
-                    <BarChart3 className="mb-3 h-8 w-8 text-accent" />
-                    <h4 className="font-medium text-foreground">Phân tích tự động</h4>
-                    <p className="mt-1 text-sm text-muted-foreground">Tóm tắt tín hiệu nổi bật, số ca, event nổi trội và độ phủ nguồn</p>
-                  </div>
-                  <div className="rounded-xl border bg-card p-4">
-                    <Send className="mb-3 h-8 w-8 text-chart-2" />
-                    <h4 className="font-medium text-foreground">Đầu ra báo cáo</h4>
-                    <p className="mt-1 text-sm text-muted-foreground">Preview trên UI, sẵn sàng làm bước tiếp theo là export PDF/email</p>
+                <div className="mt-4 rounded-3xl bg-muted/30 p-4">
+                  <div className="grid gap-4 md:grid-cols-3">
+                    <div className="min-h-[168px] rounded-2xl bg-card p-5 shadow-sm ring-1 ring-border">
+                      <Database className="mb-3 h-8 w-8 text-primary" />
+                      <h4 className="font-medium text-foreground">Nguồn dữ liệu</h4>
+                      <p className="mt-1 text-sm leading-6 text-muted-foreground">Articles, Events, Trends, cảnh báo và whitelist nội bộ</p>
+                    </div>
+                    <div className="min-h-[168px] rounded-2xl bg-card p-5 shadow-sm ring-1 ring-border">
+                      <BarChart3 className="mb-3 h-8 w-8 text-accent" />
+                      <h4 className="font-medium text-foreground">Phân tích tự động</h4>
+                      <p className="mt-1 text-sm leading-6 text-muted-foreground">Tóm tắt tín hiệu nổi bật, số ca, event nổi trội và độ phủ nguồn</p>
+                    </div>
+                    <div className="min-h-[168px] rounded-2xl bg-card p-5 shadow-sm ring-1 ring-border">
+                      <Send className="mb-3 h-8 w-8 text-chart-2" />
+                      <h4 className="font-medium text-foreground">Đầu ra báo cáo</h4>
+                      <p className="mt-1 text-sm leading-6 text-muted-foreground">Preview trên UI, sẵn sàng làm bước tiếp theo là export PDF/email</p>
+                    </div>
                   </div>
                 </div>
 
-                <div className="rounded-2xl bg-gradient-to-br from-sky-50 to-cyan-50 p-5 ring-1 ring-sky-100">
+                <div className="mt-6 rounded-2xl bg-gradient-to-br from-sky-50 to-cyan-50 p-5 shadow-sm ring-1 ring-sky-100">
                   <div className="flex items-center gap-2 text-sm font-medium text-sky-800">
                     <CalendarClock className="h-4 w-4" />
                     Khung thời gian báo cáo: {reportWindowLabel}
