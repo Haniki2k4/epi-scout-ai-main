@@ -532,3 +532,5 @@ Compile nhanh backend:
 ```bash
 python3 -m py_compile backend/app/main.py backend/app/modules/news/models.py backend/app/modules/news/crud.py backend/app/modules/news/crawler.py backend/app/modules/news/schemas.py
 ```
+
+H
