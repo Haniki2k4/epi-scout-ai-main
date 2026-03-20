@@ -70,6 +70,8 @@ class NewsEventBase(BaseModel):
 class NewsEventDTO(NewsEventBase):
     id: int
     article_count: int = 0
+    source_count: int = 0
+    sources_preview: List[str] = []
 
     class Config:
         from_attributes = True
@@ -77,6 +79,9 @@ class NewsEventDTO(NewsEventBase):
 
 class NewsEventDetailDTO(NewsEventBase):
     id: int
+    article_count: int = 0
+    source_count: int = 0
+    sources_preview: List[str] = []
     articles: List[ArticleDTO] = []
 
     class Config:

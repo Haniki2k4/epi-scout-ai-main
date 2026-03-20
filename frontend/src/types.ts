@@ -39,8 +39,11 @@ export interface NewsEvent {
   status?: string | null;
   fingerprint: string;
   article_count: number;
+  source_count: number;
+  sources_preview: string[];
 }
 
 export interface NewsEventDetail extends Omit<NewsEvent, "article_count"> {
+  article_count: number;
   articles: Article[];
 }

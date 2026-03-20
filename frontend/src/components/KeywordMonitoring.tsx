@@ -476,6 +476,15 @@ const KeywordMonitoring = () => {
               {selectedEvent?.event_date ? ` • ${new Date(selectedEvent.event_date).toLocaleString()}` : ""}
             </DialogDescription>
           </DialogHeader>
+          {selectedEvent && (
+            <div className="flex flex-wrap gap-2 pb-2">
+              <Badge variant="secondary">{selectedEvent.article_count} bài viết</Badge>
+              <Badge variant="secondary">{selectedEvent.source_count} nguồn</Badge>
+              {selectedEvent.sources_preview.map((source) => (
+                <Badge key={source} variant="outline">{source}</Badge>
+              ))}
+            </div>
+          )}
           <div className="space-y-3 overflow-y-auto pr-2">
             {selectedEvent?.articles.map((article) => (
               <div key={article.id || article.link} className="rounded-lg border p-3">
@@ -819,7 +828,15 @@ const KeywordMonitoring = () => {
                       {event.location && <span>• {event.location}</span>}
                       <span>• {new Date(event.event_date).toLocaleDateString()}</span>
                       <span>• {event.article_count} bài</span>
+                      <span>• {event.source_count} nguồn</span>
                       {event.case_count > 0 && <span>• {event.case_count} ca</span>}
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {event.sources_preview.map((source) => (
+                        <Badge key={source} variant="outline" className="text-xs">
+                          {source}
+                        </Badge>
+                      ))}
                     </div>
                   </div>
                   <Button
