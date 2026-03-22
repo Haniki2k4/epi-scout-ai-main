@@ -96,9 +96,12 @@ def detect_tags(title: str, pub_date: datetime) -> list[str]:
         
     return tags
 
-def scan_news(db: Session, fetch_unknown: bool) -> schemas.ScanResult:
+def scan_news(db: Session, fetch_unknown: bool, days_limit: int, max_execution_time: int) -> schemas.ScanResult:
+    start_time = datetime.utcnow()
+    
     # 1. Get Keywords and Whitelist
     keywords_obj = crud.get_keywords(db)
+    # ... (existing setup)
     keywords = [k.text for k in keywords_obj]
     
     if not keywords:
@@ -122,9 +125,22 @@ def scan_news(db: Session, fetch_unknown: bool) -> schemas.ScanResult:
     
     # 2. Crawl Feeds
     for feed_url in RSS_FEEDS:
+        # Check Execution Time Check
+        if max_execution_time > 0:
+            elapsed_minutes = (datetime.utcnow() - start_time).total_seconds() / 60
+            if elapsed_minutes >= max_execution_time:
+                logger.info(f"Max execution time ({max_execution_time}m) reached. Stopping scan.")
+                break
+
         try:
             feed = feedparser.parse(feed_url)
             for entry in feed.entries:
+                # Inner loop time check (granularity)
+                if max_execution_time > 0:
+                    elapsed_minutes = (datetime.utcnow() - start_time).total_seconds() / 60
+                    if elapsed_minutes >= max_execution_time:
+                        break
+
                 link = entry.get('link', '')
                 if not link or link in seen_links:
                     continue
@@ -145,8 +161,8 @@ def scan_news(db: Session, fetch_unknown: bool) -> schemas.ScanResult:
                 # Publish Date
                 pub_date = parse_date(entry)
                 
-                # Limit to 5 days
-                if pub_date < datetime.utcnow() - timedelta(days=5):
+                # Limit by configured days
+                if pub_date < datetime.utcnow() - timedelta(days=days_limit):
                     continue
 
                 # Prepare Data
