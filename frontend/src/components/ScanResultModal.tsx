@@ -88,7 +88,7 @@ export function ScanResultModal({
           </DialogDescription>
         </DialogHeader>
 
-        <ScrollArea className="min-h-0 flex-1 py-4 pr-4">
+        <ScrollArea className="flex-1 overflow-y-auto py-4 pr-4" style={{ maxHeight: "calc(80vh - 180px)" }}>
           <div className="space-y-4">
             {unknownArticles.map((article, index) => (
               <div

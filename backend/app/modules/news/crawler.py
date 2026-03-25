@@ -52,7 +52,8 @@ RSS_FEEDS = [
 HARD_EXCLUDE_TITLE_TERMS = [
     "nên ăn gì", "uống gì", "làm đẹp", "giảm cân",
     "thực phẩm chức năng", "bí quyết", "mẹo hay",
-    "review ", "quảng cáo", "khuyến mãi",
+    "review ", "quảng cáo", "khuyến mãi", "24/7",
+    "dấu hiệu sớm", "dấu hiệu cảnh báo","tư vấn bác sĩ", "kinh nghiệm",
 ]
 
 # Context terms that raise the epidemiological signal score
@@ -69,7 +70,7 @@ NON_EPIDEMIC_CONTEXT_TERMS = [
     "thẩm mỹ", "làm đẹp", "giảm cân", "thực đơn", "món ăn", "ăn uống", "tâm lý",
     "chuyện ấy", "sẹo", "da mặt", "mụn", "xương khớp", "phòng the",
     "tư vấn", "hướng dẫn", "cách phòng", "dấu hiệu", "nhầm với", "bài thuốc", 
-    "chữa bệnh", "tự chữa", "hiếm gặp", "cách giải quyết", "24/7", "dấu hiệu"
+    "chữa bệnh", "tự chữa", "hiếm gặp", "cách giải quyết", "24/7", "dấu hiệu",
 ]
 
 # ---------------------------------------------------------------------------
