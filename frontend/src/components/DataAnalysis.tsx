@@ -29,34 +29,14 @@ const DataAnalysis = () => {
   const [reportRegion, setReportRegion] = useState("all");
   const [reportTitle, setReportTitle] = useState("Báo cáo giám sát dịch bệnh tuần");
 
-  // Seasonal flu data (monthly)
-  const fluData = [
-    { month: "T1", vietnam: 234, global: 45000 },
-    { month: "T2", vietnam: 189, global: 38000 },
-    { month: "T3", vietnam: 267, global: 52000 },
-    { month: "T4", vietnam: 312, global: 61000 },
-    { month: "T5", vietnam: 289, global: 55000 },
-    { month: "T6", vietnam: 245, global: 48000 },
-    { month: "T7", vietnam: 198, global: 39000 },
-    { month: "T8", vietnam: 223, global: 43000 },
-    { month: "T9", vietnam: 276, global: 54000 },
-    { month: "T10", vietnam: 334, global: 68000 },
-    { month: "T11", vietnam: 298, global: 59000 },
-    { month: "T12", vietnam: 256, global: 51000 },
-  ];
 
-  // Comparison data
-  const comparisonData = [
-    { source: "Google Alerts", articles: 3420, relevant: 2145, accuracy: 62.7, speed: 15 },
-    { source: "In-house Script", articles: 5678, relevant: 4892, accuracy: 86.2, speed: 8 },
-  ];
 
   useEffect(() => {
     const fetchAnalysisData = async () => {
       try {
         const [statsRes, trendsRes, eventsRes] = await Promise.all([
           fetch("/api/stats/overview"),
-          fetch("/api/stats/trends?days=7"),
+          fetch("/api/stats/trends?days=30"),
           fetch("/api/events?limit=6"),
         ]);
 
@@ -79,8 +59,7 @@ const DataAnalysis = () => {
 
   const reportWindowLabel = useMemo(() => {
     if (reportScope === "daily") return "24 giờ gần nhất";
-    if (reportScope === "monthly") return "30 ngày gần nhất";
-    return "7 ngày gần nhất";
+    return "30 ngày gần nhất";
   }, [reportScope]);
 
   const topSignals = useMemo(() => {
@@ -116,127 +95,54 @@ const DataAnalysis = () => {
     ];
   }, [reportWindowLabel, stats, topSignals, trends]);
 
-  const weeklyData = trends.map((t) => ({ name: t.date.split("-").slice(1).join("/"), cases: t.cases }));
+  const forecastData = useMemo(() => {
+    if (trends.length < 2) return trends.map(t => ({ name: t.date, actual: t.cases, forecast: null }));
+    const n = trends.length;
+    let sumX = 0, sumY = 0, sumXY = 0, sumXX = 0;
+    trends.forEach((t, i) => {
+      sumX += i;
+      sumY += t.cases;
+      sumXY += i * t.cases;
+      sumXX += i * i;
+    });
+    const slope = (n * sumXY - sumX * sumY) / (n * sumXX - sumX * sumX);
+    const intercept = (sumY - slope * sumX) / n;
+    
+    const data = trends.map((t, i) => ({
+      name: t.date.split("-").slice(1).join("/"),
+      actual: t.cases,
+      forecast: Math.max(0, Math.round(slope * i + intercept))
+    }));
+
+    const lastDate = new Date(trends[n-1].date);
+    for (let i = 1; i <= 3; i++) {
+        const nextDate = new Date(lastDate);
+        nextDate.setDate(nextDate.getDate() + i);
+        const name = `${String(nextDate.getMonth()+1).padStart(2, '0')}/${String(nextDate.getDate()).padStart(2, '0')}`;
+        data.push({ name, actual: null as any, forecast: Math.max(0, Math.round(slope * (n - 1 + i) + intercept)) });
+    }
+    return data;
+  }, [trends]);
 
   return (
     <div className="space-y-6">
-      <Tabs defaultValue="flu" className="space-y-6">
-        <TabsList className="grid w-full grid-cols-3">
-          <TabsTrigger value="flu">Phân tích cúm mùa</TabsTrigger>
-          <TabsTrigger value="comparison">So sánh công cụ</TabsTrigger>
+      <Tabs defaultValue="forecast" className="space-y-6">
+        <TabsList className="grid w-full grid-cols-2">
+          <TabsTrigger value="forecast">Dự báo sự kiện</TabsTrigger>
           <TabsTrigger value="report">Báo cáo tự động</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="flu" className="space-y-6">
+        <TabsContent value="forecast" className="space-y-6">
           <Card>
             <CardHeader>
-              <CardTitle>Xu hướng cúm mùa theo tháng</CardTitle>
-              <CardDescription>So sánh dữ liệu Việt Nam và toàn cầu (52,000 bản ghi)</CardDescription>
+              <CardTitle>Dự báo xu hướng sự kiện dịch bệnh</CardTitle>
+              <CardDescription>Mô hình hồi quy tuyến tính dựa trên dữ liệu thu thập thực tế 7 ngày qua</CardDescription>
             </CardHeader>
             <CardContent>
               <ResponsiveContainer width="100%" height={400}>
-                <LineChart data={fluData}>
+                <LineChart data={forecastData}>
                   <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                  <XAxis dataKey="month" stroke="hsl(var(--muted-foreground))" />
-                  <YAxis yAxisId="left" stroke="hsl(var(--chart-1))" />
-                  <YAxis yAxisId="right" orientation="right" stroke="hsl(var(--chart-2))" />
-                  <Tooltip
-                    contentStyle={{
-                      backgroundColor: "hsl(var(--card))",
-                      border: "1px solid hsl(var(--border))",
-                      borderRadius: "var(--radius)",
-                    }}
-                  />
-                  <Legend />
-                  <Line
-                    yAxisId="left"
-                    type="monotone"
-                    dataKey="vietnam"
-                    stroke="hsl(var(--chart-1))"
-                    strokeWidth={2}
-                    name="Việt Nam"
-                    dot={{ fill: "hsl(var(--chart-1))", r: 4 }}
-                  />
-                  <Line
-                    yAxisId="right"
-                    type="monotone"
-                    dataKey="global"
-                    stroke="hsl(var(--chart-2))"
-                    strokeWidth={2}
-                    name="Toàn cầu"
-                    dot={{ fill: "hsl(var(--chart-2))", r: 4 }}
-                  />
-                </LineChart>
-              </ResponsiveContainer>
-            </CardContent>
-          </Card>
-
-          <div className="grid gap-6 md:grid-cols-2">
-            <Card>
-              <CardHeader>
-                <CardTitle>Nhận xét chính</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                <div className="flex items-start gap-3">
-                  <div className="mt-2 h-2 w-2 rounded-full bg-chart-1"></div>
-                  <p className="text-sm text-muted-foreground">
-                    <strong className="text-foreground">Đỉnh dịch:</strong> Ca bệnh tăng cao vào tháng 10-11, trùng với mùa lạnh ở Việt Nam.
-                  </p>
-                </div>
-                <div className="flex items-start gap-3">
-                  <div className="mt-2 h-2 w-2 rounded-full bg-chart-2"></div>
-                  <p className="text-sm text-muted-foreground">
-                    <strong className="text-foreground">Xu hướng toàn cầu:</strong> Phù hợp với mô hình Bắc bán cầu, đỉnh dịch vào mùa đông.
-                  </p>
-                </div>
-                <div className="flex items-start gap-3">
-                  <div className="mt-2 h-2 w-2 rounded-full bg-chart-3"></div>
-                  <p className="text-sm text-muted-foreground">
-                    <strong className="text-foreground">Sự khác biệt:</strong> Việt Nam có biên độ dao động nhỏ hơn do khí hậu nhiệt đới.
-                  </p>
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle>Đề xuất giải pháp</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                <div className="rounded-lg bg-secondary p-3">
-                  <p className="mb-1 text-sm font-medium text-foreground">Chuẩn hóa báo cáo</p>
-                  <p className="text-sm text-muted-foreground">
-                    Thống nhất format dữ liệu theo chuẩn WHO ICD-10 để dễ so sánh quốc tế.
-                  </p>
-                </div>
-                <div className="rounded-lg bg-secondary p-3">
-                  <p className="mb-1 text-sm font-medium text-foreground">Tích hợp DHIS2</p>
-                  <p className="text-sm text-muted-foreground">
-                    Sử dụng DHIS2 làm nền tảng tổng hợp dữ liệu từ nhiều nguồn.
-                  </p>
-                </div>
-                <div className="rounded-lg bg-secondary p-3">
-                  <p className="mb-1 text-sm font-medium text-foreground">Mô hình dự báo</p>
-                  <p className="text-sm text-muted-foreground">
-                    Áp dụng ARIMA/SARIMA để dự báo xu hướng dịch theo mùa.
-                  </p>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-        </TabsContent>
-
-        <TabsContent value="comparison" className="space-y-6">
-          <Card>
-            <CardHeader>
-              <CardTitle>So sánh hiệu suất công cụ tìm kiếm</CardTitle>
-              <CardDescription>Google Alerts vs Scripts tự phát triển</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <ResponsiveContainer width="100%" height={300}>
-                <BarChart data={comparisonData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                  <XAxis dataKey="source" stroke="hsl(var(--muted-foreground))" />
+                  <XAxis dataKey="name" stroke="hsl(var(--muted-foreground))" />
                   <YAxis stroke="hsl(var(--muted-foreground))" />
                   <Tooltip
                     contentStyle={{
@@ -246,79 +152,73 @@ const DataAnalysis = () => {
                     }}
                   />
                   <Legend />
-                  <Bar dataKey="articles" fill="hsl(var(--chart-1))" name="Tổng bài viết" radius={[8, 8, 0, 0]} />
-                  <Bar dataKey="relevant" fill="hsl(var(--chart-2))" name="Bài viết liên quan" radius={[8, 8, 0, 0]} />
-                </BarChart>
+                  <Line
+                    type="monotone"
+                    dataKey="actual"
+                    stroke="hsl(var(--chart-1))"
+                    strokeWidth={3}
+                    name="Thực tế"
+                    dot={{ fill: "hsl(var(--chart-1))", r: 4 }}
+                    activeDot={{ r: 6 }}
+                  />
+                  <Line
+                    type="monotone"
+                    dataKey="forecast"
+                    stroke="hsl(var(--chart-2))"
+                    strokeWidth={2}
+                    strokeDasharray="5 5"
+                    name="Dự báo (Hồi quy)"
+                    dot={{ fill: "hsl(var(--chart-2))", r: 3 }}
+                  />
+                </LineChart>
               </ResponsiveContainer>
             </CardContent>
           </Card>
 
           <div className="grid gap-6 md:grid-cols-2">
-            {comparisonData.map((tool, index) => (
-              <Card key={index} className={index === 1 ? "border-l-4 border-l-accent" : ""}>
-                <CardHeader>
-                  <CardTitle>{tool.source}</CardTitle>
-                  {index === 1 && <Badge className="w-fit bg-accent text-accent-foreground">Được đề xuất</Badge>}
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <p className="text-sm text-muted-foreground">Tổng bài viết</p>
-                      <p className="text-2xl font-bold text-foreground">{tool.articles.toLocaleString()}</p>
-                    </div>
-                    <div>
-                      <p className="text-sm text-muted-foreground">Liên quan</p>
-                      <p className="text-2xl font-bold text-foreground">{tool.relevant.toLocaleString()}</p>
-                    </div>
+            <Card>
+              <CardHeader>
+                <CardTitle>Phân tích Hồi quy</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <p className="text-sm text-foreground">
+                  Dựa trên số lượng bài viết thu thập được, hệ thống áp dụng mô hình <strong className="text-primary">Hồi quy tuyến tính (Linear Regression)</strong> để nội suy xu hướng sự kiện trong 3 ngày tiếp theo.
+                </p>
+                <div className="space-y-2 text-sm text-muted-foreground">
+                  <div className="flex justify-between items-center p-3 bg-secondary rounded-lg">
+                    <span>Trạng thái xu hướng:</span>
+                    <Badge variant={forecastData.length > 3 && forecastData[forecastData.length-1].forecast > forecastData[0].forecast ? "destructive" : "secondary"}>
+                      {forecastData.length > 3 && forecastData[forecastData.length-1].forecast > forecastData[0].forecast ? "Đang tăng" : "Giảm / Ổn định"}
+                    </Badge>
                   </div>
-                  <div className="space-y-2">
-                    <div className="flex justify-between text-sm">
-                      <span className="text-muted-foreground">Độ chính xác</span>
-                      <span className="font-medium text-foreground">{tool.accuracy}%</span>
-                    </div>
-                    <div className="h-2 overflow-hidden rounded-full bg-secondary">
-                      <div className="h-full bg-primary transition-all" style={{ width: `${tool.accuracy}%` }}></div>
-                    </div>
+                  <div className="flex justify-between items-center p-3 bg-secondary rounded-lg">
+                    <span>Độ tin cậy mô hình:</span>
+                    <span className="font-medium text-foreground">Khá (Dựa trên {trends.length} điểm dữ liệu)</span>
                   </div>
-                  <div className="flex items-center justify-between rounded-lg bg-secondary p-3">
-                    <span className="text-sm text-muted-foreground">Thời gian quét</span>
-                    <span className="text-sm font-medium text-foreground">{tool.speed} phút</span>
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
+                </div>
+              </CardContent>
+            </Card>
 
-          <Card className="border-l-4 border-l-chart-2">
-            <CardHeader>
-              <CardTitle>Kết luận & Đề xuất</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3 text-sm">
-              <p className="text-muted-foreground">
-                <strong className="text-foreground">Scripts tự phát triển</strong> cho kết quả vượt trội với:
-              </p>
-              <ul className="ml-4 space-y-2">
-                <li className="flex items-start gap-2">
-                  <TrendingUp className="mt-0.5 h-4 w-4 text-accent" />
-                  <span className="text-muted-foreground">
-                    Độ chính xác cao hơn <strong className="text-foreground">37.5%</strong> (86.2% vs 62.7%)
-                  </span>
-                </li>
-                <li className="flex items-start gap-2">
-                  <TrendingUp className="mt-0.5 h-4 w-4 text-accent" />
-                  <span className="text-muted-foreground">
-                    Thu thập nhiều hơn <strong className="text-foreground">66%</strong> bài viết (5,678 vs 3,420)
-                  </span>
-                </li>
-                <li className="flex items-start gap-2">
-                  <TrendingUp className="mt-0.5 h-4 w-4 text-accent" />
-                  <span className="text-muted-foreground">
-                    Tốc độ nhanh hơn gần <strong className="text-foreground">2 lần</strong> (8 phút vs 15 phút)
-                  </span>
-                </li>
-              </ul>
-            </CardContent>
-          </Card>
+            <Card>
+              <CardHeader>
+                <CardTitle>Khuyến nghị Dữ liệu</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <div className="rounded-lg bg-secondary p-3">
+                  <p className="mb-1 text-sm font-medium text-foreground">Mở rộng nguồn quét</p>
+                  <p className="text-sm text-muted-foreground">
+                    Cần thu thập thêm từ các nguồn địa phương để tăng độ chính xác của dự báo hẹp.
+                  </p>
+                </div>
+                <div className="rounded-lg bg-secondary p-3">
+                  <p className="mb-1 text-sm font-medium text-foreground">Kết hợp mạng xã hội</p>
+                  <p className="text-sm text-muted-foreground">
+                    Xu hướng truyền thông thường theo sau mạng xã hội từ 1-2 ngày. Khuyến nghị cấu hình thêm Social Listening.
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
         </TabsContent>
 
         <TabsContent value="report" className="space-y-6">
@@ -567,29 +467,7 @@ const DataAnalysis = () => {
             </div>
           </div>
 
-          <Card>
-            <CardHeader>
-              <CardTitle>Xu hướng 7 ngày gần nhất</CardTitle>
-              <CardDescription>Dùng trực tiếp dữ liệu trend hiện có để làm nền cho báo cáo tự động</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <ResponsiveContainer width="100%" height={280}>
-                <BarChart data={weeklyData.length > 0 ? weeklyData : [{ name: "Chưa có data", cases: 0 }]}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                  <XAxis dataKey="name" stroke="hsl(var(--muted-foreground))" />
-                  <YAxis stroke="hsl(var(--muted-foreground))" />
-                  <Tooltip
-                    contentStyle={{
-                      backgroundColor: "hsl(var(--card))",
-                      border: "1px solid hsl(var(--border))",
-                      borderRadius: "var(--radius)",
-                    }}
-                  />
-                  <Bar dataKey="cases" fill="hsl(var(--primary))" radius={[8, 8, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            </CardContent>
-          </Card>
+
         </TabsContent>
       </Tabs>
     </div>

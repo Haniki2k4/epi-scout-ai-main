@@ -50,6 +50,8 @@ class KeywordDTO(KeywordBase):
 
 class ScanRequest(BaseModel):
     fetch_unknown: bool = False # If true, also returns unknown articles
+    start_date: Optional[datetime] = None
+    end_date: Optional[datetime] = None
 
 class ScanResult(BaseModel):
     saved_trusted_count: int

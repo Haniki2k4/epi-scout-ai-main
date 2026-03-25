@@ -26,10 +26,12 @@ dist-ssr
 *.pyc
 __pycache__/
 
+# Agent
+.agent
+.agent/
+
 # Environment Variables
 .env
 venv/
 .venv/
 
-.agent
-.agent/

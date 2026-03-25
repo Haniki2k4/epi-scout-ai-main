@@ -504,7 +504,10 @@ docker compose up -d
 Chạy backend:
 
 ```bash
-backend/venv/bin/python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000
+linux: backend/venv/bin/python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000
+windows: .\backend\venv\Scripts\python.exe -m uvicorn backend.main:app --host 127.0.0.1 --port 8000
+venv: .\backend\venv\Scripts\Activate.ps1
+      uvicorn backend.main:app --host 127.0.0.1 --port 8000
 ```
 
 Chạy frontend:
@@ -524,7 +527,8 @@ npm run build
 Kiểm tra RSS:
 
 ```bash
-backend/venv/bin/python backend/scripts/debug_rss.py
+Linux: backend/venv/bin/python backend/scripts/debug_rss.py
+Windows: backend\venv\Scripts\python.exe backend/scripts/debug_rss.py
 ```
 
 Compile nhanh backend:

@@ -2,7 +2,8 @@ import feedparser
 from sqlalchemy.orm import Session
 from . import crud, models, schemas
 from datetime import datetime, timedelta
-from urllib.parse import urlparse
+from urllib.parse import urlparse, quote
+from email.utils import parsedate_to_datetime
 import re
 import html
 import json
@@ -62,11 +63,13 @@ EPIDEMIC_CONTEXT_TERMS = [
     "cảnh báo", "y tế", "truyền nhiễm", "nghi nhiễm", "ca tử vong", "ngộ độc",
 ]
 
-# Context terms that reduce the signal score (lifestyle / non-epidemic usage)
+# Context terms that reduce the signal score (lifestyle / non-epidemic / advisory usage)
 NON_EPIDEMIC_CONTEXT_TERMS = [
     "đau", "nhức", "vùng kín", "tinh hoàn", "sinh lý", "nam sinh", "quan hệ",
     "thẩm mỹ", "làm đẹp", "giảm cân", "thực đơn", "món ăn", "ăn uống", "tâm lý",
     "chuyện ấy", "sẹo", "da mặt", "mụn", "xương khớp", "phòng the",
+    "tư vấn", "hướng dẫn", "cách phòng", "dấu hiệu", "nhầm với", "bài thuốc", 
+    "chữa bệnh", "tự chữa", "hiếm gặp", "cách giải quyết", "24/7", "dấu hiệu"
 ]
 
 # ---------------------------------------------------------------------------
@@ -232,9 +235,26 @@ def _redact_api_key(api_key: str) -> str:
 
 def parse_date(entry) -> datetime:
     if hasattr(entry, "published_parsed") and entry.published_parsed:
-        return datetime(*entry.published_parsed[:6])
+        dt = datetime(*entry.published_parsed[:6])
+        if dt.year > 2000:
+            return dt
     if hasattr(entry, "updated_parsed") and entry.updated_parsed:
-        return datetime(*entry.updated_parsed[:6])
+        dt = datetime(*entry.updated_parsed[:6])
+        if dt.year > 2000:
+            return dt
+            
+    # Try parsing string directly if feedparser wasn't able to extract tuples
+    if hasattr(entry, "published") and entry.published:
+        try:
+            return parsedate_to_datetime(entry.published).replace(tzinfo=None)
+        except Exception:
+            pass
+    if hasattr(entry, "pubDate") and entry.pubDate:
+        try:
+            return parsedate_to_datetime(entry.pubDate).replace(tzinfo=None)
+        except Exception:
+            pass
+
     return datetime.utcnow()
 
 
@@ -259,17 +279,6 @@ def extract_case_count(text: str, disease_keywords: list[str]) -> int:
             if val2.isdigit():
                 return int(val2)
     return 0
-
-
-def detect_tags(title: str, pub_date: datetime) -> list[str]:
-    """Generate display tags for an article based on recency and content signals."""
-    tags = []
-    if datetime.utcnow() - pub_date < timedelta(hours=5):
-        tags.append("Mới")
-    alert_keywords = ["bùng phát", "ổ dịch", "khẩn cấp", "tử vong", "nguy kịch", "lây lan nhanh"]
-    if any(k in title.lower() for k in alert_keywords):
-        tags.append("Cảnh báo")
-    return tags
 
 
 def extract_primary_keyword(matched_keywords: str | None) -> str | None:
@@ -379,6 +388,19 @@ def resolve_event_for_article(
         return None, None, None
 
     normalized_location = normalize_text(location or "") or None
+    
+    # -------------------------------------------------------------
+    # PHÁC THẢO TÍCH HỢP QDRANT VECTOR SEARCH
+    # Bước 1: Sinh vector embedding cho title
+    # text_embedding = generate_embedding_for_text(title)
+    #
+    # Bước 2: Truy vấn Qdrant tìm Event có Similarity score > 0.85 
+    #         và cùng primary_keyword, trong khoảng thời gian mở rộng.
+    # similar_events = qdrant_client.search(collection_name="events", query_vector=text_embedding)
+    # 
+    # Bước 3: Cập nhật best_match từ Vector thay vì vòng lặp tính điểm
+    # -------------------------------------------------------------
+
     start_date = pub_date - timedelta(days=2)
     end_date = pub_date + timedelta(days=2)
     recent_events = crud.get_recent_events(
@@ -450,6 +472,15 @@ def resolve_event_for_article(
         severity=severity,
         fingerprint=build_event_fingerprint(primary_keyword, normalized_location, pub_date),
     )
+    
+    # -------------------------------------------------------------
+    # PHÁC THẢO: Nếu là Event mới, lưu véc tơ vào Qdrant để tương lai tìm kiếm.
+    # qdrant_client.upsert(
+    #    collection_name="events", 
+    #    points=[PointStruct(id=created_event.id, vector=text_embedding, payload={...})]
+    # )
+    # -------------------------------------------------------------
+    
     return created_event, None, format_dedupe_reason(best_breakdown or {}, False)
 
 
@@ -841,9 +872,14 @@ def matches_keywords(title: str, summary: str, keywords: list[str]) -> str | Non
             continue
         title_score = score_keyword_context(title_lower, kw_lower)
         summary_score = score_keyword_context(summary_lower, kw_lower)
+        combined_score = title_score + summary_score
 
-        if title_score >= 2 or summary_score >= 3 or (title_score + summary_score) >= 4:
-            matched.append(kw)
+        if not LLM_RECHECK_ENABLED:
+            if title_score >= 3 or summary_score >= 5 or combined_score >= 6:
+                matched.append(kw)
+        else:
+            if title_score >= 2 or summary_score >= 3 or combined_score >= 4:
+                matched.append(kw)
 
     return ", ".join(matched) if matched else None
 
@@ -852,7 +888,7 @@ def matches_keywords(title: str, summary: str, keywords: list[str]) -> str | Non
 # Main scan entry-point
 # ===========================================================================
 
-def scan_news(db: Session, fetch_unknown: bool) -> schemas.ScanResult:
+def scan_news(db: Session, fetch_unknown: bool, start_date: datetime | None = None, end_date: datetime | None = None) -> schemas.ScanResult:
     """
     Crawl all RSS feeds, filter articles by keyword + LLM, and persist
     articles from trusted domains.
@@ -870,6 +906,12 @@ def scan_news(db: Session, fetch_unknown: bool) -> schemas.ScanResult:
     # ------------------------------------------------------------------
     if LLM_RECHECK_ENABLED:
         log_llm_preflight_status()
+
+    # Convert to naive datetimes if they arrive as aware
+    if start_date and start_date.tzinfo is not None:
+        start_date = start_date.replace(tzinfo=None)
+    if end_date and end_date.tzinfo is not None:
+        end_date = end_date.replace(tzinfo=None)
 
     keywords_obj = crud.get_keywords(db)
     keywords = [k.text for k in keywords_obj]
@@ -901,7 +943,14 @@ def scan_news(db: Session, fetch_unknown: bool) -> schemas.ScanResult:
     # ------------------------------------------------------------------
     # 2. Crawl feeds
     # ------------------------------------------------------------------
-    for feed_url in RSS_FEEDS:
+    all_feeds = list(RSS_FEEDS)
+    if fetch_unknown:
+        for kw in keywords:
+            encoded_kw = quote(kw.encode('utf-8'))
+            google_news_url = f"https://news.google.com/rss/search?q={encoded_kw}&hl=vi&gl=VN&ceid=VN:vi"
+            all_feeds.append(google_news_url)
+
+    for feed_url in all_feeds:
         try:
             logger.info("Parsing feed | feed_url={}", feed_url)
             feed = feedparser.parse(feed_url)
@@ -914,8 +963,15 @@ def scan_news(db: Session, fetch_unknown: bool) -> schemas.ScanResult:
 
                 pub_date = parse_date(entry)
 
-                # Keep a 14-day window to catch slower-moving outbreak reports
-                if pub_date < datetime.utcnow() - timedelta(days=14):
+                if start_date:
+                    if pub_date < start_date:
+                        continue
+                else:
+                    # Keep a 14-day window to catch slower-moving outbreak reports if no start_date given
+                    if pub_date < datetime.utcnow() - timedelta(days=14):
+                        continue
+
+                if end_date and pub_date > end_date:
                     continue
 
                 title = normalize_text(entry.get("title", ""))
@@ -957,8 +1013,6 @@ def scan_news(db: Session, fetch_unknown: bool) -> schemas.ScanResult:
                 location = llm_meta.get("location") or "Việt Nam"
 
                 source_domain = get_domain(link)
-                tags_list = detect_tags(title, pub_date)
-                tags_str = ", ".join(tags_list) if tags_list else None
 
                 article_dto = schemas.ArticleCreate(
                     title=title,
@@ -968,7 +1022,7 @@ def scan_news(db: Session, fetch_unknown: bool) -> schemas.ScanResult:
                     published_date=pub_date,
                     keywords_matched=matched_kw_str,
                     is_whitelisted=False,
-                    tags=tags_str,
+                    tags=None,
                 )
 
                 # ---- Whitelist check ----

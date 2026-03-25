@@ -37,9 +37,9 @@ def parse_keywords_input(text: str) -> list[str]:
 
 @app.on_event("startup")
 def init_database() -> None:
-    models.Base.metadata.create_all(bind=database.engine)
-    models.ensure_news_schema(database.engine)
-    logger.info("Backend startup complete, database metadata ensured")
+    with database.SessionLocal() as db:
+        crud.seed_default_keywords(db)
+    logger.info("Backend startup complete, default keywords seeded")
     crawler.log_llm_preflight_status(force_refresh=True)
 
 # CORS configuration
@@ -62,8 +62,8 @@ app.add_middleware(
 
 @app.post("/api/scan", response_model=schemas.ScanResult)
 def scan_news(request: schemas.ScanRequest, db: Session = Depends(get_db)):
-    logger.info("Scan requested | fetch_unknown={}", request.fetch_unknown)
-    result = crawler.scan_news(db, request.fetch_unknown)
+    logger.info("Scan requested | fetch_unknown={} start_date={} end_date={}", request.fetch_unknown, request.start_date, request.end_date)
+    result = crawler.scan_news(db, request.fetch_unknown, request.start_date, request.end_date)
     logger.info(
         "Scan completed | saved_trusted_count={} unknown_articles={}",
         result.saved_trusted_count,

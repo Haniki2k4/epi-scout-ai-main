@@ -15,5 +15,14 @@ services:
       timeout: 5s
       retries: 10
 
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: epi-scout-qdrant
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant-data:/qdrant/storage
+
 volumes:
   mysql-data:
+  qdrant-data:

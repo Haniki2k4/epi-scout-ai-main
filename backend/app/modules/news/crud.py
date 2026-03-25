@@ -159,3 +159,12 @@ def add_keyword(db: Session, text: str):
     existing = get_keyword_by_text(db, text)
     if not existing:
         create_keyword(db, schemas.KeywordCreate(text=text))
+
+def seed_default_keywords(db: Session):
+    defaults = [
+        "cúm A", "cúm B", "cúm mùa", 
+        "não mô cầu", "bạch hầu", "ho gà", 
+        "viêm não nhật bản"
+    ]
+    for text in defaults:
+        add_keyword(db, text)

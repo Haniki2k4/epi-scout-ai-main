@@ -23,6 +23,8 @@ const KeywordMonitoring = () => {
   const [unknownArticles, setUnknownArticles] = useState<Article[]>([]);
   const [showModal, setShowModal] = useState(false);
   const [keywordFilter, setKeywordFilter] = useState("");
+  const [scanStartDate, setScanStartDate] = useState("");
+  const [scanEndDate, setScanEndDate] = useState("");
   const [selectedKeywordIds, setSelectedKeywordIds] = useState<number[]>([]);
   const [events, setEvents] = useState<NewsEvent[]>([]);
   const [selectedEvent, setSelectedEvent] = useState<NewsEventDetail | null>(null);
@@ -35,6 +37,8 @@ const KeywordMonitoring = () => {
   const [articleSort, setArticleSort] = useState("newest");
   const [articlePage, setArticlePage] = useState(1);
   const articlePageSize = 8;
+  const [eventPage, setEventPage] = useState(1);
+  const eventPageSize = 5;
 
   // Initial Fetch
   useEffect(() => {
@@ -49,6 +53,15 @@ const KeywordMonitoring = () => {
       if (res.ok) {
         const data = await res.json();
         setActiveKeywords(data);
+        
+        // Tự động chọn các keyword mặc định khi vừa chạy web
+        const defaultKeywordTexts = ["cúm a", "cúm b", "cúm mùa", "não mô cầu", "bạch hầu", "ho gà", "viêm não nhật bản"];
+        const defaultIds = data
+          .filter((k: Keyword) => defaultKeywordTexts.includes(k.text.toLowerCase()))
+          .map((k: Keyword) => k.id)
+          .filter((id): id is number => id !== undefined);
+        
+        setSelectedKeywordIds(defaultIds);
       }
     } catch (e) {
       console.error("Failed to fetch keywords", e);
@@ -246,7 +259,11 @@ const KeywordMonitoring = () => {
       const res = await fetch("/api/scan", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fetch_unknown: scanAll }),
+        body: JSON.stringify({ 
+          fetch_unknown: scanAll,
+          start_date: scanStartDate ? new Date(scanStartDate).toISOString() : null,
+          end_date: scanEndDate ? new Date(scanEndDate).toISOString() : null,
+        }),
       });
 
       if (res.ok) {
@@ -457,6 +474,18 @@ const KeywordMonitoring = () => {
     }
   }, [articlePage, totalArticlePages]);
 
+  const totalEventPages = Math.max(1, Math.ceil(events.length / eventPageSize));
+  const paginatedEvents = events.slice(
+    (eventPage - 1) * eventPageSize,
+    eventPage * eventPageSize
+  );
+
+  useEffect(() => {
+    if (eventPage > totalEventPages) {
+      setEventPage(totalEventPages);
+    }
+  }, [eventPage, totalEventPages]);
+
   return (
     <div className="space-y-6">
       <ScanResultModal
@@ -570,19 +599,10 @@ const KeywordMonitoring = () => {
                 <Badge
                   key={keyword.id}
                   variant={selectedKeywordIds.includes(keyword.id!) ? "default" : "secondary"}
-                  className="gap-1 pr-1 pl-2 py-1 flex items-center cursor-pointer"
+                  className="px-3 py-1 flex items-center cursor-pointer"
                   onClick={() => toggleKeywordSelection(keyword.id!)}
                 >
                   {keyword.text}
-                  <button
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      handleDeleteKeyword(keyword.id!);
-                    }}
-                    className="ml-1 hover:bg-destructive/10 hover:text-destructive rounded-full p-0.5 transition-colors"
-                  >
-                    <X className="h-3 w-3" />
-                  </button>
                 </Badge>
               ))}
               {activeKeywords.length === 0 && (
@@ -610,6 +630,46 @@ const KeywordMonitoring = () => {
                 <Switch id="scan-all" checked={scanAll} onCheckedChange={setScanAll} />
                 <Label htmlFor="scan-all">Quét mở rộng (Nguồn chưa xác thực)</Label>
               </div>
+            </div>
+
+            <div className="flex flex-col gap-2">
+              <Label>Phạm vi thời gian quét (Tùy chọn)</Label>
+              <div className="flex gap-2">
+                <Input 
+                  type="date" 
+                  value={scanStartDate} 
+                  onChange={(e) => setScanStartDate(e.target.value)}
+                  className="w-full"
+                />
+                <div className="flex items-center">-</div>
+                <Input 
+                  type="date" 
+                  value={scanEndDate} 
+                  onChange={(e) => setScanEndDate(e.target.value)}
+                  className="w-full"
+                />
+              </div>
+              <div className="flex gap-2">
+                <Button type="button" variant="outline" size="sm" className="h-7 text-xs" onClick={() => {
+                  const end = new Date();
+                  const start = new Date();
+                  start.setDate(end.getDate() - 5);
+                  setScanStartDate(start.toISOString().split('T')[0]);
+                  setScanEndDate(end.toISOString().split('T')[0]);
+                }}>5 ngày</Button>
+                <Button type="button" variant="outline" size="sm" className="h-7 text-xs" onClick={() => {
+                  const end = new Date();
+                  const start = new Date();
+                  start.setDate(end.getDate() - 15);
+                  setScanStartDate(start.toISOString().split('T')[0]);
+                  setScanEndDate(end.toISOString().split('T')[0]);
+                }}>15 ngày</Button>
+                <Button type="button" variant="ghost" size="sm" className="h-7 text-xs" onClick={() => {
+                  setScanStartDate("");
+                  setScanEndDate("");
+                }}>Xóa</Button>
+              </div>
+              <p className="text-xs text-muted-foreground">Để trống nếu muốn tự động lấy tin cũ tối đa 14 ngày.</p>
             </div>
 
             <div className="flex items-center gap-4">
@@ -749,10 +809,15 @@ const KeywordMonitoring = () => {
                   <div className="flex-1 space-y-2">
                     <div className="flex items-start gap-3">
                       <div className="flex-1">
-                        <h4 className="font-medium text-foreground">
+                        <h4 className="font-medium text-foreground flex items-center flex-wrap gap-2">
                           <a href={article.link} target="_blank" rel="noreferrer" className="hover:underline">
                             {article.title}
                           </a>
+                          {new Date().getTime() - new Date(article.published_date).getTime() < 14 * 24 * 60 * 60 * 1000 && (
+                            <Badge className="bg-blue-100 text-blue-700 hover:bg-blue-200 border-transparent border py-0 px-2 h-5 text-[10px]">
+                              Mới
+                            </Badge>
+                          )}
                         </h4>
                         <p className="text-sm text-muted-foreground mt-1">
                           {article.source} • {new Date(article.published_date).toLocaleString()}
@@ -819,7 +884,7 @@ const KeywordMonitoring = () => {
                 Chưa có sự kiện nào được gom.
               </div>
             ) : (
-              events.map((event) => (
+              paginatedEvents.map((event) => (
                 <div key={event.id} className="flex items-start justify-between gap-4 rounded-lg border p-4">
                   <div className="space-y-2">
                     <div className="font-medium">{event.canonical_title}</div>
@@ -851,6 +916,33 @@ const KeywordMonitoring = () => {
               ))
             )}
           </div>
+          {events.length > 0 && (
+            <div className="mt-4 flex items-center justify-end gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setEventPage((current) => Math.max(1, current - 1))}
+                disabled={eventPage === 1}
+              >
+                <ChevronLeft className="mr-1 h-4 w-4" />
+                Trước
+              </Button>
+              <div className="text-sm text-muted-foreground">
+                Trang {eventPage} / {totalEventPages}
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setEventPage((current) => Math.min(totalEventPages, current + 1))}
+                disabled={eventPage === totalEventPages}
+              >
+                Sau
+                <ChevronRight className="ml-1 h-4 w-4" />
+              </Button>
+            </div>
+          )}
         </CardContent>
       </Card>
 

@@ -118,20 +118,4 @@ class Keyword(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
-def ensure_news_schema(engine) -> None:
-    inspector = inspect(engine)
-    tables = set(inspector.get_table_names())
 
-    if "news_events" not in tables:
-        NewsEvent.__table__.create(bind=engine)
-
-    article_columns = {column["name"] for column in inspector.get_columns("article_identity")}
-    if "event_id" not in article_columns:
-        with engine.begin() as connection:
-            connection.execute(text("ALTER TABLE article_identity ADD COLUMN event_id INTEGER NULL"))
-    if "event_match_score" not in article_columns:
-        with engine.begin() as connection:
-            connection.execute(text("ALTER TABLE article_identity ADD COLUMN event_match_score FLOAT NULL"))
-    if "dedupe_reason" not in article_columns:
-        with engine.begin() as connection:
-            connection.execute(text("ALTER TABLE article_identity ADD COLUMN dedupe_reason VARCHAR(255) NULL"))
