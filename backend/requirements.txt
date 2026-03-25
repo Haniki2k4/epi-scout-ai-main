@@ -12,3 +12,4 @@ rapidfuzz
 python-multipart
 loguru
 python-dotenv
+alembic
