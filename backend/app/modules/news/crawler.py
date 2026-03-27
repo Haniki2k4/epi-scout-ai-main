@@ -53,7 +53,7 @@ HARD_EXCLUDE_TITLE_TERMS = [
     "nên ăn gì", "uống gì", "làm đẹp", "giảm cân",
     "thực phẩm chức năng", "bí quyết", "mẹo hay",
     "review ", "quảng cáo", "khuyến mãi", "24/7",
-    "dấu hiệu sớm", "dấu hiệu cảnh báo","tư vấn bác sĩ", "kinh nghiệm",
+    "dấu hiệu sớm", "tư vấn bác sĩ", "kinh nghiệm",
 ]
 
 # Context terms that raise the epidemiological signal score

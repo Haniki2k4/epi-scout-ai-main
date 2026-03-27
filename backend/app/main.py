@@ -126,6 +126,15 @@ def get_stats_trends(days: int = 7, db: Session = Depends(get_db)):
     logger.info("Stats trends completed | points={}", len(result))
     return result
 
+@app.get("/api/stats/top-diseases")
+def get_top_diseases(months: int = 1, db: Session = Depends(get_db)):
+    months = max(1, min(months, 12))
+    logger.info("Top diseases requested | months={}", months)
+    result = stats.disease_mention_counts(db, months)
+    top10 = result[:10]
+    logger.info("Top diseases completed | count={} months={}", len(top10), months)
+    return top10
+
 # --- Resources ---
 
 @app.get("/api/keywords", response_model=List[schemas.KeywordDTO])

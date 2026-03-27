@@ -25,6 +25,7 @@ const KeywordMonitoring = () => {
   const [keywordFilter, setKeywordFilter] = useState("");
   const [scanStartDate, setScanStartDate] = useState("");
   const [scanEndDate, setScanEndDate] = useState("");
+  const [scanDateWarningConfirmed, setScanDateWarningConfirmed] = useState(false);
   const [selectedKeywordIds, setSelectedKeywordIds] = useState<number[]>([]);
   const [events, setEvents] = useState<NewsEvent[]>([]);
   const [selectedEvent, setSelectedEvent] = useState<NewsEventDetail | null>(null);
@@ -249,6 +250,23 @@ const KeywordMonitoring = () => {
       return;
     }
 
+    // Cảnh báo nếu chưa chọn phạm vi thời gian
+    const missingStart = !scanStartDate;
+    const missingEnd = !scanEndDate;
+    if ((missingStart || missingEnd) && !scanDateWarningConfirmed) {
+      const missingFields = [];
+      if (missingStart) missingFields.push("ngày bắt đầu");
+      if (missingEnd) missingFields.push("ngày kết thúc");
+      toast({
+        title: "⚠️ Chưa chọn phạm vi thời gian",
+        description: `Bạn chưa nhập ${missingFields.join(" và ")}. Hệ thống sẽ tự động lấy tin tức trong 14 ngày gần nhất. Nhấn Bắt đầu quét lần nữa để tiếp tục.`,
+        variant: "destructive",
+      });
+      setScanDateWarningConfirmed(true);
+      return;
+    }
+
+    setScanDateWarningConfirmed(false);
     setIsScanning(true);
     toast({
       title: "Đang quét tin tức...",
@@ -638,14 +656,14 @@ const KeywordMonitoring = () => {
                 <Input 
                   type="date" 
                   value={scanStartDate} 
-                  onChange={(e) => setScanStartDate(e.target.value)}
+                  onChange={(e) => { setScanStartDate(e.target.value); setScanDateWarningConfirmed(false); }}
                   className="w-full"
                 />
                 <div className="flex items-center">-</div>
                 <Input 
                   type="date" 
                   value={scanEndDate} 
-                  onChange={(e) => setScanEndDate(e.target.value)}
+                  onChange={(e) => { setScanEndDate(e.target.value); setScanDateWarningConfirmed(false); }}
                   className="w-full"
                 />
               </div>
@@ -667,9 +685,18 @@ const KeywordMonitoring = () => {
                 <Button type="button" variant="ghost" size="sm" className="h-7 text-xs" onClick={() => {
                   setScanStartDate("");
                   setScanEndDate("");
+                  setScanDateWarningConfirmed(false);
                 }}>Xóa</Button>
               </div>
-              <p className="text-xs text-muted-foreground">Để trống nếu muốn tự động lấy tin cũ tối đa 14 ngày.</p>
+              <p className="text-xs text-muted-foreground">
+                Để trống nếu muốn tự động lấy tin cũ tối đa 14 ngày.
+              </p>
+              {/* Reset cảnh báo khi người dùng thay đổi ngày */}
+              {scanDateWarningConfirmed && (
+                <p className="text-xs font-medium text-destructive flex items-center gap-1">
+                  ⚠️ Chưa chọn đầy đủ ngày. Nhấn <strong>Bắt đầu quét</strong> lần nữa để tiếp tục mà không lọc ngày.
+                </p>
+              )}
             </div>
 
             <div className="flex items-center gap-4">
