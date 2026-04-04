@@ -39,7 +39,8 @@ def parse_keywords_input(text: str) -> list[str]:
 def init_database() -> None:
     with database.SessionLocal() as db:
         crud.seed_default_keywords(db)
-    logger.info("Backend startup complete, default keywords seeded")
+        crud.seed_default_rss_sources(db)
+    logger.info("Backend startup complete, default keywords and RSS sources seeded")
     crawler.log_llm_preflight_status(force_refresh=True)
 
 # CORS configuration
@@ -135,7 +136,35 @@ def get_top_diseases(months: int = 1, db: Session = Depends(get_db)):
     logger.info("Top diseases completed | count={} months={}", len(top10), months)
     return top10
 
+@app.get("/api/stats/heatmap")
+def get_heatmap(days: int = 30, month: int = None, year: int = None, db: Session = Depends(get_db)):
+    logger.info("Location heatmap requested | days={} month={} year={}", days, month, year)
+    result = stats.get_location_heatmap_data(db, days=days, month=month, year=year)
+    logger.info("Location heatmap completed | locations={}", len(result))
+    return result
+
+@app.get("/api/stats/bow")
+def get_bow(days: int = 30, db: Session = Depends(get_db)):
+    logger.info("BoW requested | days={}", days)
+    result = stats.get_bow_data(db, days)
+    logger.info("BoW completed | items={}", len(result))
+    return result
+
+@app.get("/api/stats/stacked-trends")
+def get_stacked_trends(days: int = 30, db: Session = Depends(get_db)):
+    logger.info("Stacked trends requested | days={}", days)
+    result = stats.get_stacked_trend_data(db, days)
+    logger.info("Stacked trends completed")
+    return result
+
 # --- Resources ---
+
+@app.get("/api/rss-sources", response_model=List[schemas.RssSourceDTO])
+def read_rss_sources(db: Session = Depends(get_db)):
+    logger.info("Read RSS sources requested")
+    sources = crud.get_all_rss_sources(db)
+    logger.info("Read RSS sources completed | count={}", len(sources))
+    return sources
 
 @app.get("/api/keywords", response_model=List[schemas.KeywordDTO])
 def read_keywords(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
@@ -185,13 +214,6 @@ def delete_keyword(keyword_id: int, db: Session = Depends(get_db)):
     logger.info("Delete keyword completed | keyword_id={}", keyword_id)
     return {"status": "success", "id": keyword_id}
 
-@app.get("/api/whitelist", response_model=List[schemas.WhitelistDTO])
-def read_whitelist(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    logger.info("Read whitelist requested | skip={} limit={}", skip, limit)
-    domains = crud.get_whitelisted_domains(db, skip=skip, limit=limit)
-    logger.info("Read whitelist completed | count={}", len(domains))
-    return domains
-
 
 @app.get("/api/events", response_model=List[schemas.NewsEventDTO])
 def read_events(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
@@ -211,14 +233,22 @@ def read_event_detail(event_id: int, db: Session = Depends(get_db)):
     logger.info("Read event detail completed | event_id={} article_count={}", event_id, len(event.articles))
     return event
 
-@app.post("/api/whitelist", response_model=schemas.WhitelistDTO, status_code=201)
-def create_whitelist(domain: schemas.WhitelistCreate, response: Response, db: Session = Depends(get_db)):
-    logger.info("Create whitelist requested | domain={}", domain.domain)
-    existing = crud.get_whitelist_by_name(db, domain.domain)
+
+@app.get("/api/rss-sources", response_model=List[schemas.RssSourceDTO])
+def read_rss_sources(db: Session = Depends(get_db)):
+    logger.info("Read RSS sources requested")
+    sources = crud.get_all_rss_sources(db)
+    logger.info("Read RSS sources completed | count={}", len(sources))
+    return sources
+
+@app.post("/api/rss-sources", response_model=schemas.RssSourceDTO, status_code=201)
+def create_rss_source(source: schemas.RssSourceCreate, response: Response, db: Session = Depends(get_db)):
+    logger.info("Create RSS source requested | url={}", source.url)
+    existing = crud.get_rss_source_by_url(db, source.url)
     if existing:
-        logger.info("Create whitelist skipped | domain={} reason=already_exists", domain.domain)
+        logger.info("Create RSS source skipped | url={} reason=already_exists", source.url)
         response.status_code = 200
         return existing
-    created_domain = crud.create_whitelist_domain(db, domain)
-    logger.info("Create whitelist completed | id={} domain={}", created_domain.id, created_domain.domain)
-    return created_domain
+    created = crud.create_rss_source(db, source)
+    logger.info("Create RSS source completed | id={} url={}", created.id, created.url)
+    return created

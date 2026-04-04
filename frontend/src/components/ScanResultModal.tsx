@@ -55,7 +55,7 @@ export function ScanResultModal({
     const result = await onAddWhitelist(domain);
     if (result === "created") {
       toast({
-        title: "Đã thêm vào Whitelist",
+        title: "Đã thêm nguồn uy tín",
         description: `Domain ${domain} đã được thêm vào danh sách tin cậy.`,
       });
       return;
@@ -68,7 +68,7 @@ export function ScanResultModal({
       return;
     }
     toast({
-      title: "Không thể thêm Whitelist",
+      title: "Không thể thêm nguồn",
       description: `Domain ${domain} chưa được thêm vào danh sách tin cậy.`,
       variant: "destructive",
     });
@@ -83,7 +83,7 @@ export function ScanResultModal({
             Phát hiện nguồn chưa xác thực
           </DialogTitle>
           <DialogDescription>
-            Hệ thống tìm thấy {unknownArticles.length} bài viết từ các nguồn chưa có trong Whitelist.
+            Hệ thống tìm thấy {unknownArticles.length} bài viết từ các nguồn chưa có trong danh sách uy tín.
             Vui lòng chọn bài viết để lưu hoặc thêm nguồn vào danh sách tin cậy.
           </DialogDescription>
         </DialogHeader>
@@ -128,7 +128,7 @@ export function ScanResultModal({
                       onClick={() => void handleAddWhitelist(article.source)}
                     >
                       <PlusCircle className="w-3 h-3" />
-                      Thêm Whitelist
+                      Thêm whitelist
                     </Button>
                   </div>
                 </div>

@@ -7,20 +7,26 @@ export interface Article {
   published_date: string;
   keywords_matched: string;
   is_whitelisted: boolean;
+  tags?: string | null;
   event_id?: number | null;
   event_match_score?: number | null;
   dedupe_reason?: string | null;
 }
 
-export interface WhitelistDomain {
+
+export interface RssSource {
   id?: number;
-  domain: string;
+  url: string;
+  label?: string | null;
+  category?: string | null;
   is_active: boolean;
+  created_at?: string;
 }
 
 export interface ScanResult {
   saved_trusted_count: number;
   unknown_articles: Article[];
+  execution_time?: number;
 }
 
 export interface Keyword {

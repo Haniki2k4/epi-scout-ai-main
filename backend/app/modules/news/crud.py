@@ -96,17 +96,28 @@ def update_news_event(
     case_count: int | None = None,
     severity: str | None = None,
 ):
-    if canonical_title and len(canonical_title) > len(event.canonical_title or ""):
-        event.canonical_title = canonical_title
-    if case_count is not None and case_count > (event.case_count or 0):
-        event.case_count = case_count
-    if severity and not event.severity:
-        event.severity = severity
-    event.updated_at = datetime.utcnow()
-    db.add(event)
+    db_event = db.query(models.NewsEvent).filter(models.NewsEvent.id == event.id).first()
+    if not db_event:
+        return event
+
+    has_changed = False
+    if canonical_title and len(canonical_title) > len(db_event.canonical_title or ""):
+        db_event.canonical_title = canonical_title
+        has_changed = True
+    if case_count is not None and case_count > (db_event.case_count or 0):
+        db_event.case_count = case_count
+        has_changed = True
+    if severity and not db_event.severity:
+        db_event.severity = severity
+        has_changed = True
+
+    if not has_changed:
+        # Avoid hitting the database if there are no real changes
+        return db_event
+    
     db.commit()
-    db.refresh(event)
-    return event
+    db.refresh(db_event)
+    return db_event
 
 # --- Disease Cases ---
 
@@ -116,20 +127,27 @@ def create_disease_case(db: Session, case: models.DiseaseCase):
     db.refresh(case)
     return case
 
-# --- Whitelist ---
+def get_disease_case_by_evd(db: Session, event_id: int, report_date: datetime, location: str = None):
+    # Lọc theo event thông qua bài báo và cùng ngày (không tính giờ)
+    date_only = report_date.date()
+    q = db.query(models.DiseaseCase).join(models.ArticleIdentity).filter(
+        models.ArticleIdentity.event_id == event_id,
+        models.DiseaseCase.report_date >= datetime.combine(date_only, datetime.min.time()),
+        models.DiseaseCase.report_date <= datetime.combine(date_only, datetime.max.time())
+    )
+    if location:
+        q = q.filter(models.DiseaseCase.location == location)
+    return q.first()
 
-def get_whitelisted_domains(db: Session, skip: int = 0, limit: int = 100):
-    return db.query(models.WhitelistDomain).order_by(models.WhitelistDomain.id).offset(skip).limit(limit).all()
+def update_disease_case(db: Session, case_id: int, new_count: int, article_id: int):
+    db_case = db.query(models.DiseaseCase).filter(models.DiseaseCase.id == case_id).first()
+    if db_case:
+        db_case.case_count = new_count
+        db_case.article_id = article_id
+        db.commit()
+        db.refresh(db_case)
+    return db_case
 
-def create_whitelist_domain(db: Session, domain: schemas.WhitelistCreate):
-    db_domain = models.WhitelistDomain(domain=domain.domain, is_active=domain.is_active)
-    db.add(db_domain)
-    db.commit()
-    db.refresh(db_domain)
-    return db_domain
-
-def get_whitelist_by_name(db: Session, domain: str):
-    return db.query(models.WhitelistDomain).filter(models.WhitelistDomain.domain == domain).first()
 
 # --- Keywords ---
 
@@ -163,8 +181,99 @@ def add_keyword(db: Session, text: str):
 def seed_default_keywords(db: Session):
     defaults = [
         "cúm A", "cúm B", "cúm mùa", 
-        "não mô cầu", "bạch hầu", "ho gà", 
-        "viêm não nhật bản"
+        "não mô cầu", "bạch hầu", "sốt xuất huyết", 
+        "covid-19", "sởi", "tay chân miệng"
     ]
     for text in defaults:
         add_keyword(db, text)
+
+
+# --- RSS Sources ---
+
+_DEFAULT_RSS_SOURCES = [
+    {"url": "http://cand.com.vn/rss/suc-khoe-c-5", "label": "Công An Nhân Dân", "category": "suc-khoe"},
+    {"url": "http://www.who.int/feeds/entity/csr/disease/avian_influenza/en/rss.xml", "label": "WHO Avian Flu", "category": "global"},
+    {"url": "https://congan.com.vn/rss/tin-chinh", "label": "Công An TP.HCM", "category": "thoi-su"},
+    {"url": "https://dantri.com.vn/rss/suc-khoe.rss", "label": "Dân Trí - Sức Khỏe", "category": "suc-khoe"},
+    {"url": "https://dantri.com.vn/rss/the-gioi.rss", "label": "Dân Trí - Thế Giới", "category": "the-gioi"},
+    {"url": "https://doisongphapluat.com.vn/rss/tin-tuc.rss", "label": "Đời Sống Pháp Luật", "category": "thoi-su"},
+    {"url": "https://infonet.vietnamnet.vn/rss/khoe-dep.rss", "label": "Infonet - Khỏe Đẹp", "category": "suc-khoe"},
+    {"url": "https://laodong.vn/rss/suc-khoe.rss", "label": "Lao Động - Sức Khỏe", "category": "suc-khoe"},
+    {"url": "https://laodong.vn/rss/the-gioi.rss", "label": "Lao Động - Thế Giới", "category": "the-gioi"},
+    {"url": "https://laodong.vn/rss/thoi-su.rss", "label": "Lao Động - Thời Sự", "category": "thoi-su"},
+    {"url": "https://nhandan.vn/rss/the-gioi.rss", "label": "Nhân Dân - Thế Giới", "category": "the-gioi"},
+    {"url": "https://nhandan.vn/rss/y-te.rss", "label": "Nhân Dân - Y Tế", "category": "suc-khoe"},
+    {"url": "https://nld.com.vn/rss/suc-khoe.rss", "label": "NLĐ - Sức Khỏe", "category": "suc-khoe"},
+    {"url": "https://phaply.net.vn/rss/tin-moi.rss", "label": "Pháp Lý", "category": "thoi-su"},
+    {"url": "https://plo.vn/rss/home.rss", "label": "Pháp Luật TP.HCM", "category": "thoi-su"},
+    {"url": "https://plo.vn/rss/suc-khoe-17.rss", "label": "PLO - Sức Khỏe", "category": "suc-khoe"},
+    {"url": "https://rss.nytimes.com/services/xml/rss/nyt/Health.xml", "label": "NYTimes Health", "category": "global"},
+    {"url": "https://suckhoedoisong.vn/rss", "label": "Sức Khỏe Đời Sống", "category": "suc-khoe"},
+    {"url": "https://suckhoedoisong.vn/rss/suc-khoe.rss", "label": "SKĐS - Sức Khỏe", "category": "suc-khoe"},
+    {"url": "https://suckhoedoisong.vn/suc-khoe-tv.rss", "label": "SKĐS TV", "category": "suc-khoe"},
+    {"url": "https://suckhoedoisong.vn/thoi-su.rss", "label": "SKĐS - Thời Sự", "category": "thoi-su"},
+    {"url": "https://suckhoedoisong.vn/y-hoc-360.rss", "label": "Y Học 360", "category": "suc-khoe"},
+    {"url": "https://suckhoedoisong.vn/y-te.rss", "label": "SKĐS - Y Tế", "category": "suc-khoe"},
+    {"url": "https://thanhnien.vn/rss/suc-khoe.rss", "label": "Thanh Niên - Sức Khỏe", "category": "suc-khoe"},
+    {"url": "https://thanhnien.vn/rss/the-gioi.rss", "label": "Thanh Niên - Thế Giới", "category": "the-gioi"},
+    {"url": "https://tienphong.vn/rss/home.rss", "label": "Tiền Phong", "category": "thoi-su"},
+    {"url": "https://tienphong.vn/rss/suc-khoe-210.rss", "label": "Tiền Phong - Sức Khỏe", "category": "suc-khoe"},
+    {"url": "https://tienphong.vn/rss/y-khoa-304.rss", "label": "Tiền Phong - Y Khoa", "category": "suc-khoe"},
+    {"url": "https://tuoitre.vn/rss/suc-khoe.rss", "label": "Tuổi Trẻ - Sức Khỏe", "category": "suc-khoe"},
+    {"url": "https://tuoitre.vn/rss/the-gioi.rss", "label": "Tuổi Trẻ - Thế Giới", "category": "the-gioi"},
+    {"url": "https://tuoitre.vn/rss/tin-moi-nhat.rss", "label": "Tuổi Trẻ - Mới Nhất", "category": "thoi-su"},
+    {"url": "https://vietnamnet.vn/rss/suc-khoe.rss", "label": "VietnamNet - Sức Khỏe", "category": "suc-khoe"},
+    {"url": "https://vietnamnet.vn/rss/the-gioi.rss", "label": "VietnamNet - Thế Giới", "category": "the-gioi"},
+    {"url": "https://vietnamnet.vn/rss/thoi-su.rss", "label": "VietnamNet - Thời Sự", "category": "thoi-su"},
+    {"url": "https://vnanet.vn/vi/rss/suc-khoe-7.rss", "label": "Thông Tấn Xã VN - Y Tế", "category": "suc-khoe"},
+    {"url": "https://vnexpress.net/rss/suc-khoe.rss", "label": "VnExpress - Sức Khỏe", "category": "suc-khoe"},
+    {"url": "https://vnexpress.net/rss/the-gioi.rss", "label": "VnExpress - Thế Giới", "category": "the-gioi"},
+    {"url": "https://vnexpress.net/rss/thoi-su.rss", "label": "VnExpress - Thời Sự", "category": "thoi-su"},
+    {"url": "https://vov.gov.vn/Rss/RssCategoryExport?chuyendeId=27", "label": "VOV Gov - Y Tế", "category": "suc-khoe"},
+    {"url": "https://vov.vn/rss/suc-khoe.rss", "label": "VOV - Sức Khỏe", "category": "suc-khoe"},
+    {"url": "https://vov.vn/rss/the-gioi.rss", "label": "VOV - Thế Giới", "category": "the-gioi"},
+    {"url": "https://www.afro.who.int/rss/emergencies.xml", "label": "WHO AFRO Emergencies", "category": "global"},
+    {"url": "https://www.afro.who.int/rss/featured-news.xml", "label": "WHO AFRO News", "category": "global"},
+    {"url": "https://www.ecdc.europa.eu/en/taxonomy/term/1307/feed", "label": "ECDC Threats", "category": "global"},
+    {"url": "https://www.ecdc.europa.eu/en/taxonomy/term/1505/feed", "label": "ECDC Influenza", "category": "global"},
+    {"url": "https://www.ecdc.europa.eu/en/taxonomy/term/2942/feed", "label": "ECDC COVID-19", "category": "global"},
+    {"url": "https://www.google.com/alerts/feeds/00283484586046880188/13659782394507164085", "label": "Google Alert - Dịch Bệnh VN", "category": "google-alert"},
+    {"url": "https://www.google.com/alerts/feeds/00283484586046880188/2768685979145450209", "label": "Google Alert - Outbreak", "category": "google-alert"},
+    {"url": "https://www.sggp.org.vn/rss/ytesuckhoe-212.rss", "label": "SGGP - Y Tế Sức Khỏe", "category": "suc-khoe"},
+    {"url": "https://www.who.int/rss-feeds/news-english.xml", "label": "WHO News", "category": "global"},
+]
+
+def get_active_rss_sources(db: Session):
+    return db.query(models.RssSource).filter(models.RssSource.is_active == True).all()
+
+def get_all_rss_sources(db: Session):
+    return db.query(models.RssSource).order_by(models.RssSource.category, models.RssSource.label).all()
+
+def seed_default_rss_sources(db: Session):
+    """Seed danh sách RSS mặc định vào DB nếu bảng còn trống."""
+    if db.query(models.RssSource).count() > 0:
+        return  # Đã có dữ liệu, không cần seed lại
+    for item in _DEFAULT_RSS_SOURCES:
+        db_src = models.RssSource(
+            url=item["url"],
+            label=item.get("label"),
+            category=item.get("category"),
+            is_active=True,
+        )
+        db.add(db_src)
+    db.commit()
+
+def create_rss_source(db: Session, source: schemas.RssSourceCreate):
+    db_src = models.RssSource(
+        url=source.url,
+        label=source.label,
+        category=source.category,
+        is_active=source.is_active,
+    )
+    db.add(db_src)
+    db.commit()
+    db.refresh(db_src)
+    return db_src
+
+def get_rss_source_by_url(db: Session, url: str):
+    return db.query(models.RssSource).filter(models.RssSource.url == url).first()
