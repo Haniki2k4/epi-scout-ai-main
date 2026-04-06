@@ -5,11 +5,13 @@ from typing import List
 from datetime import datetime
 import re
 from .core import database
-from .core.database import get_db
+from .core.database import get_db, Base, engine
 from .core.logger import get_logger
 from .modules.news import crawler, crud, models, schemas, stats
+from .modules.auth import router as auth_router, security
+from .modules.admin import router_users as admin_users_router
 
-app = FastAPI()
+app = FastAPI(description="Hệ thống quét và tự động phân tích tin tức dịch tễ.")
 logger = get_logger("backend.main")
 
 KEYWORD_MAX_LENGTH = 255
@@ -38,10 +40,16 @@ def parse_keywords_input(text: str) -> list[str]:
 @app.on_event("startup")
 def init_database() -> None:
     with database.SessionLocal() as db:
-        crud.seed_default_keywords(db)
-        crud.seed_default_rss_sources(db)
-    logger.info("Backend startup complete, default keywords and RSS sources seeded")
+        try:
+            crud.seed_default_keywords(db)
+            crud.seed_default_rss_sources(db)
+            logger.info("Backend startup complete, default keywords and RSS sources seeded")
+        finally:
+            db.close()
     crawler.log_llm_preflight_status(force_refresh=True)
+
+app.include_router(auth_router.router)
+app.include_router(admin_users_router.router)
 
 # CORS configuration
 origins = [
@@ -62,7 +70,11 @@ app.add_middleware(
 # --- Scan & Articles ---
 
 @app.post("/api/scan", response_model=schemas.ScanResult)
-def scan_news(request: schemas.ScanRequest, db: Session = Depends(get_db)):
+def scan_news(
+    request: schemas.ScanRequest, 
+    db: Session = Depends(get_db),
+    current_user=Depends(security.get_current_active_user)
+):
     logger.info("Scan requested | fetch_unknown={} start_date={} end_date={}", request.fetch_unknown, request.start_date, request.end_date)
     result = crawler.scan_news(db, request.fetch_unknown, request.start_date, request.end_date)
     logger.info(
@@ -84,7 +96,11 @@ def read_articles(
     return articles
 
 @app.post("/api/articles/save", response_model=schemas.ArticleDTO)
-def save_article(article: schemas.ArticleCreate, db: Session = Depends(get_db)):
+def save_article(
+    article: schemas.ArticleCreate, 
+    db: Session = Depends(get_db),
+    current_user=Depends(security.get_current_active_user)
+):
     logger.info("Save article requested | link={} title={}", article.link, article.title)
     existing = crud.get_article_by_link(db, article.link)
     if existing:
@@ -174,7 +190,11 @@ def read_keywords(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)
     return keywords
 
 @app.post("/api/keywords", response_model=schemas.KeywordDTO | List[schemas.KeywordDTO])
-def create_keyword(keyword: schemas.KeywordCreate, db: Session = Depends(get_db)):
+def create_keyword(
+    keyword: schemas.KeywordCreate, 
+    db: Session = Depends(get_db),
+    current_admin=Depends(security.require_admin_role)
+):
     logger.info("Create keyword requested | raw_text={}", keyword.text)
     keywords = parse_keywords_input(keyword.text)
     if not keywords:
@@ -205,7 +225,11 @@ def create_keyword(keyword: schemas.KeywordCreate, db: Session = Depends(get_db)
     return created_keywords[0] if len(created_keywords) == 1 else created_keywords
 
 @app.delete("/api/keywords/{keyword_id}")
-def delete_keyword(keyword_id: int, db: Session = Depends(get_db)):
+def delete_keyword(
+    keyword_id: int, 
+    db: Session = Depends(get_db),
+    current_admin=Depends(security.require_admin_role)
+):
     logger.info("Delete keyword requested | keyword_id={}", keyword_id)
     success = crud.delete_keyword(db, keyword_id)
     if not success:
@@ -242,7 +266,12 @@ def read_rss_sources(db: Session = Depends(get_db)):
     return sources
 
 @app.post("/api/rss-sources", response_model=schemas.RssSourceDTO, status_code=201)
-def create_rss_source(source: schemas.RssSourceCreate, response: Response, db: Session = Depends(get_db)):
+def create_rss_source(
+    source: schemas.RssSourceCreate, 
+    response: Response, 
+    db: Session = Depends(get_db),
+    current_admin=Depends(security.require_admin_role)
+):
     logger.info("Create RSS source requested | url={}", source.url)
     existing = crud.get_rss_source_by_url(db, source.url)
     if existing:

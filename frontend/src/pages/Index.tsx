@@ -5,9 +5,21 @@ import DashboardOverview from "@/components/DashboardOverview";
 import KeywordMonitoring from "@/components/KeywordMonitoring";
 import DataExtraction from "@/components/DataExtraction";
 import DataAnalysis from "@/components/DataAnalysis";
+import { useAuth } from "@/contexts/AuthContext";
+import { Link, useNavigate } from "react-router-dom";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 const Index = () => {
   const [activeTab, setActiveTab] = useState("overview");
+  const { user, isAuthenticated, logout } = useAuth();
+  const navigate = useNavigate();
 
   return (
     <div className="min-h-screen bg-background">
@@ -24,9 +36,52 @@ const Index = () => {
                 <p className="text-sm text-muted-foreground">Disease Surveillance System</p>
               </div>
             </div>
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <div className="h-2 w-2 rounded-full bg-accent animate-pulse"></div>
-              Đang hoạt động
+            <div className="flex items-center gap-2 text-sm">
+              {!isAuthenticated ? (
+                <Link to="/login" className="flex items-center gap-2 hover:text-primary transition-colors text-muted-foreground mr-2 font-medium">
+                  Đăng nhập
+                </Link>
+              ) : (
+                <DropdownMenu>
+                  <DropdownMenuTrigger className="flex items-center gap-2 hover:bg-primary/10 p-2 py-1 rounded-md transition-colors outline-none cursor-pointer group">
+                    <span className="font-medium mr-1 text-foreground hidden sm:block group-hover:text-primary transition-colors">
+                      {user?.username}
+                    </span>
+                    <i className="fa-regular fa-circle-user text-xl text-primary"></i>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-56 mt-2">
+                    <DropdownMenuLabel className="font-normal">
+                      <div className="flex flex-col space-y-1">
+                        <p className="text-sm font-medium leading-none">{user?.username}</p>
+                        <p className="text-xs leading-none text-muted-foreground">
+                          Vai trò: {user?.role === 'admin' ? 'Quản trị viên' : 'Người dùng'}
+                        </p>
+                      </div>
+                    </DropdownMenuLabel>
+                    <DropdownMenuSeparator />
+                    {user?.role === "admin" && (
+                      <>
+                        <DropdownMenuItem 
+                          onClick={() => navigate("/admin")} 
+                          className="cursor-pointer focus:bg-primary focus:text-primary-foreground"
+                        >
+                          Đi tới Trang Quản Trị
+                        </DropdownMenuItem>
+                        <DropdownMenuSeparator />
+                      </>
+                    )}
+                    <DropdownMenuItem className="cursor-pointer focus:bg-primary focus:text-primary-foreground">
+                      Cài đặt thông tin
+                    </DropdownMenuItem>
+                    <DropdownMenuItem 
+                      onClick={() => logout()} 
+                      className="text-destructive focus:bg-destructive focus:text-destructive-foreground cursor-pointer"
+                    >
+                      Đăng xuất
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              )}
             </div>
           </div>
         </div>
