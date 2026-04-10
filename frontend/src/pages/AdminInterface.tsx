@@ -2,6 +2,10 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useAuth } from "@/contexts/AuthContext";
 import { Link } from "react-router-dom";
 import { Activity, ArrowLeft, Users, Shield, Database } from "lucide-react";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import UserManagement from "@/components/admin/UserManagement";
+import ArticleManagement from "@/components/admin/ArticleManagement";
+import ResourceManagement from "@/components/admin/ResourceManagement";
 
 export default function AdminInterface() {
   const { user } = useAuth();
@@ -66,16 +70,25 @@ export default function AdminInterface() {
           </Card>
         </div>
 
-        {/* Content Box */}
-        <Card className="mt-6 min-h-[400px]">
-          <CardHeader>
-            <CardTitle>Chức năng đang xây dựng</CardTitle>
-          </CardHeader>
-          <CardContent className="flex flex-col items-center justify-center h-full text-muted-foreground py-20">
-             <i className="fa-solid fa-person-digging text-6xl mb-4 opacity-50"></i>
-             <p>Khu vực quản lý CRUD chi tiết sẽ được hoàn thiện trong phiên bản tới.</p>
-          </CardContent>
-        </Card>
+        {/* Content Tabs */}
+        <div className="mt-8">
+          <Tabs defaultValue="users" className="w-full">
+            <TabsList className="grid w-full grid-cols-3 max-w-[600px] mb-6">
+              <TabsTrigger value="users">Tài Khoản</TabsTrigger>
+              <TabsTrigger value="articles">Bài Báo</TabsTrigger>
+              <TabsTrigger value="resources">Từ Khóa & RSS</TabsTrigger>
+            </TabsList>
+            <TabsContent value="users" className="mt-0">
+              <UserManagement />
+            </TabsContent>
+            <TabsContent value="articles" className="mt-0">
+              <ArticleManagement />
+            </TabsContent>
+            <TabsContent value="resources" className="mt-0">
+              <ResourceManagement />
+            </TabsContent>
+          </Tabs>
+        </div>
 
       </div>
     </div>

@@ -75,8 +75,16 @@ def scan_news(
     db: Session = Depends(get_db),
     current_user=Depends(security.get_current_active_user)
 ):
-    logger.info("Scan requested | fetch_unknown={} start_date={} end_date={}", request.fetch_unknown, request.start_date, request.end_date)
-    result = crawler.scan_news(db, request.fetch_unknown, request.start_date, request.end_date)
+    logger.info("Scan requested | fetch_unknown={} start_date={} end_date={} keywords_count={}",
+                request.fetch_unknown, request.start_date, request.end_date,
+                len(request.keywords_to_scan) if request.keywords_to_scan is not None else "all")
+    result = crawler.scan_news(
+        db,
+        request.fetch_unknown,
+        request.start_date,
+        request.end_date,
+        keywords_to_scan=request.keywords_to_scan,
+    )
     logger.info(
         "Scan completed | saved_trusted_count={} unknown_articles={}",
         result.saved_trusted_count,
@@ -127,6 +135,20 @@ def save_article(
     logger.info("Article saved | id={} link={}", saved_article.id, article.link)
     return saved_article
 
+@app.delete("/api/articles/{article_id}")
+def delete_article_api(
+    article_id: int, 
+    db: Session = Depends(get_db),
+    current_admin=Depends(security.require_admin_role)
+):
+    logger.info("Delete article requested | article_id={}", article_id)
+    success = crud.delete_article(db, article_id)
+    if not success:
+        logger.warning("Delete article failed | article_id={} reason=not_found", article_id)
+        raise HTTPException(status_code=404, detail="Article not found")
+    logger.info("Delete article completed | article_id={}", article_id)
+    return {"status": "success", "id": article_id}
+
 # --- Stats ---
 
 @app.get("/api/stats/overview")
@@ -171,6 +193,20 @@ def get_stacked_trends(days: int = 30, db: Session = Depends(get_db)):
     logger.info("Stacked trends requested | days={}", days)
     result = stats.get_stacked_trend_data(db, days)
     logger.info("Stacked trends completed")
+    return result
+
+@app.get("/api/stats/zscore")
+def get_zscore(disease: str = None, window: int = 14, days: int = 60, db: Session = Depends(get_db)):
+    logger.info("Z-score spikes requested | disease={} window={} days={}", disease, window, days)
+    result = stats.get_zscore_spikes(db, disease_name=disease, window=window, days=days)
+    logger.info("Z-score spikes completed | items={}", len(result))
+    return result
+
+@app.get("/api/stats/forecast")
+def get_forecast(disease: str = None, horizon: int = 7, db: Session = Depends(get_db)):
+    logger.info("Prophet forecast requested | disease={} horizon={}", disease, horizon)
+    result = stats.get_prophet_forecast(db, disease_name=disease, horizon_days=horizon)
+    logger.info("Prophet forecast completed")
     return result
 
 # --- Resources ---
@@ -238,6 +274,28 @@ def delete_keyword(
     logger.info("Delete keyword completed | keyword_id={}", keyword_id)
     return {"status": "success", "id": keyword_id}
 
+@app.put("/api/keywords/{keyword_id}", response_model=schemas.KeywordDTO)
+def update_keyword_api(
+    keyword_id: int, 
+    keyword: schemas.KeywordCreate,
+    db: Session = Depends(get_db),
+    current_admin=Depends(security.require_admin_role)
+):
+    logger.info("Update keyword requested | keyword_id={} text={}", keyword_id, keyword.text)
+    
+    if len(keyword.text.strip()) == 0:
+        raise HTTPException(status_code=400, detail="Vui lòng nhập từ khóa")
+        
+    if len(keyword.text) > KEYWORD_MAX_LENGTH:
+        raise HTTPException(status_code=400, detail=f"Từ khóa vượt quá {KEYWORD_MAX_LENGTH} ký tự")
+        
+    updated = crud.update_keyword(db, keyword_id, keyword.text.strip())
+    if not updated:
+        raise HTTPException(status_code=404, detail="Không tìm thấy từ khóa")
+        
+    logger.info("Update keyword completed | keyword_id={}", keyword_id)
+    return updated
+
 
 @app.get("/api/events", response_model=List[schemas.NewsEventDTO])
 def read_events(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
@@ -281,3 +339,31 @@ def create_rss_source(
     created = crud.create_rss_source(db, source)
     logger.info("Create RSS source completed | id={} url={}", created.id, created.url)
     return created
+
+@app.delete("/api/rss-sources/{source_id}")
+def delete_rss_source_api(
+    source_id: int, 
+    db: Session = Depends(get_db),
+    current_admin=Depends(security.require_admin_role)
+):
+    logger.info("Delete RSS source requested | source_id={}", source_id)
+    success = crud.delete_rss_source(db, source_id)
+    if not success:
+        logger.warning("Delete RSS source failed | source_id={} reason=not_found", source_id)
+        raise HTTPException(status_code=404, detail="RSS Source not found")
+    logger.info("Delete RSS source completed | source_id={}", source_id)
+    return {"status": "success", "id": source_id}
+
+@app.patch("/api/rss-sources/{source_id}/toggle", response_model=schemas.RssSourceDTO)
+def toggle_rss_source_api(
+    source_id: int,
+    body: schemas.RssSourceToggleRequest,
+    db: Session = Depends(get_db),
+    current_admin=Depends(security.require_admin_role)
+):
+    logger.info("Toggle RSS source | source_id={} is_active={}", source_id, body.is_active)
+    updated = crud.toggle_rss_source_active(db, source_id, body.is_active)
+    if not updated:
+        raise HTTPException(status_code=404, detail="RSS Source not found")
+    logger.info("Toggle RSS source completed | source_id={} is_active={}", source_id, updated.is_active)
+    return updated

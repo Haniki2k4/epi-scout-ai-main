@@ -13,6 +13,8 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { ScanResultModal } from "./ScanResultModal";
 import { Article, Keyword, NewsEvent, NewsEventDetail } from "@/types";
 
+const SCAN_STATE_KEY = "epi_scout_scan_state";
+
 const KeywordMonitoring = () => {
   const { toast } = useToast();
   const [isScanning, setIsScanning] = useState(false);
@@ -28,6 +30,26 @@ const KeywordMonitoring = () => {
   const [scanEndDate, setScanEndDate] = useState("");
   const [scanDateWarningConfirmed, setScanDateWarningConfirmed] = useState(false);
   const [selectedKeywordIds, setSelectedKeywordIds] = useState<number[]>([]);
+  const [rssSourceCount, setRssSourceCount] = useState<number>(0);
+
+  // Keyword Edit State
+  const [editingKeyword, setEditingKeyword] = useState<Keyword | null>(null);
+  const [editKeywordText, setEditKeywordText] = useState("");
+  const [editDialogOpen, setEditDialogOpen] = useState(false);
+
+  // Scan result popup
+  const [scanResultPopup, setScanResultPopup] = useState<{
+    open: boolean;
+    savedCount: number;
+    diseaseCounts: Record<string, number>;
+    executionTime: number;
+    unknownCount: number;
+  }>({ open: false, savedCount: 0, diseaseCounts: {}, executionTime: 0, unknownCount: 0 });
+
+  // Timer đang quét (elapsed time)
+  const [scanElapsedTime, setScanElapsedTime] = useState(0);
+  const [scanStartedAt, setScanStartedAt] = useState<number | null>(null);
+  const scanTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [events, setEvents] = useState<NewsEvent[]>([]);
   const [selectedEvent, setSelectedEvent] = useState<NewsEventDetail | null>(null);
   const [eventDialogOpen, setEventDialogOpen] = useState(false);
@@ -42,11 +64,71 @@ const KeywordMonitoring = () => {
   const [eventPage, setEventPage] = useState(1);
   const eventPageSize = 5;
 
+  // Tooltip State
+  const [hoveredArticleId, setHoveredArticleId] = useState<number | null>(null);
+  const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Fetch RSS source count
+  const fetchRssSourceCount = async () => {
+    try {
+      const res = await fetch("/api/rss-sources");
+      if (res.ok) {
+        const data = await res.json();
+        setRssSourceCount(Array.isArray(data) ? data.filter((s: any) => s.is_active !== false).length : 0);
+      }
+    } catch (e) {
+      console.error("Failed to fetch RSS source count", e);
+    }
+  };
+
+  // Khôi phục trạng thái scan khi component mount lại (ví dụ chuyển tab rồi quay lại)
+  useEffect(() => {
+    const saved = sessionStorage.getItem(SCAN_STATE_KEY);
+    if (saved) {
+      try {
+        const state = JSON.parse(saved);
+        if (state.isScanning && state.startedAt) {
+          const now = Date.now();
+          const elapsedSeconds = Math.floor((now - state.startedAt) / 1000);
+          
+          // Nếu đã trôi qua quá 1 tiếng (3600s), coi như scan đã chết hoặc treo, tự xóa
+          if (elapsedSeconds > 3600) {
+            sessionStorage.removeItem(SCAN_STATE_KEY);
+            return;
+          }
+
+          setIsScanning(true);
+          setScanStartedAt(state.startedAt);
+          setScanElapsedTime(elapsedSeconds);
+        }
+      } catch (e) {
+        sessionStorage.removeItem(SCAN_STATE_KEY);
+      }
+    }
+  }, []);
+
+  // Timer chạy dựa trên scanStartedAt
+  useEffect(() => {
+    if (isScanning && scanStartedAt) {
+      scanTimerRef.current = setInterval(() => {
+        const elapsed = Math.floor((Date.now() - scanStartedAt) / 1000);
+        setScanElapsedTime(elapsed);
+      }, 1000);
+    } else {
+      if (scanTimerRef.current) clearInterval(scanTimerRef.current);
+    }
+
+    return () => {
+      if (scanTimerRef.current) clearInterval(scanTimerRef.current);
+    };
+  }, [isScanning, scanStartedAt]);
+
   // Initial Fetch
   useEffect(() => {
     fetchKeywords();
     fetchArticles();
     fetchEvents();
+    fetchRssSourceCount();
   }, []);
 
   const fetchKeywords = async () => {
@@ -238,6 +320,38 @@ const KeywordMonitoring = () => {
       toast({ title: "Lỗi", description: "Không thể xóa hàng loạt từ khóa.", variant: "destructive" });
     }
   };
+
+  const handleEditKeywordOpen = (keyword: Keyword) => {
+    setEditingKeyword(keyword);
+    setEditKeywordText(keyword.text);
+    setEditDialogOpen(true);
+  };
+
+  const handleEditKeywordSave = async () => {
+    if (!editingKeyword || !editingKeyword.id || !editKeywordText.trim()) return;
+
+    try {
+      const res = await fetch(`/api/keywords/${editingKeyword.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: editKeywordText.trim() }),
+      });
+
+      if (res.ok) {
+        const payload = await res.json();
+        setActiveKeywords(current =>
+          current.map(k => (k.id === editingKeyword.id ? { ...k, text: payload.text } : k))
+        );
+        toast({ title: "Thành công", description: "Đã cập nhật từ khóa." });
+        setEditDialogOpen(false);
+      } else {
+        toast({ title: "Lỗi", description: "Cập nhật từ khóa thất bại.", variant: "destructive" });
+      }
+    } catch (e) {
+      toast({ title: "Lỗi", description: "Không thể kết nối đến máy chủ.", variant: "destructive" });
+    }
+  };
+
   const scanAbortController = useRef<AbortController | null>(null);
 
   const handleStartScan = async () => {
@@ -270,11 +384,21 @@ const KeywordMonitoring = () => {
 
     setScanDateWarningConfirmed(false);
     setIsScanning(true);
+    setScanElapsedTime(0);
+    const now = Date.now();
+    setScanStartedAt(now);
+    sessionStorage.setItem(SCAN_STATE_KEY, JSON.stringify({ isScanning: true, startedAt: now }));
+    
     scanAbortController.current = new AbortController();
     toast({
       title: "Đang quét tin tức...",
       description: "Hệ thống đang tìm kiếm tin tức từ nguồn RSS...",
     });
+
+    // Lấy tên các từ thực tế đang được chọn (từ selectedKeywordIds)
+    const selectedKwTexts = activeKeywords
+      .filter(k => k.id !== undefined && selectedKeywordIds.includes(k.id!))
+      .map(k => k.text);
 
     try {
       const res = await fetch("/api/scan", {
@@ -285,44 +409,48 @@ const KeywordMonitoring = () => {
           fetch_unknown: scanAll,
           start_date: scanStartDate ? new Date(scanStartDate).toISOString() : null,
           end_date: scanEndDate ? new Date(scanEndDate).toISOString() : null,
+          // Gửi keyword đang chọn; nếu chọn hết hoặc trống = gửi null (quét hết DB)
+          keywords_to_scan: selectedKwTexts.length > 0 && selectedKwTexts.length < activeKeywords.length
+            ? selectedKwTexts
+            : null,
         }),
       });
 
       if (res.ok) {
         const result = await res.json();
-
-        // Refresh articles list
         fetchArticles();
         fetchEvents();
+        setLastScanDuration(result.execution_time || null);
 
-        if (result.saved_trusted_count >= 0) {
-          setLastScanDuration(result.execution_time || null);
-          if (result.saved_trusted_count > 0) {
-            toast({
-              title: "Quét hoàn tất",
-              description: `Đã tự động lưu ${result.saved_trusted_count} bài viết từ nguồn uy tín.`,
-            });
-          } else if (result.unknown_articles.length === 0) {
-            toast({
-              title: "Quét hoàn tất",
-              description: "Không tìm thấy bài viết mới phù hợp.",
-            });
-          }
-        }
+        // Hiển thị popup thống kê kết quả
+        setScanResultPopup({
+          open: true,
+          savedCount: result.saved_trusted_count ?? 0,
+          diseaseCounts: result.disease_counts ?? {},
+          executionTime: result.execution_time ?? 0,
+          unknownCount: result.unknown_articles?.length ?? 0,
+        });
 
-        if (result.unknown_articles.length > 0) {
+        if (result.unknown_articles && result.unknown_articles.length > 0) {
           setUnknownArticles(result.unknown_articles);
           setShowModal(true);
         }
       }
     } catch (e: any) {
       if (e.name === 'AbortError') {
-        return; // Đã xử lý ở handleStopScan
+        toast({
+          title: "Đã hủy yêu cầu quét",
+          description: "FE đã hủy kết nối. Lưu ý: các bài báo đang xử lý ở BE có thể vẫn được lưu.",
+          variant: "destructive",
+        });
+        return;
       }
       toast({ title: "Lỗi", description: "Quét thất bại.", variant: "destructive" });
     } finally {
       setIsScanning(false);
+      setScanStartedAt(null);
       scanAbortController.current = null;
+      sessionStorage.removeItem(SCAN_STATE_KEY);
     }
   };
 
@@ -330,10 +458,12 @@ const KeywordMonitoring = () => {
     if (scanAbortController.current) {
       scanAbortController.current.abort();
     }
+    if (scanTimerRef.current) clearInterval(scanTimerRef.current);
     setIsScanning(false);
+    sessionStorage.removeItem(SCAN_STATE_KEY);
     toast({
-      title: "Đã dừng quét",
-      description: "Quá trình quét đã bị hủy bởi người dùng.",
+      title: "Đã hủy yêu cầu quét",
+      description: "FE đã ngắt kết nối. Lưu ý: các bài báo đang xử lý ở BE vẫn có thể được lưu.",
       variant: "destructive"
     });
   };
@@ -535,6 +665,60 @@ const KeywordMonitoring = () => {
         onSaveArticles={handleSaveUnknown}
         onAddWhitelist={handleAddWhitelist}
       />
+
+      {/* Popup kết quả scan */}
+      <Dialog open={scanResultPopup.open} onOpenChange={(o) => setScanResultPopup(p => ({ ...p, open: o }))}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              ✅ Quét hoàn tất
+            </DialogTitle>
+            <DialogDescription>
+              Thống kê kết quả lần quét vừa xong
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="grid grid-cols-3 gap-3 text-center">
+              <div className="rounded-lg bg-primary/10 p-3 border border-primary/20">
+                <div className="text-2xl font-bold text-primary">{scanResultPopup.savedCount}</div>
+                <div className="text-xs text-muted-foreground mt-1">Bài đã lưu</div>
+              </div>
+              <div className="rounded-lg bg-secondary p-3 border border-border/50">
+                <div className="text-2xl font-bold">{scanResultPopup.unknownCount}</div>
+                <div className="text-xs text-muted-foreground mt-1">Bài chờ duyệt</div>
+              </div>
+              <div className="rounded-lg bg-muted p-3 border border-border/50">
+                <div className="text-2xl font-bold">{scanResultPopup.executionTime.toFixed(1)}s</div>
+                <div className="text-xs text-muted-foreground mt-1">Thời gian</div>
+              </div>
+            </div>
+
+            {Object.keys(scanResultPopup.diseaseCounts).length > 0 && (
+              <div>
+                <p className="text-sm font-medium mb-2">Phân loại theo bệnh:</p>
+                <div className="flex flex-wrap gap-2">
+                  {Object.entries(scanResultPopup.diseaseCounts)
+                    .sort(([, a], [, b]) => b - a)
+                    .map(([disease, count]) => (
+                      <div key={disease} className="flex items-center gap-1 bg-primary/10 text-primary border border-primary/20 rounded-full px-3 py-1 text-xs font-medium">
+                        <span className="capitalize">{disease}</span>
+                        <span className="bg-primary text-primary-foreground rounded-full px-1.5 text-[10px] font-bold">{count}</span>
+                      </div>
+                    ))}
+                </div>
+              </div>
+            )}
+
+            {scanResultPopup.savedCount === 0 && scanResultPopup.unknownCount === 0 && (
+              <p className="text-center text-sm text-muted-foreground">Không tìm thấy bài viết mới phù hợp.</p>
+            )}
+          </div>
+          <div className="flex justify-end">
+            <Button onClick={() => setScanResultPopup(p => ({ ...p, open: false }))}>Đóng</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={eventDialogOpen} onOpenChange={setEventDialogOpen}>
         <DialogContent className="max-h-[80vh] max-w-3xl overflow-hidden">
           <DialogHeader>
@@ -595,6 +779,26 @@ const KeywordMonitoring = () => {
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="flex gap-2">
+              <Dialog open={editDialogOpen} onOpenChange={setEditDialogOpen}>
+                <DialogContent>
+                  <DialogHeader>
+                    <DialogTitle>Chỉnh sửa từ khóa</DialogTitle>
+                    <DialogDescription>Thay đổi nội dung của từ khóa này.</DialogDescription>
+                  </DialogHeader>
+                  <div className="py-4">
+                    <Input
+                      value={editKeywordText}
+                      onChange={(e) => setEditKeywordText(e.target.value)}
+                      placeholder="Nội dung từ khóa..."
+                    />
+                  </div>
+                  <div className="flex justify-end gap-2">
+                    <Button variant="outline" onClick={() => setEditDialogOpen(false)}>Hủy</Button>
+                    <Button onClick={handleEditKeywordSave}>Lưu thay đổi</Button>
+                  </div>
+                </DialogContent>
+              </Dialog>
+
               <Input
                 placeholder="Nhập 1 từ khóa hoặc nhiều từ khóa, ngăn cách bằng dấu phẩy..."
                 value={newKeyword}
@@ -640,10 +844,29 @@ const KeywordMonitoring = () => {
                 <Badge
                   key={keyword.id}
                   variant={selectedKeywordIds.includes(keyword.id!) ? "default" : "secondary"}
-                  className="px-3 py-1 flex items-center cursor-pointer"
-                  onClick={() => toggleKeywordSelection(keyword.id!)}
+                  className="px-3 py-1 flex items-center gap-2"
                 >
-                  {keyword.text}
+                  <span className="cursor-pointer" onClick={() => toggleKeywordSelection(keyword.id!)}>
+                    {keyword.text}
+                  </span>
+                  <div className="flex gap-1 items-center bg-background/20 rounded px-1 group-hover:opacity-100">
+                    <span
+                      className="cursor-pointer hover:bg-blue-800/20 rounded px-0.5 transition-colors"
+                      onClick={(e) => { e.stopPropagation(); handleEditKeywordOpen(keyword); }}
+                      title="Sửa từ khóa"
+                    >
+                      <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                      </svg>
+                    </span>
+                    <span
+                      className="cursor-pointer hover:text-red-300 transition-colors"
+                      onClick={(e) => { e.stopPropagation(); keyword.id && handleDeleteKeyword(keyword.id); }}
+                      title="Xóa từ khóa"
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </span>
+                  </div>
                 </Badge>
               ))}
               {activeKeywords.length === 0 && (
@@ -740,9 +963,15 @@ const KeywordMonitoring = () => {
                   </>
                 )}
               </Button>
+              {/* Timer đang quét */}
+              {isScanning && (
+                <p className="text-center text-[11px] text-primary font-medium mt-1 animate-pulse">
+                  ⏱ Đang quét... {scanElapsedTime}s
+                </p>
+              )}
               {lastScanDuration !== null && !isScanning && (
                 <p className="text-center text-[11px] text-muted-foreground mt-1">
-                  thời gian quét lần gần nhất: <span className="font-medium text-primary">{lastScanDuration.toFixed(2)}s</span>
+                  Thời gian quét lần gần nhất: <span className="font-medium text-primary">{lastScanDuration.toFixed(1)}s</span>
                 </p>
               )}
             </div>
@@ -753,8 +982,7 @@ const KeywordMonitoring = () => {
                 <div className="text-xs text-muted-foreground">Bài viết đã lưu</div>
               </div>
               <div className="text-center p-3 bg-secondary rounded-lg">
-                {/* Placeholder stats */}
-                <div className="text-2xl font-bold text-foreground">6</div>
+                <div className="text-2xl font-bold text-foreground">{rssSourceCount}</div>
                 <div className="text-xs text-muted-foreground">Nguồn tin RSS</div>
               </div>
             </div>
@@ -863,10 +1091,32 @@ const KeywordMonitoring = () => {
                   <div className="flex-1 space-y-2">
                     <div className="flex items-start gap-3">
                       <div className="flex-1">
-                        <h4 className="font-medium text-foreground flex items-center flex-wrap gap-2">
-                          <a href={article.link} target="_blank" rel="noreferrer" className="hover:underline">
+                        <h4 
+                          className="font-medium text-foreground flex items-center flex-wrap gap-2 relative"
+                          onMouseEnter={() => {
+                            hoverTimerRef.current = setTimeout(() => {
+                              setHoveredArticleId(index);
+                            }, 1000);
+                          }}
+                          onMouseLeave={() => {
+                            if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+                            setHoveredArticleId(null);
+                          }}
+                        >
+                          <a href={article.link} target="_blank" rel="noreferrer" className="hover:underline line-clamp-1 break-all flex-1">
                             {article.title}
                           </a>
+                          
+                          {hoveredArticleId === index && (
+                             <div className="absolute top-full left-0 mt-2 w-96 bg-popover text-popover-foreground border shadow-md rounded-md p-3 z-50 animate-in fade-in zoom-in-95 duration-200">
+                               <p className="text-sm line-clamp-5 whitespace-pre-wrap">{article.summary || "Không có tóm tắt..."}</p>
+                               <div className="mt-2 text-xs text-muted-foreground flex justify-between">
+                                  <span>Nguồn: {article.source}</span>
+                                  <span>{new Date(article.published_date).toLocaleDateString('vi-VN')}</span>
+                               </div>
+                             </div>
+                          )}
+
                           {new Date().getTime() - new Date(article.published_date).getTime() < 14 * 24 * 60 * 60 * 1000 && (
                             <Badge className="bg-blue-100 text-blue-700 hover:bg-blue-200 border-transparent border py-0 px-2 h-5 text-[10px]">
                               Mới
@@ -877,14 +1127,14 @@ const KeywordMonitoring = () => {
                           <span>{article.source}</span>
                           <span>•</span>
                           <span>{new Date(article.published_date).toLocaleString('vi-VN')}</span>
-                          {article.tags && article.tags.startsWith('cases:') && (() => {
-                            const count = parseInt(article.tags.replace('cases:', ''), 10);
-                            return count > 0 ? (
-                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300 border border-red-200 dark:border-red-800">
-                                {count.toLocaleString()} ca
-                              </span>
-                            ) : null;
-                          })()}
+                          {article.cases && article.cases.length > 0 && (
+                             article.cases.filter(c => c.case_count > 0).map((c, i) => (
+                               <span key={i} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300 border border-red-200 dark:border-red-800">
+                                 {c.disease_name}: {c.case_count.toLocaleString()} ca
+                                 {c.location ? ` (${c.location})` : ''}
+                               </span>
+                             ))
+                          )}
                         </p>
                       </div>
                       {article.is_whitelisted && (

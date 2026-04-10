@@ -1,3 +1,9 @@
+export interface DiseaseCase {
+  disease_name: string;
+  case_count: number;
+  location?: string | null;
+}
+
 export interface Article {
   id?: number;
   title: string;
@@ -11,8 +17,8 @@ export interface Article {
   event_id?: number | null;
   event_match_score?: number | null;
   dedupe_reason?: string | null;
+  cases?: DiseaseCase[];
 }
-
 
 export interface RssSource {
   id?: number;
@@ -52,4 +58,22 @@ export interface NewsEvent {
 export interface NewsEventDetail extends Omit<NewsEvent, "article_count"> {
   article_count: number;
   articles: Article[];
+}
+
+export interface ZScoreSpike {
+  date: string;
+  cases: number;
+  rolling_mean: number;
+  rolling_std: number;
+  z_score: number;
+  is_spike: boolean;
+}
+
+export interface ProphetForecast {
+  date: string;
+  actual: number | null;
+  forecast: number;
+  forecast_lower: number;
+  forecast_upper: number;
+  is_future: boolean;
 }
