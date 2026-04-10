@@ -25,17 +25,7 @@ class ArticleDTO(ArticleBase):
     class Config:
         from_attributes = True
 
-class WhitelistBase(BaseModel):
-    domain: str
-    is_active: bool = True
 
-class WhitelistCreate(WhitelistBase):
-    pass
-
-class WhitelistDTO(WhitelistBase):
-    id: int
-    class Config:
-        from_attributes = True
 
 class KeywordBase(BaseModel):
     text: str
@@ -56,6 +46,7 @@ class ScanRequest(BaseModel):
 class ScanResult(BaseModel):
     saved_trusted_count: int
     unknown_articles: List[ArticleBase]
+    execution_time: Optional[float] = None
 
 
 class NewsEventBase(BaseModel):
@@ -86,5 +77,17 @@ class NewsEventDetailDTO(NewsEventBase):
     sources_preview: List[str] = []
     articles: List[ArticleDTO] = []
 
+    class Config:
+        from_attributes = True
+
+
+class RssSourceCreate(BaseModel):
+    url: str
+    label: Optional[str] = None
+    category: Optional[str] = None
+    is_active: bool = True
+
+class RssSourceDTO(RssSourceCreate):
+    id: int
     class Config:
         from_attributes = True

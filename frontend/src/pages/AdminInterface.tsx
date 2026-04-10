@@ -1,0 +1,83 @@
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { useAuth } from "@/contexts/AuthContext";
+import { Link } from "react-router-dom";
+import { Activity, ArrowLeft, Users, Shield, Database } from "lucide-react";
+
+export default function AdminInterface() {
+  const { user } = useAuth();
+
+  return (
+    <div className="min-h-screen bg-background p-6">
+      <div className="max-w-6xl mx-auto space-y-6">
+        {/* Header */}
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            <Link to="/" className="p-2 hover:bg-accent rounded-full transition-colors">
+              <ArrowLeft className="h-5 w-5 text-muted-foreground" />
+            </Link>
+            <div>
+              <h1 className="text-2xl font-bold tracking-tight text-foreground flex items-center gap-2">
+                <Shield className="h-6 w-6 text-primary" />
+                Quản trị Hệ Thống
+              </h1>
+              <p className="text-muted-foreground">Epi Scout AI • Admin Panel</p>
+            </div>
+          </div>
+          
+          <div className="flex items-center gap-3">
+             <div className="text-sm font-medium">Xin chào, {user?.username}</div>
+             <div className="h-10 w-10 bg-primary/10 rounded-full flex items-center justify-center">
+                <i className="fa-regular fa-circle-user text-xl text-primary"></i>
+             </div>
+          </div>
+        </div>
+
+        {/* Dashboard Cards */}
+        <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between pb-2">
+              <CardTitle className="text-sm font-medium">Quản lý Người Dùng</CardTitle>
+              <Users className="h-4 w-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">2</div>
+              <p className="text-xs text-muted-foreground mt-1">Tài khoản đang hoạt động</p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between pb-2">
+              <CardTitle className="text-sm font-medium">Quản lý Dữ Liệu RSS</CardTitle>
+              <Database className="h-4 w-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold">Active</div>
+              <p className="text-xs text-muted-foreground mt-1">Hệ thống nguồn mở</p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between pb-2">
+              <CardTitle className="text-sm font-medium">Máy Chủ Quét</CardTitle>
+              <Activity className="h-4 w-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent>
+              <div className="text-2xl font-bold text-green-500">Đang chạy</div>
+              <p className="text-xs text-muted-foreground mt-1">Uvicorn Backend</p>
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* Content Box */}
+        <Card className="mt-6 min-h-[400px]">
+          <CardHeader>
+            <CardTitle>Chức năng đang xây dựng</CardTitle>
+          </CardHeader>
+          <CardContent className="flex flex-col items-center justify-center h-full text-muted-foreground py-20">
+             <i className="fa-solid fa-person-digging text-6xl mb-4 opacity-50"></i>
+             <p>Khu vực quản lý CRUD chi tiết sẽ được hoàn thiện trong phiên bản tới.</p>
+          </CardContent>
+        </Card>
+
+      </div>
+    </div>
+  );
+}

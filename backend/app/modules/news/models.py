@@ -103,18 +103,24 @@ class DiseaseCase(Base):
     
     article = relationship("ArticleIdentity", back_populates="cases")
 
-class WhitelistDomain(Base):
-    __tablename__ = "whitelist_domains"
 
-    id = Column(Integer, primary_key=True, index=True)
-    domain = Column(String(255), unique=True, index=True)
-    is_active = Column(Boolean, default=True)
 
 class Keyword(Base):
     __tablename__ = "keywords"
 
     id = Column(Integer, primary_key=True, index=True)
     text = Column(Unicode(255), unique=True, index=True) # Support Vietnamese keywords
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class RssSource(Base):
+    __tablename__ = "rss_sources"
+
+    id = Column(Integer, primary_key=True, index=True)
+    url = Column(String(767), unique=True, index=True, nullable=False)
+    label = Column(Unicode(255), nullable=True)    # Tên tờ báo / kênh
+    category = Column(String(100), nullable=True)  # e.g. suc-khoe, the-gioi, global
+    is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 

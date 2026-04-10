@@ -13,3 +13,7 @@ python-multipart
 loguru
 python-dotenv
 alembic
+sentence-transformers
+torch
+python-dateutil
+pytz

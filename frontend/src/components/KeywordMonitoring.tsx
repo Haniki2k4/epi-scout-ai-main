@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -18,6 +18,7 @@ const KeywordMonitoring = () => {
   const [isScanning, setIsScanning] = useState(false);
   const [newKeyword, setNewKeyword] = useState("");
   const [activeKeywords, setActiveKeywords] = useState<Keyword[]>([]);
+  const [lastScanDuration, setLastScanDuration] = useState<number | null>(null);
   const [articles, setArticles] = useState<Article[]>([]);
   const [scanAll, setScanAll] = useState(false);
   const [unknownArticles, setUnknownArticles] = useState<Article[]>([]);
@@ -25,6 +26,7 @@ const KeywordMonitoring = () => {
   const [keywordFilter, setKeywordFilter] = useState("");
   const [scanStartDate, setScanStartDate] = useState("");
   const [scanEndDate, setScanEndDate] = useState("");
+  const [scanDateWarningConfirmed, setScanDateWarningConfirmed] = useState(false);
   const [selectedKeywordIds, setSelectedKeywordIds] = useState<number[]>([]);
   const [events, setEvents] = useState<NewsEvent[]>([]);
   const [selectedEvent, setSelectedEvent] = useState<NewsEventDetail | null>(null);
@@ -53,14 +55,14 @@ const KeywordMonitoring = () => {
       if (res.ok) {
         const data = await res.json();
         setActiveKeywords(data);
-        
+
         // Tự động chọn các keyword mặc định khi vừa chạy web
         const defaultKeywordTexts = ["cúm a", "cúm b", "cúm mùa", "não mô cầu", "bạch hầu", "ho gà", "viêm não nhật bản"];
         const defaultIds = data
           .filter((k: Keyword) => defaultKeywordTexts.includes(k.text.toLowerCase()))
           .map((k: Keyword) => k.id)
           .filter((id): id is number => id !== undefined);
-        
+
         setSelectedKeywordIds(defaultIds);
       }
     } catch (e) {
@@ -236,6 +238,7 @@ const KeywordMonitoring = () => {
       toast({ title: "Lỗi", description: "Không thể xóa hàng loạt từ khóa.", variant: "destructive" });
     }
   };
+  const scanAbortController = useRef<AbortController | null>(null);
 
   const handleStartScan = async () => {
     if (activeKeywords.length === 0) {
@@ -249,7 +252,25 @@ const KeywordMonitoring = () => {
       return;
     }
 
+    // Cảnh báo nếu chưa chọn phạm vi thời gian
+    const missingStart = !scanStartDate;
+    const missingEnd = !scanEndDate;
+    if ((missingStart || missingEnd) && !scanDateWarningConfirmed) {
+      const missingFields = [];
+      if (missingStart) missingFields.push("ngày bắt đầu");
+      if (missingEnd) missingFields.push("ngày kết thúc");
+      toast({
+        title: "⚠️ Chưa chọn phạm vi thời gian",
+        description: `Bạn chưa nhập ${missingFields.join(" và ")}. Hệ thống sẽ tự động lấy tin tức trong 14 ngày gần nhất. Nhấn Bắt đầu quét lần nữa để tiếp tục.`,
+        variant: "destructive",
+      });
+      setScanDateWarningConfirmed(true);
+      return;
+    }
+
+    setScanDateWarningConfirmed(false);
     setIsScanning(true);
+    scanAbortController.current = new AbortController();
     toast({
       title: "Đang quét tin tức...",
       description: "Hệ thống đang tìm kiếm tin tức từ nguồn RSS...",
@@ -259,7 +280,8 @@ const KeywordMonitoring = () => {
       const res = await fetch("/api/scan", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ 
+        signal: scanAbortController.current.signal,
+        body: JSON.stringify({
           fetch_unknown: scanAll,
           start_date: scanStartDate ? new Date(scanStartDate).toISOString() : null,
           end_date: scanEndDate ? new Date(scanEndDate).toISOString() : null,
@@ -273,13 +295,14 @@ const KeywordMonitoring = () => {
         fetchArticles();
         fetchEvents();
 
-        if (result.saved_trusted_count > 0) {
-          toast({
-            title: "Quét hoàn tất",
-            description: `Đã tự động lưu ${result.saved_trusted_count} bài viết từ nguồn uy tín.`,
-          });
-        } else {
-          if (result.unknown_articles.length === 0) {
+        if (result.saved_trusted_count >= 0) {
+          setLastScanDuration(result.execution_time || null);
+          if (result.saved_trusted_count > 0) {
+            toast({
+              title: "Quét hoàn tất",
+              description: `Đã tự động lưu ${result.saved_trusted_count} bài viết từ nguồn uy tín.`,
+            });
+          } else if (result.unknown_articles.length === 0) {
             toast({
               title: "Quét hoàn tất",
               description: "Không tìm thấy bài viết mới phù hợp.",
@@ -292,11 +315,27 @@ const KeywordMonitoring = () => {
           setShowModal(true);
         }
       }
-    } catch (e) {
+    } catch (e: any) {
+      if (e.name === 'AbortError') {
+        return; // Đã xử lý ở handleStopScan
+      }
       toast({ title: "Lỗi", description: "Quét thất bại.", variant: "destructive" });
     } finally {
       setIsScanning(false);
+      scanAbortController.current = null;
     }
+  };
+
+  const handleStopScan = () => {
+    if (scanAbortController.current) {
+      scanAbortController.current.abort();
+    }
+    setIsScanning(false);
+    toast({
+      title: "Đã dừng quét",
+      description: "Quá trình quét đã bị hủy bởi người dùng.",
+      variant: "destructive"
+    });
   };
 
   const handleSaveUnknown = async (articlesToSave: Article[]) => {
@@ -336,10 +375,11 @@ const KeywordMonitoring = () => {
 
   const handleAddWhitelist = async (domain: string) => {
     try {
-      const res = await fetch("/api/whitelist", {
+      // Thêm domain vào rss_sources (thay thế whitelist cũ)
+      const res = await fetch("/api/rss-sources", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ domain: domain, is_active: true }),
+        body: JSON.stringify({ url: `https://${domain}`, label: domain, category: "trusted", is_active: true }),
       });
       if (res.ok) {
         return res.status === 201 ? "created" : "exists";
@@ -585,6 +625,7 @@ const KeywordMonitoring = () => {
                   variant="destructive"
                   onClick={handleDeleteSelectedKeywords}
                   disabled={selectedKeywordIds.length === 0}
+                  className="hover:bg-[#f2645a] hover:text-white transition-colors"
                 >
                   <Trash2 className="mr-2 h-4 w-4" />
                   Xóa đã chọn
@@ -635,17 +676,17 @@ const KeywordMonitoring = () => {
             <div className="flex flex-col gap-2">
               <Label>Phạm vi thời gian quét (Tùy chọn)</Label>
               <div className="flex gap-2">
-                <Input 
-                  type="date" 
-                  value={scanStartDate} 
-                  onChange={(e) => setScanStartDate(e.target.value)}
+                <Input
+                  type="date"
+                  value={scanStartDate}
+                  onChange={(e) => { setScanStartDate(e.target.value); setScanDateWarningConfirmed(false); }}
                   className="w-full"
                 />
                 <div className="flex items-center">-</div>
-                <Input 
-                  type="date" 
-                  value={scanEndDate} 
-                  onChange={(e) => setScanEndDate(e.target.value)}
+                <Input
+                  type="date"
+                  value={scanEndDate}
+                  onChange={(e) => { setScanEndDate(e.target.value); setScanDateWarningConfirmed(false); }}
                   className="w-full"
                 />
               </div>
@@ -664,25 +705,33 @@ const KeywordMonitoring = () => {
                   setScanStartDate(start.toISOString().split('T')[0]);
                   setScanEndDate(end.toISOString().split('T')[0]);
                 }}>15 ngày</Button>
-                <Button type="button" variant="ghost" size="sm" className="h-7 text-xs" onClick={() => {
+                <Button type="button" variant="outline" size="sm" className="h-7 text-xs ml-auto hover:bg-[#f2645a] hover:text-white hover:border-[#f2645a] transition-colors" onClick={() => {
                   setScanStartDate("");
                   setScanEndDate("");
+                  setScanDateWarningConfirmed(false);
                 }}>Xóa</Button>
               </div>
-              <p className="text-xs text-muted-foreground">Để trống nếu muốn tự động lấy tin cũ tối đa 14 ngày.</p>
+              <p className="text-xs text-muted-foreground">
+                Để trống nếu muốn tự động lấy tin cũ tối đa 14 ngày.
+              </p>
+              {/* Reset cảnh báo khi người dùng thay đổi ngày */}
+              {scanDateWarningConfirmed && (
+                <p className="text-xs font-medium text-destructive flex items-center gap-1">
+                  ⚠️ Chưa chọn đầy đủ ngày. Nhấn <strong>Bắt đầu quét</strong> lần nữa để tiếp tục mà không lọc ngày.
+                </p>
+              )}
             </div>
 
-            <div className="flex items-center gap-4">
+            <div className="flex flex-col gap-2">
               <Button
-                onClick={handleStartScan}
-                className="flex-1"
-                disabled={isScanning}
+                onClick={isScanning ? handleStopScan : handleStartScan}
+                className={`flex-1 ${isScanning ? "hover:bg-[#f2645a] hover:text-white transition-colors" : ""}`}
                 variant={isScanning ? "destructive" : "default"}
               >
                 {isScanning ? (
                   <>
                     <Pause className="mr-2 h-4 w-4" />
-                    Đang quét...
+                    Dừng quét
                   </>
                 ) : (
                   <>
@@ -691,6 +740,11 @@ const KeywordMonitoring = () => {
                   </>
                 )}
               </Button>
+              {lastScanDuration !== null && !isScanning && (
+                <p className="text-center text-[11px] text-muted-foreground mt-1">
+                  thời gian quét lần gần nhất: <span className="font-medium text-primary">{lastScanDuration.toFixed(2)}s</span>
+                </p>
+              )}
             </div>
 
             <div className="grid grid-cols-2 gap-4 pt-2">
@@ -819,8 +873,18 @@ const KeywordMonitoring = () => {
                             </Badge>
                           )}
                         </h4>
-                        <p className="text-sm text-muted-foreground mt-1">
-                          {article.source} • {new Date(article.published_date).toLocaleString()}
+                        <p className="text-sm text-muted-foreground mt-1 flex items-center gap-2 flex-wrap">
+                          <span>{article.source}</span>
+                          <span>•</span>
+                          <span>{new Date(article.published_date).toLocaleString('vi-VN')}</span>
+                          {article.tags && article.tags.startsWith('cases:') && (() => {
+                            const count = parseInt(article.tags.replace('cases:', ''), 10);
+                            return count > 0 ? (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300 border border-red-200 dark:border-red-800">
+                                {count.toLocaleString()} ca
+                              </span>
+                            ) : null;
+                          })()}
                         </p>
                       </div>
                       {article.is_whitelisted && (

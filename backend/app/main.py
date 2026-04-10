@@ -5,11 +5,13 @@ from typing import List
 from datetime import datetime
 import re
 from .core import database
-from .core.database import get_db
+from .core.database import get_db, Base, engine
 from .core.logger import get_logger
 from .modules.news import crawler, crud, models, schemas, stats
+from .modules.auth import router as auth_router, security
+from .modules.admin import router_users as admin_users_router
 
-app = FastAPI()
+app = FastAPI(description="Hệ thống quét và tự động phân tích tin tức dịch tễ.")
 logger = get_logger("backend.main")
 
 KEYWORD_MAX_LENGTH = 255
@@ -38,9 +40,16 @@ def parse_keywords_input(text: str) -> list[str]:
 @app.on_event("startup")
 def init_database() -> None:
     with database.SessionLocal() as db:
-        crud.seed_default_keywords(db)
-    logger.info("Backend startup complete, default keywords seeded")
+        try:
+            crud.seed_default_keywords(db)
+            crud.seed_default_rss_sources(db)
+            logger.info("Backend startup complete, default keywords and RSS sources seeded")
+        finally:
+            db.close()
     crawler.log_llm_preflight_status(force_refresh=True)
+
+app.include_router(auth_router.router)
+app.include_router(admin_users_router.router)
 
 # CORS configuration
 origins = [
@@ -61,7 +70,11 @@ app.add_middleware(
 # --- Scan & Articles ---
 
 @app.post("/api/scan", response_model=schemas.ScanResult)
-def scan_news(request: schemas.ScanRequest, db: Session = Depends(get_db)):
+def scan_news(
+    request: schemas.ScanRequest, 
+    db: Session = Depends(get_db),
+    current_user=Depends(security.get_current_active_user)
+):
     logger.info("Scan requested | fetch_unknown={} start_date={} end_date={}", request.fetch_unknown, request.start_date, request.end_date)
     result = crawler.scan_news(db, request.fetch_unknown, request.start_date, request.end_date)
     logger.info(
@@ -83,7 +96,11 @@ def read_articles(
     return articles
 
 @app.post("/api/articles/save", response_model=schemas.ArticleDTO)
-def save_article(article: schemas.ArticleCreate, db: Session = Depends(get_db)):
+def save_article(
+    article: schemas.ArticleCreate, 
+    db: Session = Depends(get_db),
+    current_user=Depends(security.get_current_active_user)
+):
     logger.info("Save article requested | link={} title={}", article.link, article.title)
     existing = crud.get_article_by_link(db, article.link)
     if existing:
@@ -126,7 +143,44 @@ def get_stats_trends(days: int = 7, db: Session = Depends(get_db)):
     logger.info("Stats trends completed | points={}", len(result))
     return result
 
+@app.get("/api/stats/top-diseases")
+def get_top_diseases(months: int = 1, db: Session = Depends(get_db)):
+    months = max(1, min(months, 12))
+    logger.info("Top diseases requested | months={}", months)
+    result = stats.disease_mention_counts(db, months)
+    top10 = result[:10]
+    logger.info("Top diseases completed | count={} months={}", len(top10), months)
+    return top10
+
+@app.get("/api/stats/heatmap")
+def get_heatmap(days: int = 30, month: int = None, year: int = None, db: Session = Depends(get_db)):
+    logger.info("Location heatmap requested | days={} month={} year={}", days, month, year)
+    result = stats.get_location_heatmap_data(db, days=days, month=month, year=year)
+    logger.info("Location heatmap completed | locations={}", len(result))
+    return result
+
+@app.get("/api/stats/bow")
+def get_bow(days: int = 30, db: Session = Depends(get_db)):
+    logger.info("BoW requested | days={}", days)
+    result = stats.get_bow_data(db, days)
+    logger.info("BoW completed | items={}", len(result))
+    return result
+
+@app.get("/api/stats/stacked-trends")
+def get_stacked_trends(days: int = 30, db: Session = Depends(get_db)):
+    logger.info("Stacked trends requested | days={}", days)
+    result = stats.get_stacked_trend_data(db, days)
+    logger.info("Stacked trends completed")
+    return result
+
 # --- Resources ---
+
+@app.get("/api/rss-sources", response_model=List[schemas.RssSourceDTO])
+def read_rss_sources(db: Session = Depends(get_db)):
+    logger.info("Read RSS sources requested")
+    sources = crud.get_all_rss_sources(db)
+    logger.info("Read RSS sources completed | count={}", len(sources))
+    return sources
 
 @app.get("/api/keywords", response_model=List[schemas.KeywordDTO])
 def read_keywords(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
@@ -136,7 +190,11 @@ def read_keywords(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)
     return keywords
 
 @app.post("/api/keywords", response_model=schemas.KeywordDTO | List[schemas.KeywordDTO])
-def create_keyword(keyword: schemas.KeywordCreate, db: Session = Depends(get_db)):
+def create_keyword(
+    keyword: schemas.KeywordCreate, 
+    db: Session = Depends(get_db),
+    current_admin=Depends(security.require_admin_role)
+):
     logger.info("Create keyword requested | raw_text={}", keyword.text)
     keywords = parse_keywords_input(keyword.text)
     if not keywords:
@@ -167,7 +225,11 @@ def create_keyword(keyword: schemas.KeywordCreate, db: Session = Depends(get_db)
     return created_keywords[0] if len(created_keywords) == 1 else created_keywords
 
 @app.delete("/api/keywords/{keyword_id}")
-def delete_keyword(keyword_id: int, db: Session = Depends(get_db)):
+def delete_keyword(
+    keyword_id: int, 
+    db: Session = Depends(get_db),
+    current_admin=Depends(security.require_admin_role)
+):
     logger.info("Delete keyword requested | keyword_id={}", keyword_id)
     success = crud.delete_keyword(db, keyword_id)
     if not success:
@@ -175,13 +237,6 @@ def delete_keyword(keyword_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Keyword not found")
     logger.info("Delete keyword completed | keyword_id={}", keyword_id)
     return {"status": "success", "id": keyword_id}
-
-@app.get("/api/whitelist", response_model=List[schemas.WhitelistDTO])
-def read_whitelist(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    logger.info("Read whitelist requested | skip={} limit={}", skip, limit)
-    domains = crud.get_whitelisted_domains(db, skip=skip, limit=limit)
-    logger.info("Read whitelist completed | count={}", len(domains))
-    return domains
 
 
 @app.get("/api/events", response_model=List[schemas.NewsEventDTO])
@@ -202,14 +257,27 @@ def read_event_detail(event_id: int, db: Session = Depends(get_db)):
     logger.info("Read event detail completed | event_id={} article_count={}", event_id, len(event.articles))
     return event
 
-@app.post("/api/whitelist", response_model=schemas.WhitelistDTO, status_code=201)
-def create_whitelist(domain: schemas.WhitelistCreate, response: Response, db: Session = Depends(get_db)):
-    logger.info("Create whitelist requested | domain={}", domain.domain)
-    existing = crud.get_whitelist_by_name(db, domain.domain)
+
+@app.get("/api/rss-sources", response_model=List[schemas.RssSourceDTO])
+def read_rss_sources(db: Session = Depends(get_db)):
+    logger.info("Read RSS sources requested")
+    sources = crud.get_all_rss_sources(db)
+    logger.info("Read RSS sources completed | count={}", len(sources))
+    return sources
+
+@app.post("/api/rss-sources", response_model=schemas.RssSourceDTO, status_code=201)
+def create_rss_source(
+    source: schemas.RssSourceCreate, 
+    response: Response, 
+    db: Session = Depends(get_db),
+    current_admin=Depends(security.require_admin_role)
+):
+    logger.info("Create RSS source requested | url={}", source.url)
+    existing = crud.get_rss_source_by_url(db, source.url)
     if existing:
-        logger.info("Create whitelist skipped | domain={} reason=already_exists", domain.domain)
+        logger.info("Create RSS source skipped | url={} reason=already_exists", source.url)
         response.status_code = 200
         return existing
-    created_domain = crud.create_whitelist_domain(db, domain)
-    logger.info("Create whitelist completed | id={} domain={}", created_domain.id, created_domain.domain)
-    return created_domain
+    created = crud.create_rss_source(db, source)
+    logger.info("Create RSS source completed | id={} url={}", created.id, created.url)
+    return created
