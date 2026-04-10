@@ -96,6 +96,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
   const logout = () => {
     localStorage.removeItem('token');
+    sessionStorage.removeItem('epi_scout_scan_state');
     setToken(null);
     setUser(null);
     toast.success('Đã đăng xuất thành công');

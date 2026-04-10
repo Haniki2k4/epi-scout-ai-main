@@ -271,3 +271,101 @@ def get_stacked_trend_data(db: Session, days: int = 30):
 
     return {"dates": target_dates, "diseases": top_disease_names, "data": result}
 
+
+
+# ===========================================================================
+# MA Z-Score Spike Detection
+# ===========================================================================
+
+def get_zscore_spikes(db, disease_name=None, window=14, days=60):
+    import math
+    from datetime import timedelta
+    from sqlalchemy import func
+    from . import models
+    start_date = __import__('datetime').datetime.utcnow() - timedelta(days=days - 1)
+    query = db.query(
+        func.date_format(models.DiseaseCase.report_date, '%Y-%m-%d').label('date_str'),
+        func.count(func.distinct(models.DiseaseCase.article_id)).label('count'),
+    ).filter(models.DiseaseCase.report_date >= start_date)
+    if disease_name:
+        query = query.filter(models.DiseaseCase.disease_name == disease_name)
+    raw = query.group_by(
+        func.date_format(models.DiseaseCase.report_date, '%Y-%m-%d')
+    ).order_by(func.date_format(models.DiseaseCase.report_date, '%Y-%m-%d')).all()
+    count_map = {r.date_str: r.count for r in raw}
+    from datetime import datetime, timedelta
+    start_date = datetime.utcnow() - timedelta(days=days - 1)
+    target_dates = [(start_date + timedelta(days=i)).strftime('%Y-%m-%d') for i in range(days)]
+    counts = [count_map.get(d, 0) for d in target_dates]
+    result = []
+    for i, (d, cnt) in enumerate(zip(target_dates, counts)):
+        if i < window:
+            ma = sum(counts[:i]) / max(i, 1) if i > 0 else 0.0
+            std = 0.0
+        else:
+            window_data = counts[i - window:i]
+            ma = sum(window_data) / window
+            variance = sum((x - ma) ** 2 for x in window_data) / window
+            std = math.sqrt(variance)
+        zscore = (cnt - ma) / std if std > 0 else 0.0
+        spike_level = 'danger' if zscore >= 3.0 else ('alert' if zscore >= 2.0 else 'normal')
+        result.append({'date': d, 'count': cnt, 'ma': round(ma, 2), 'zscore': round(zscore, 2), 'spike_level': spike_level})
+    return result
+
+
+# ===========================================================================
+# Prophet Time-Series Forecast
+# ===========================================================================
+
+def get_prophet_forecast(db, disease_name=None, horizon_days=7):
+    from datetime import datetime, timedelta
+    from sqlalchemy import func
+    from . import models
+    days_history = 90
+    start_date = datetime.utcnow() - timedelta(days=days_history - 1)
+    query = db.query(
+        func.date_format(models.DiseaseCase.report_date, "%Y-%m-%d").label("date_str"),
+        func.count(func.distinct(models.DiseaseCase.article_id)).label("count"),
+    ).filter(models.DiseaseCase.report_date >= start_date)
+    if disease_name:
+        query = query.filter(models.DiseaseCase.disease_name == disease_name)
+    raw = query.group_by(
+        func.date_format(models.DiseaseCase.report_date, "%Y-%m-%d")
+    ).order_by(func.date_format(models.DiseaseCase.report_date, "%Y-%m-%d")).all()
+    target_dates = [(start_date + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(days_history)]
+    count_map = {r.date_str: r.count for r in raw}
+    historical = [{"ds": d, "y": count_map.get(d, 0)} for d in target_dates]
+    if len([h for h in historical if h["y"] > 0]) < 5:
+        return {"historical": historical, "forecast": [], "disease": disease_name,
+                "horizon_days": horizon_days, "error": "Chua du du lieu"}
+    try:
+        import pandas as pd
+        from prophet import Prophet
+        import logging
+        logging.getLogger("prophet").setLevel(logging.WARNING)
+        logging.getLogger("cmdstanpy").setLevel(logging.WARNING)
+        df = pd.DataFrame(historical)
+        df["ds"] = pd.to_datetime(df["ds"])
+        m = Prophet(weekly_seasonality=True, yearly_seasonality=False,
+                    daily_seasonality=False, uncertainty_samples=300, interval_width=0.80)
+        m.fit(df)
+        future = m.make_future_dataframe(periods=horizon_days)
+        forecast_df = m.predict(future)
+        last_hist_date = df["ds"].max()
+        future_only = forecast_df[forecast_df["ds"] > last_hist_date]
+        forecast = [
+            {"ds": row["ds"].strftime("%Y-%m-%d"),
+             "yhat": max(0, round(float(row["yhat"]), 2)),
+             "yhat_lower": max(0, round(float(row["yhat_lower"]), 2)),
+             "yhat_upper": max(0, round(float(row["yhat_upper"]), 2))}
+            for _, row in future_only.iterrows()
+        ]
+        return {"historical": historical, "forecast": forecast,
+                "disease": disease_name, "horizon_days": horizon_days}
+    except ImportError:
+        return {"historical": historical, "forecast": [], "disease": disease_name,
+                "horizon_days": horizon_days,
+                "error": "Thu vien prophet chua cai. Chay: pip install prophet"}
+    except Exception as e:
+        return {"historical": historical, "forecast": [], "disease": disease_name,
+                "horizon_days": horizon_days, "error": str(e)}

@@ -22,11 +22,18 @@ class ArticleCreate(ArticleBase):
 
 class ArticleDTO(ArticleBase):
     id: int
+    cases: List["DiseaseCaseDTO"] = []
     class Config:
         from_attributes = True
 
+class DiseaseCaseDTO(BaseModel):
+    disease_name: str
+    case_count: int
+    location: Optional[str] = None
+    class Config:
+        from_attributes = True
 
-
+# Update forward references if needed, but strings work fine in Pydantic v2
 class KeywordBase(BaseModel):
     text: str
 
@@ -42,11 +49,13 @@ class ScanRequest(BaseModel):
     fetch_unknown: bool = False # If true, also returns unknown articles
     start_date: Optional[datetime] = None
     end_date: Optional[datetime] = None
+    keywords_to_scan: Optional[List[str]] = None  # None = dùng hết từ DB, [] = quét hết, ["x","y"] = lọc
 
 class ScanResult(BaseModel):
     saved_trusted_count: int
     unknown_articles: List[ArticleBase]
     execution_time: Optional[float] = None
+    disease_counts: Optional[dict] = None  # {"sốt xuất huyết": 3, "tay chân miệng": 1}
 
 
 class NewsEventBase(BaseModel):
@@ -91,3 +100,6 @@ class RssSourceDTO(RssSourceCreate):
     id: int
     class Config:
         from_attributes = True
+
+class RssSourceToggleRequest(BaseModel):
+    is_active: bool

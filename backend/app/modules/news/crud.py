@@ -1,11 +1,14 @@
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from . import models, schemas
 from datetime import datetime
 
 # --- Articles ---
 
 def get_articles(db: Session, skip: int = 0, limit: int = 100):
-    return db.query(models.ArticleIdentity).order_by(models.ArticleIdentity.published_date.desc()).offset(skip).limit(limit).all()
+    return db.query(models.ArticleIdentity)\
+        .options(joinedload(models.ArticleIdentity.cases))\
+        .order_by(models.ArticleIdentity.published_date.desc())\
+        .offset(skip).limit(limit).all()
 
 def get_article_by_link(db: Session, link: str):
     return db.query(models.ArticleIdentity).filter(models.ArticleIdentity.link == link).first()
@@ -59,6 +62,16 @@ def get_recent_events(
 def get_events(db: Session, skip: int = 0, limit: int = 100):
     return db.query(models.NewsEvent).order_by(models.NewsEvent.event_date.desc()).offset(skip).limit(limit).all()
 
+def delete_article(db: Session, article_id: int) -> bool:
+    article = db.query(models.ArticleIdentity).filter(models.ArticleIdentity.id == article_id).first()
+    if article:
+        # Cascade delete is usually configured in SQLAlchemy for ArticleDetails, 
+        # but just to be safe, we let SQLAlchemy handle or explicitly delete details if needed.
+        # Here we just delete the indentity and let the DB cascasing manage details.
+        db.delete(article)
+        db.commit()
+        return True
+    return False
 
 def get_event_by_id(db: Session, event_id: int):
     return db.query(models.NewsEvent).filter(models.NewsEvent.id == event_id).first()
@@ -170,6 +183,15 @@ def delete_keyword(db: Session, keyword_id: int):
         return True
     return False
 
+def update_keyword(db: Session, keyword_id: int, new_text: str):
+    db_keyword = db.query(models.Keyword).filter(models.Keyword.id == keyword_id).first()
+    if db_keyword:
+        db_keyword.text = new_text
+        db.commit()
+        db.refresh(db_keyword)
+        return db_keyword
+    return None
+
 def get_keyword_by_text(db: Session, text: str):
     return db.query(models.Keyword).filter(models.Keyword.text == text).first()
     
@@ -277,3 +299,21 @@ def create_rss_source(db: Session, source: schemas.RssSourceCreate):
 
 def get_rss_source_by_url(db: Session, url: str):
     return db.query(models.RssSource).filter(models.RssSource.url == url).first()
+
+def delete_rss_source(db: Session, source_id: int) -> bool:
+    source = db.query(models.RssSource).filter(models.RssSource.id == source_id).first()
+    if source:
+        db.delete(source)
+        db.commit()
+        return True
+    return False
+
+def toggle_rss_source_active(db: Session, source_id: int, is_active: bool):
+    """Bật/tắt mềm nguồn RSS (soft toggle) — không xóa khỏi DB."""
+    source = db.query(models.RssSource).filter(models.RssSource.id == source_id).first()
+    if not source:
+        return None
+    source.is_active = is_active
+    db.commit()
+    db.refresh(source)
+    return source

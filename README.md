@@ -6,16 +6,17 @@ Hệ thống giám sát tin tức dịch bệnh từ RSS, gồm:
 - `backend/`: FastAPI + crawler + MySQL
 - `docker-compose.yml`: dịch vụ database local
 
-Project hiện đã vượt mức demo crawl RSS đơn giản. Ngoài luồng quét theo keyword, hệ thống đã có:
+Project hiện đã hoàn thiện đầy đủ các tính năng của một hệ thống giám sát dịch tễ chuyên nghiệp:
 
-- quản lý keyword và whitelist trên UI
-- lọc nhiều tầng: regex context + LLM re-check
-- chống lỗi rate limit/timeout của LLM bằng cooldown
-- lưu bài viết thủ công từ nguồn chưa xác thực
-- phân trang, filter, sort cho danh sách bài viết đã lưu
-- soft dedupe theo `event`
-- similarity score và `dedupe_reason`
-- API/UI xem một event gồm những article nào
+- **Quản trị người dùng & Xác thực**: Hệ thống phân quyền RBAC (Admin/User), JWT Auth.
+- **Quản lý linh hoạt**: Keyword, Whitelist và **RSS Sources** đều được quản lý động qua UI Admin.
+- **Lọc đa tầng nâng cao**: Regex context + Local Embedding Similarity + LLM re-check (GPT-4o/Qwen).
+- **Phân tích & Dự báo**:
+  - Phát hiện đột biến bằng thuật toán **Z-Score**.
+  - Dự báo xu hướng bằng **Meta Prophet**.
+  - Trực quan hóa qua Heatmap, WordCloud và Stacked Trend Charts.
+- **Chống trùng bài (Deduplication)**: Heuristic chấm điểm similarity dựa trên title, location, case count và date.
+- **Kiến trúc Crawler module**: Dễ dàng mở rộng nguồn crawl (RSS, Sitemap, Google News).
 
 ## 1. Bài toán đặt ra
 
@@ -127,59 +128,47 @@ Mỗi article hiện lưu thêm:
 
 để truy vết vì sao bài đó được gom vào event nào.
 
-## 3. Kiến trúc hiện tại
+## 3. Kiến trúc hệ thống
 
-## 3.1. Luồng backend
+### 3.1. Luồng hoạt động chính (Pipeline)
 
-1. Người dùng thêm keyword trên UI
-2. Frontend gọi `POST /api/keywords`
-3. Người dùng bấm quét
-4. Frontend gọi `POST /api/scan`
-5. Backend:
-   - đọc keyword từ DB
-   - quét RSS feeds
-   - lọc bằng regex/context
-   - LLM re-check
-   - tính case count/location/tags
-   - xác định trusted hay unknown
-   - trusted: lưu article + disease case + event
-   - unknown: trả về modal để người dùng quyết định
-6. Frontend reload articles, events, stats
+1. **Thu thập (Collect)**: Đọc danh sách Website/RSS từ Database -> Multi-threaded Crawler.
+2. **Tiền xử lý (Pre-process)**: Strip HTML bẩn, chuẩn hóa Unicode, bóc tách Sapo.
+3. **Lọc (Filter)**: 
+   - Stage 1: Regex/Context scoring để lọc tin rác.
+   - Stage 2: Similarity matching với dữ liệu 48h gần nhất để tránh trùng lặp Article.
+   - Stage 3: LLM Re-check (nếu bật) để bóc tách số ca (`case_count`), địa điểm (`location`) và độ nghiêm trọng.
+4. **Phân tích (Analytics)**:
+   - Gom nhóm Article vào các **NewsEvent**.
+   - Chạy mô hình Prophet để dự báo và Z-Score để cảnh báo bất thường.
+5. **Phân phối (Distribution)**: API cho Frontend React hiển thị Dashboard và Admin Panel.
 
-## 3.2. Luồng frontend
+### 3.2. Chế độ phân quyền (RBAC)
 
-Tab `Quét từ khóa` hiện có:
-
-- quản lý keyword
-- điều khiển scan
-- danh sách bài viết đã lưu
-- card `Sự kiện đã gom`
-- dialog xem article theo từng event
+- **Admin**: Quản lý toàn bộ hệ thống (User, RSS Sources, Keywords, Whitelist).
+- **User (Operator)**: Chạy Scan, duyệt bài viết chưa xác thực, xem báo cáo phân tích.
 
 ## 4. Cấu trúc thư mục
 
 ```text
 .
 ├── backend
+│   ├── alembic/            # Database migrations
 │   ├── app
-│   │   ├── core
-│   │   │   └── database.py
+│   │   ├── core/           # Security, Code base, Logger
 │   │   ├── modules
-│   │   │   └── news
-│   │   │       ├── crawler.py
-│   │   │       ├── crud.py
-│   │   │       ├── models.py
-│   │   │       ├── schemas.py
-│   │   │       └── stats.py
-│   │   └── main.py
+│   │   │   ├── admin/      # Quản lý User, RSS Sources
+│   │   │   ├── auth/       # JWT, Security logic
+│   │   │   └── news/       # Crawler, Stats, Models, CRUD
+│   │   └── main.py         # FastAPI routes & entry point
 │   ├── requirements.txt
-│   └── scripts
+│   └── scripts/            # Debug tools
 ├── frontend
 │   ├── src
-│   ├── package.json
-│   └── vite.config.ts
-├── docs
-│   └── feature-crawl-data-expansion.md
+│   │   ├── components/     # UI Components (shadcn/ui)
+│   │   ├── contexts/       # AuthContext, ThemeContext
+│   │   ├── pages/          # Dashboard, Analytics, Admin
+│   │   └── services/       # API calling (Axios hooks)
 ├── docker-compose.yml
 └── .env
 ```
@@ -187,76 +176,44 @@ Tab `Quét từ khóa` hiện có:
 ## 5. Các thành phần quan trọng
 
 ### 5.1. `backend/app/modules/news/crawler.py`
+Core logic của hệ thống:
+- Sử dụng `SentenceTransformer` (MiniLM-L12-v2) để tính tương đồng văn bản.
+- Tự động bóc tách Sapo từ các báo VN (VnExpress, Tuổi Trẻ, Thanh Niên...).
+- Quản lý cooldown khi gọi LLM bị rate limit hoặc timeout.
 
-Chứa logic chính:
+### 5.2. `backend/app/modules/news/stats.py`
+Nơi thực hiện các phân tích nâng cao:
+- **Z-Score Spike Detection**: Tìm các ngày có số bài viết tăng đột biến so với trung bình 14 ngày trước đó.
+- **Prophet Forecast**: Sử dụng thư viện Prophet của Meta để dự báo số ca mắc trong 7-30 ngày tới.
+- **Heatmap Logic**: Tính toán mật độ dịch bệnh theo địa phương và thời gian.
 
-- RSS feed list
-- text normalization
-- keyword/context scoring
-- LLM re-check
-- cooldown khi provider lỗi
-- event similarity scoring
-- resolve article -> event
-- scan RSS và lưu dữ liệu
+### 5.3. `backend/app/modules/auth/security.py`
+Xử lý bảo mật:
+- Băm mật khẩu bằng `passlib` (bcrypt).
+- Tạo và xác thực JWT token.
+- Middleware kiểm tra quyền hạn (Admin/User).
 
-### 5.2. `backend/app/modules/news/models.py`
+## 6. API chính của hệ thống
 
-Các model hiện có:
+### Xác thực & Người dùng
+- `POST /api/auth/login`: Đăng nhập nhận token.
+- `GET /api/admin/users`: (Admin) Danh sách tài khoản.
 
-- `ArticleIdentity`
-- `ArticleDetails`
-- `DiseaseCase`
-- `WhitelistDomain`
-- `Keyword`
-- `NewsEvent`
+### Giám sát & Bài viết
+- `POST /api/scan`: Chạy tiến trình crawl tin tức.
+- `GET /api/articles`: Danh sách bài viết toàn hệ thống (phân trang).
+- `GET /api/events`: Danh sách các sự kiện dịch tễ đã được gom nhóm.
 
-Lưu ý:
+### Phân tích (Analytics)
+- `GET /api/stats/overview`: Chỉ số tổng hợp (Top bệnh, số ca, lượt cảnh báo).
+- `GET /api/stats/zscore`: Dữ liệu phát hiện đột biến.
+- `GET /api/stats/forecast`: Dữ liệu dự báo AI.
+- `GET /api/stats/heatmap`: Mật độ địa bàn.
 
-- project chưa dùng migration framework chuẩn
-- hiện dùng `ensure_news_schema()` để vá schema cũ lúc startup cho các cột/bảng mới
-
-### 5.3. `frontend/src/components/KeywordMonitoring.tsx`
-
-Đây là màn hình backend operator chính, gồm:
-
-- CRUD keyword
-- bật/tắt scan mở rộng
-- xem danh sách article đã lưu
-- filter/sort/pagination
-- xem grouped events
-- xem score/reason dedupe của từng article
-
-## 6. API hiện có
-
-### Keywords
-
-- `GET /api/keywords`
-- `POST /api/keywords`
-- `DELETE /api/keywords/{keyword_id}`
-
-### Articles
-
-- `GET /api/articles`
-- `POST /api/articles/save`
-
-### Scan
-
-- `POST /api/scan`
-
-### Whitelist
-
-- `GET /api/whitelist`
-- `POST /api/whitelist`
-
-### Events
-
-- `GET /api/events`
-- `GET /api/events/{event_id}`
-
-### Stats
-
-- `GET /api/stats/overview`
-- `GET /api/stats/trends?days=7`
+### Quản trị (Admin)
+- `GET /api/rss-sources`: Quản lý danh sách nguồn tin.
+- `POST /api/keywords`: Quản lý bộ từ khóa giám sát.
+- `POST /api/whitelist`: Quản lý domain tin cậy.
 
 ## 7. Model dữ liệu nghiệp vụ
 
@@ -337,24 +294,23 @@ Hiện project đang chạy theo hướng dev/demo nhanh:
 
 Đây không phải cách nên dùng lâu dài ở production, nhưng phù hợp để tiếp tục phát triển nhanh trong giai đoạn hiện tại.
 
-## 9. Tính năng UI đã làm
+## 9. Tính năng UI nổi bật
 
-Trong tab `Quét từ khóa`, hiện đã có:
+### 9.1. Tab Giám sát bài viết
+- Chạy Scan đa tầng với tùy chọn **Quét nguồn chưa xác thực**.
+- Quản lý bộ từ khóa động (Batch create/delete).
+- Dashboard bài viết: lọc theo bệnh, nguồn, thời gian, trạng thái (Manual/Auto).
+- Xem chi tiết **Sự kiện (Event)**: Biết được một sự kiện dịch bệnh được đưa tin bởi những báo nào, số lượng ca mắc cộng dồn thế nào.
 
-- thêm nhiều keyword một lần
-- lọc keyword
-- chọn nhiều keyword và xóa hàng loạt
-- scan bài viết
-- scan mở rộng với unknown source
-- modal duyệt unknown source
-- thêm whitelist trực tiếp từ modal
-- danh sách bài viết đã lưu
-- search/filter/sort article
-- filter theo trusted/manual
-- phân trang article
-- card `Sự kiện đã gom`
-- dialog xem chi tiết event
-- hiển thị `event_match_score` và `dedupe_reason`
+### 9.2. Tab Phân tích nâng cao
+- **Phát hiện đột biến**: Biểu đồ Z-Score trực quan, tự động đánh dấu các ngày có số bài tăng vọt (Danger/Alert).
+- **Dự báo xu hướng**: Sử dụng AI dự báo ngưỡng lây lan trong tương lai.
+- **Bản đồ địa bàn**: Heatmap hiển thị ổ dịch theo tỉnh thành.
+
+### 9.3. Tab Quản trị hệ thống
+- Quản trị người dùng: Tạo tài khoản, đổi mật khẩu, phân quyền.
+- Quản trị nguồn tin: Bật/tắt các RSS feeds, thêm nguồn mới vào hệ thống mà không cần sửa code.
+- Quản trị Whitelist: Định nghĩa các domain tin cậy để tự động lưu bài.
 
 ## 10. Cách chạy local
 
@@ -464,30 +420,18 @@ Nguyên nhân:
 
 ## 12. Hạn chế hiện tại
 
-- chưa có Alembic hoặc migration chuẩn
-- schema patch hiện chỉ đủ cho dev flow
-- event matching vẫn là heuristic, chưa dùng embedding
-- chưa crawl full article content ổn định
-- chưa có auth/permission
-- chưa có test tự động đủ mạnh
-- chưa có backfill dữ liệu cũ sang event/score/reason
-- chưa có dashboard thống kê theo event
+- Schema migration đang trong quá trình chuẩn hóa toàn bộ qua Alembic (vẫn còn một số bảng cũ chưa migrate hết).
+- Dự báo AI yêu cầu lượng dữ liệu lịch sử tối thiểu 90 ngày để đạt độ chính xác cao.
+- Crawler chưa hỗ trợ JavaScript Rendering (không crawl được bài viết ở các trang SPA).
+- Hệ thống thông báo (Notification) chưa được triển khai qua Email/Zalo.
 
 ## 13. Hướng phát triển tiếp theo
 
-Ưu tiên hợp lý:
-
-1. backfill dữ liệu cũ vào `NewsEvent`
-2. chuyển source RSS hardcode sang DB
-3. thêm `news_sources` + adapter architecture
-4. thêm event-based stats
-5. thêm Alembic
-6. thêm integration test cho:
-   - scan flow
-   - whitelist flow
-   - save unknown article
-   - event matching
-7. thêm giao diện theo dõi source health
+1. **Crawler Support**: Thêm adapter cho Google News API và Sitemap.
+2. **Notification Module**: Gửi cảnh báo ngay khi Z-Score phát hiện đột biến nguy hiểm.
+3. **Multi-language Support**: Hỗ trợ giám sát các báo quốc tế (tiếng Anh).
+4. **Export Report**: Xuất báo cáo dịch tễ định kỳ (PDF/Excel) tự động.
+5. **Mobile View**: Tối ưu hóa UI Dashboard cho thiết bị di động.
 
 ## 14. Tài liệu liên quan
 

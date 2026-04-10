@@ -14,6 +14,11 @@ class UserUpdate(BaseModel):
     role: Optional[str] = None
     is_active: Optional[bool] = None
 
+class UserStatusUpdate(BaseModel):
+    is_active: bool
+    admin_password: str
+    reason: str
+
 class UserInDBBase(UserBase):
     id: int
     role: str
