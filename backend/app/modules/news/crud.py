@@ -10,6 +10,9 @@ def get_articles(db: Session, skip: int = 0, limit: int = 100):
         .order_by(models.ArticleIdentity.published_date.desc())\
         .offset(skip).limit(limit).all()
 
+def count_articles(db: Session):
+    return db.query(models.ArticleIdentity).count()
+
 def get_article_by_link(db: Session, link: str):
     return db.query(models.ArticleIdentity).filter(models.ArticleIdentity.link == link).first()
 
@@ -214,7 +217,6 @@ def seed_default_keywords(db: Session):
 
 _DEFAULT_RSS_SOURCES = [
     {"url": "http://cand.com.vn/rss/suc-khoe-c-5", "label": "Công An Nhân Dân", "category": "suc-khoe"},
-    {"url": "http://www.who.int/feeds/entity/csr/disease/avian_influenza/en/rss.xml", "label": "WHO Avian Flu", "category": "global"},
     {"url": "https://congan.com.vn/rss/tin-chinh", "label": "Công An TP.HCM", "category": "thoi-su"},
     {"url": "https://dantri.com.vn/rss/suc-khoe.rss", "label": "Dân Trí - Sức Khỏe", "category": "suc-khoe"},
     {"url": "https://dantri.com.vn/rss/the-gioi.rss", "label": "Dân Trí - Thế Giới", "category": "the-gioi"},
@@ -229,7 +231,6 @@ _DEFAULT_RSS_SOURCES = [
     {"url": "https://phaply.net.vn/rss/tin-moi.rss", "label": "Pháp Lý", "category": "thoi-su"},
     {"url": "https://plo.vn/rss/home.rss", "label": "Pháp Luật TP.HCM", "category": "thoi-su"},
     {"url": "https://plo.vn/rss/suc-khoe-17.rss", "label": "PLO - Sức Khỏe", "category": "suc-khoe"},
-    {"url": "https://rss.nytimes.com/services/xml/rss/nyt/Health.xml", "label": "NYTimes Health", "category": "global"},
     {"url": "https://suckhoedoisong.vn/rss", "label": "Sức Khỏe Đời Sống", "category": "suc-khoe"},
     {"url": "https://suckhoedoisong.vn/rss/suc-khoe.rss", "label": "SKĐS - Sức Khỏe", "category": "suc-khoe"},
     {"url": "https://suckhoedoisong.vn/suc-khoe-tv.rss", "label": "SKĐS TV", "category": "suc-khoe"},
@@ -254,15 +255,20 @@ _DEFAULT_RSS_SOURCES = [
     {"url": "https://vov.gov.vn/Rss/RssCategoryExport?chuyendeId=27", "label": "VOV Gov - Y Tế", "category": "suc-khoe"},
     {"url": "https://vov.vn/rss/suc-khoe.rss", "label": "VOV - Sức Khỏe", "category": "suc-khoe"},
     {"url": "https://vov.vn/rss/the-gioi.rss", "label": "VOV - Thế Giới", "category": "the-gioi"},
+    {"url": "https://www.sggp.org.vn/rss/ytesuckhoe-212.rss", "label": "SGGP - Y Tế Sức Khỏe", "category": "suc-khoe"},
+    {"url": "https://rss.nytimes.com/services/xml/rss/nyt/HomePage.xml", "label": "NYTimes HomePage", "category": "global"},
+    {"url": "https://rss.nytimes.com/services/xml/rss/nyt/World.xml", "label": "NYTimes World", "category": "global"},
+    {"url": "https://rss.nytimes.com/services/xml/rss/nyt/Health.xml", "label": "NYTimes Health", "category": "global"},
+    {"url": "https://moxie.foxnews.com/google-publisher/health.xml", "label": "FoxNews Health", "category": "global"},
+    {"url": "https://moxie.foxnews.com/google-publisher/latest.xml", "label": "FoxNews Latest", "category": "global"},
+    {"url": "https://moxie.foxnews.com/google-publisher/science.xml", "label": "FoxNews Science", "category": "global"},
+    {"url": "https://www.cidrap.umn.edu/news/49/rss", "label": "CIDRAP News 49", "category": "global"},
+    {"url": "https://www.cidrap.umn.edu/news/232663/rss", "label": "CIDRAP News 232663", "category": "global"},
+    {"url": "https://www.cidrap.umn.edu/news/all/rss", "label": "CIDRAP All News", "category": "global"},
+    {"url": "https://moxie.foxnews.com/google-publisher/videos.xml", "label": "FoxNews Videos", "category": "global"},
+    {"url": "https://www.who.int/rss-feeds/news-english.xml", "label": "WHO News", "category": "global"},
     {"url": "https://www.afro.who.int/rss/emergencies.xml", "label": "WHO AFRO Emergencies", "category": "global"},
     {"url": "https://www.afro.who.int/rss/featured-news.xml", "label": "WHO AFRO News", "category": "global"},
-    {"url": "https://www.ecdc.europa.eu/en/taxonomy/term/1307/feed", "label": "ECDC Threats", "category": "global"},
-    {"url": "https://www.ecdc.europa.eu/en/taxonomy/term/1505/feed", "label": "ECDC Influenza", "category": "global"},
-    {"url": "https://www.ecdc.europa.eu/en/taxonomy/term/2942/feed", "label": "ECDC COVID-19", "category": "global"},
-    {"url": "https://www.google.com/alerts/feeds/00283484586046880188/13659782394507164085", "label": "Google Alert - Dịch Bệnh VN", "category": "google-alert"},
-    {"url": "https://www.google.com/alerts/feeds/00283484586046880188/2768685979145450209", "label": "Google Alert - Outbreak", "category": "google-alert"},
-    {"url": "https://www.sggp.org.vn/rss/ytesuckhoe-212.rss", "label": "SGGP - Y Tế Sức Khỏe", "category": "suc-khoe"},
-    {"url": "https://www.who.int/rss-feeds/news-english.xml", "label": "WHO News", "category": "global"},
 ]
 
 def get_active_rss_sources(db: Session):

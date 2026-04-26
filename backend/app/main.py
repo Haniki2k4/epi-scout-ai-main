@@ -92,7 +92,7 @@ def scan_news(
     )
     return result
 
-@app.get("/api/articles", response_model=List[schemas.ArticleDTO])
+@app.get("/api/articles", response_model=schemas.PaginatedArticles)
 def read_articles(
     skip: int = 0, 
     limit: int = 100, 
@@ -100,8 +100,14 @@ def read_articles(
 ):
     logger.info("Read articles requested | skip={} limit={}", skip, limit)
     articles = crud.get_articles(db, skip=skip, limit=limit)
-    logger.info("Read articles completed | count={}", len(articles))
-    return articles
+    total = crud.count_articles(db)
+    logger.info("Read articles completed | count={} total={}", len(articles), total)
+    return {
+        "items": articles,
+        "total": total,
+        "skip": skip,
+        "limit": limit
+    }
 
 @app.post("/api/articles/save", response_model=schemas.ArticleDTO)
 def save_article(
@@ -149,6 +155,68 @@ def delete_article_api(
     logger.info("Delete article completed | article_id={}", article_id)
     return {"status": "success", "id": article_id}
 
+# --- Bookmarks ---
+
+@app.post("/api/bookmarks/{article_id}")
+def add_bookmark(
+    article_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(security.get_current_active_user)
+):
+    from .modules.auth.models import UserBookmark
+    article = db.query(models.ArticleIdentity).filter(models.ArticleIdentity.id == article_id).first()
+    if not article:
+        raise HTTPException(status_code=404, detail="Article not found")
+        
+    existing = db.query(UserBookmark).filter(
+        UserBookmark.user_id == current_user.id,
+        UserBookmark.article_id == article_id
+    ).first()
+    if existing:
+        return {"status": "success", "message": "Already bookmarked"}
+        
+    bookmark = UserBookmark(user_id=current_user.id, article_id=article_id)
+    db.add(bookmark)
+    db.commit()
+    return {"status": "success", "message": "Bookmarked"}
+
+@app.delete("/api/bookmarks/{article_id}")
+def remove_bookmark(
+    article_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(security.get_current_active_user)
+):
+    from .modules.auth.models import UserBookmark
+    bookmark = db.query(UserBookmark).filter(
+        UserBookmark.user_id == current_user.id,
+        UserBookmark.article_id == article_id
+    ).first()
+    if not bookmark:
+        raise HTTPException(status_code=404, detail="Bookmark not found")
+        
+    db.delete(bookmark)
+    db.commit()
+    return {"status": "success"}
+
+@app.get("/api/bookmarks", response_model=List[schemas.ArticleDTO])
+def get_bookmarks(
+    skip: int = 0, limit: int = 100,
+    db: Session = Depends(get_db),
+    current_user=Depends(security.get_current_active_user)
+):
+    from sqlalchemy.orm import joinedload
+    from .modules.auth.models import UserBookmark
+    bookmarks = db.query(UserBookmark).filter(UserBookmark.user_id == current_user.id).order_by(UserBookmark.created_at.desc()).offset(skip).limit(limit).all()
+    article_ids = [b.article_id for b in bookmarks]
+    if not article_ids:
+        return []
+        
+    # Lấy articles theo ID và giữ nguyên thứ tự
+    articles = db.query(models.ArticleIdentity).options(joinedload(models.ArticleIdentity.cases)).filter(models.ArticleIdentity.id.in_(article_ids)).all()
+    article_map = {a.id: a for a in articles}
+    return [article_map[aid] for aid in article_ids if aid in article_map]
+
+
 # --- Stats ---
 
 @app.get("/api/stats/overview")
@@ -166,12 +234,16 @@ def get_stats_trends(days: int = 7, db: Session = Depends(get_db)):
     return result
 
 @app.get("/api/stats/top-diseases")
-def get_top_diseases(months: int = 1, db: Session = Depends(get_db)):
-    months = max(1, min(months, 12))
-    logger.info("Top diseases requested | months={}", months)
-    result = stats.disease_mention_counts(db, months)
+def get_top_diseases(months: int = 1, days: int = None, db: Session = Depends(get_db)):
+    if days is not None:
+        logger.info("Top diseases requested | days={}", days)
+        result = stats.disease_mention_counts(db, days=days)
+    else:
+        months = max(1, min(months, 12))
+        logger.info("Top diseases requested | months={}", months)
+        result = stats.disease_mention_counts(db, months=months)
     top10 = result[:10]
-    logger.info("Top diseases completed | count={} months={}", len(top10), months)
+    logger.info("Top diseases completed | count={}", len(top10))
     return top10
 
 @app.get("/api/stats/heatmap")
@@ -181,11 +253,11 @@ def get_heatmap(days: int = 30, month: int = None, year: int = None, db: Session
     logger.info("Location heatmap completed | locations={}", len(result))
     return result
 
-@app.get("/api/stats/bow")
-def get_bow(days: int = 30, db: Session = Depends(get_db)):
-    logger.info("BoW requested | days={}", days)
-    result = stats.get_bow_data(db, days)
-    logger.info("BoW completed | items={}", len(result))
+@app.get("/api/stats/interest-trends")
+def get_interest_trends_api(days: int = 30, db: Session = Depends(get_db)):
+    logger.info("Interest trends requested | days={}", days)
+    result = stats.get_interest_trends(db, days)
+    logger.info("Interest trends completed")
     return result
 
 @app.get("/api/stats/stacked-trends")
@@ -200,6 +272,20 @@ def get_zscore(disease: str = None, window: int = 14, days: int = 60, db: Sessio
     logger.info("Z-score spikes requested | disease={} window={} days={}", disease, window, days)
     result = stats.get_zscore_spikes(db, disease_name=disease, window=window, days=days)
     logger.info("Z-score spikes completed | items={}", len(result))
+    return result
+
+@app.get("/api/stats/keyword-timeseries")
+def get_keyword_timeseries(days: int = 30, db: Session = Depends(get_db)):
+    logger.info("Keyword timeseries requested | days={}", days)
+    result = stats.get_keyword_timeseries(db, days)
+    logger.info("Keyword timeseries completed")
+    return result
+
+@app.get("/api/stats/keyword-zscore")
+def get_keyword_zscore(window: int = 14, days: int = 60, db: Session = Depends(get_db)):
+    logger.info("Keyword Z-score spikes requested | window={} days={}", window, days)
+    result = stats.get_keyword_zscore_spikes(db, window=window, days=days)
+    logger.info("Keyword Z-score spikes completed | items={}", len(result))
     return result
 
 @app.get("/api/stats/forecast")

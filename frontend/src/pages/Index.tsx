@@ -1,10 +1,10 @@
 import { useState } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Activity, FileText, Search, BarChart3, Database, AlertTriangle } from "lucide-react";
+import { Activity, FileText, Search, BarChart3, Bookmark } from "lucide-react";
 import DashboardOverview from "@/components/DashboardOverview";
 import KeywordMonitoring from "@/components/KeywordMonitoring";
-import DataExtraction from "@/components/DataExtraction";
 import DataAnalysis from "@/components/DataAnalysis";
+import BookmarksPage from "@/components/BookmarksPage";
 import { useAuth } from "@/contexts/AuthContext";
 import { Link, useNavigate } from "react-router-dom";
 import {
@@ -61,8 +61,8 @@ const Index = () => {
                     <DropdownMenuSeparator />
                     {user?.role === "admin" && (
                       <>
-                        <DropdownMenuItem 
-                          onClick={() => navigate("/admin")} 
+                        <DropdownMenuItem
+                          onClick={() => navigate("/admin")}
                           className="cursor-pointer focus:bg-primary focus:text-primary-foreground"
                         >
                           Đi tới Trang Quản Trị
@@ -70,11 +70,14 @@ const Index = () => {
                         <DropdownMenuSeparator />
                       </>
                     )}
-                    <DropdownMenuItem className="cursor-pointer focus:bg-primary focus:text-primary-foreground">
-                      Cài đặt thông tin
+                    <DropdownMenuItem
+                      onClick={() => setActiveTab("bookmarks")}
+                      className="cursor-pointer focus:bg-primary focus:text-primary-foreground"
+                    >
+                      <Bookmark className="mr-2 h-4 w-4" /> Bookmark đã lưu
                     </DropdownMenuItem>
-                    <DropdownMenuItem 
-                      onClick={() => logout()} 
+                    <DropdownMenuItem
+                      onClick={() => logout()}
                       className="text-destructive focus:bg-destructive focus:text-destructive-foreground cursor-pointer"
                     >
                       Đăng xuất
@@ -90,7 +93,7 @@ const Index = () => {
       {/* Main Content */}
       <main className="container mx-auto px-4 py-6">
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
-          <TabsList className="grid w-full grid-cols-4 lg:w-auto lg:inline-grid">
+          <TabsList className="grid w-full grid-cols-3 lg:w-auto lg:inline-grid">
             <TabsTrigger value="overview" className="gap-2">
               <BarChart3 className="h-4 w-4" />
               <span className="hidden sm:inline">Tổng quan</span>
@@ -98,10 +101,6 @@ const Index = () => {
             <TabsTrigger value="keyword" className="gap-2">
               <Search className="h-4 w-4" />
               <span className="hidden sm:inline">Quét từ khóa</span>
-            </TabsTrigger>
-            <TabsTrigger value="extraction" className="gap-2">
-              <Database className="h-4 w-4" />
-              <span className="hidden sm:inline">Trích xuất TT54</span>
             </TabsTrigger>
             <TabsTrigger value="analysis" className="gap-2">
               <FileText className="h-4 w-4" />
@@ -117,12 +116,13 @@ const Index = () => {
             <KeywordMonitoring />
           </TabsContent>
 
-          <TabsContent value="extraction" className="space-y-6">
-            <DataExtraction />
-          </TabsContent>
-
           <TabsContent value="analysis" className="space-y-6">
             <DataAnalysis />
+          </TabsContent>
+
+          {/* Tab bookmarks ẩn khỏi TabsList, chỉ navigate từ dropdown */}
+          <TabsContent value="bookmarks" className="space-y-6">
+            <BookmarksPage />
           </TabsContent>
         </Tabs>
       </main>

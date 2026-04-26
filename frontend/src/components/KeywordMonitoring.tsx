@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Search, Plus, X, Play, Pause, Download, Settings, Trash2, CheckSquare, Square, ChevronLeft, ChevronRight } from "lucide-react";
+import { Search, Plus, X, Play, Pause, Download, Settings, Trash2, CheckSquare, Square, ChevronLeft, ChevronRight, Bookmark, BookmarkCheck } from "lucide-react";
 import { useToast } from "@/components/ui/use-toast";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
@@ -20,7 +20,7 @@ const KeywordMonitoring = () => {
   const [isScanning, setIsScanning] = useState(false);
   const [newKeyword, setNewKeyword] = useState("");
   const [activeKeywords, setActiveKeywords] = useState<Keyword[]>([]);
-  const [lastScanDuration, setLastScanDuration] = useState<number | null>(null);
+  const [lastScanStats, setLastScanStats] = useState<{ savedCount: number, duration: number, date: string } | null>(null);
   const [articles, setArticles] = useState<Article[]>([]);
   const [scanAll, setScanAll] = useState(false);
   const [unknownArticles, setUnknownArticles] = useState<Article[]>([]);
@@ -64,6 +64,9 @@ const KeywordMonitoring = () => {
   const [eventPage, setEventPage] = useState(1);
   const eventPageSize = 5;
 
+  // Bookmarks
+  const [bookmarkedArticleIds, setBookmarkedArticleIds] = useState<Set<number>>(new Set());
+
   // Tooltip State
   const [hoveredArticleId, setHoveredArticleId] = useState<number | null>(null);
   const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -83,28 +86,42 @@ const KeywordMonitoring = () => {
 
   // Khôi phục trạng thái scan khi component mount lại (ví dụ chuyển tab rồi quay lại)
   useEffect(() => {
-    const saved = sessionStorage.getItem(SCAN_STATE_KEY);
-    if (saved) {
-      try {
-        const state = JSON.parse(saved);
-        if (state.isScanning && state.startedAt) {
-          const now = Date.now();
-          const elapsedSeconds = Math.floor((now - state.startedAt) / 1000);
-          
-          // Nếu đã trôi qua quá 1 tiếng (3600s), coi như scan đã chết hoặc treo, tự xóa
-          if (elapsedSeconds > 3600) {
-            sessionStorage.removeItem(SCAN_STATE_KEY);
-            return;
-          }
+    const syncState = () => {
+      const saved = sessionStorage.getItem(SCAN_STATE_KEY);
+      if (saved) {
+        try {
+          const state = JSON.parse(saved);
+          if (state.isScanning && state.startedAt) {
+            const now = Date.now();
+            const elapsedSeconds = Math.floor((now - state.startedAt) / 1000);
 
-          setIsScanning(true);
-          setScanStartedAt(state.startedAt);
-          setScanElapsedTime(elapsedSeconds);
+            if (elapsedSeconds > 3600) {
+              sessionStorage.removeItem(SCAN_STATE_KEY);
+              setIsScanning(false);
+              return;
+            }
+
+            setIsScanning(true);
+            setScanStartedAt(state.startedAt);
+            setScanElapsedTime(elapsedSeconds);
+            if (state.scanStartDate) setScanStartDate(state.scanStartDate);
+            if (state.scanEndDate) setScanEndDate(state.scanEndDate);
+          }
+          if (state.lastScanStats) {
+            setLastScanStats(state.lastScanStats);
+          }
+        } catch (e) {
+          sessionStorage.removeItem(SCAN_STATE_KEY);
+          setIsScanning(false);
         }
-      } catch (e) {
-        sessionStorage.removeItem(SCAN_STATE_KEY);
+      } else {
+        setIsScanning(false);
       }
-    }
+    };
+
+    syncState();
+    window.addEventListener("epi_scan_state_changed", syncState);
+    return () => window.removeEventListener("epi_scan_state_changed", syncState);
   }, []);
 
   // Timer chạy dựa trên scanStartedAt
@@ -152,12 +169,24 @@ const KeywordMonitoring = () => {
     }
   };
 
-  const fetchArticles = async () => {
+  const [totalArticlesServer, setTotalArticlesServer] = useState(0);
+
+  const fetchArticles = async (skip = 0, limit = 100, append = false) => {
     try {
-      const res = await fetch("/api/articles");
+      const res = await fetch(`/api/articles?skip=${skip}&limit=${limit}`);
       if (res.ok) {
         const data = await res.json();
-        setArticles(data);
+        if (append) {
+          setArticles(prev => {
+            // Remove duplicates by ID just in case
+            const existingIds = new Set(prev.map(a => a.id));
+            const newItems = data.items.filter((a: Article) => !existingIds.has(a.id));
+            return [...prev, ...newItems];
+          });
+        } else {
+          setArticles(data.items);
+        }
+        setTotalArticlesServer(data.total);
       }
     } catch (e) {
       console.error("Failed to fetch articles", e);
@@ -382,13 +411,27 @@ const KeywordMonitoring = () => {
       return;
     }
 
+    if (scanStartDate && scanEndDate && new Date(scanStartDate) > new Date(scanEndDate)) {
+      toast({
+        title: "Lỗi phạm vi thời gian",
+        description: "Ngày kết thúc không được nhỏ hơn ngày bắt đầu.",
+        variant: "destructive",
+      });
+      return;
+    }
+
     setScanDateWarningConfirmed(false);
     setIsScanning(true);
     setScanElapsedTime(0);
     const now = Date.now();
     setScanStartedAt(now);
-    sessionStorage.setItem(SCAN_STATE_KEY, JSON.stringify({ isScanning: true, startedAt: now }));
-    
+    sessionStorage.setItem(SCAN_STATE_KEY, JSON.stringify({
+      isScanning: true,
+      startedAt: now,
+      scanStartDate: scanStartDate,
+      scanEndDate: scanEndDate
+    }));
+
     scanAbortController.current = new AbortController();
     toast({
       title: "Đang quét tin tức...",
@@ -420,7 +463,22 @@ const KeywordMonitoring = () => {
         const result = await res.json();
         fetchArticles();
         fetchEvents();
-        setLastScanDuration(result.execution_time || null);
+
+        const newStats = {
+          savedCount: result.saved_trusted_count ?? 0,
+          duration: result.execution_time ?? 0,
+          date: new Date().toLocaleString("vi-VN")
+        };
+        setLastScanStats(newStats);
+
+        // Cập nhật session storage cho lastScanStats
+        const savedState = sessionStorage.getItem(SCAN_STATE_KEY);
+        if (savedState) {
+          try {
+            const state = JSON.parse(savedState);
+            sessionStorage.setItem(SCAN_STATE_KEY, JSON.stringify({ ...state, lastScanStats: newStats }));
+          } catch (e) { }
+        }
 
         // Hiển thị popup thống kê kết quả
         setScanResultPopup({
@@ -451,6 +509,7 @@ const KeywordMonitoring = () => {
       setScanStartedAt(null);
       scanAbortController.current = null;
       sessionStorage.removeItem(SCAN_STATE_KEY);
+      window.dispatchEvent(new Event("epi_scan_state_changed"));
     }
   };
 
@@ -461,6 +520,7 @@ const KeywordMonitoring = () => {
     if (scanTimerRef.current) clearInterval(scanTimerRef.current);
     setIsScanning(false);
     sessionStorage.removeItem(SCAN_STATE_KEY);
+    window.dispatchEvent(new Event("epi_scan_state_changed"));
     toast({
       title: "Đã hủy yêu cầu quét",
       description: "FE đã ngắt kết nối. Lưu ý: các bài báo đang xử lý ở BE vẫn có thể được lưu.",
@@ -518,6 +578,32 @@ const KeywordMonitoring = () => {
     } catch (e) {
       console.error(e);
       return "error";
+    }
+  };
+
+  const handleToggleBookmark = async (articleId: number) => {
+    if (!articleId) return;
+
+    const isBookmarked = bookmarkedArticleIds.has(articleId);
+    try {
+      const method = isBookmarked ? "DELETE" : "POST";
+      const res = await fetch(`/api/bookmarks/${articleId}`, { method });
+
+      if (res.ok) {
+        setBookmarkedArticleIds(prev => {
+          const next = new Set(prev);
+          if (isBookmarked) {
+            next.delete(articleId);
+            toast({ title: "Đã hủy lưu", description: "Đã xóa bài viết khỏi danh sách xem sau." });
+          } else {
+            next.add(articleId);
+            toast({ title: "Đã lưu", description: "Đã thêm bài viết vào danh sách xem sau." });
+          }
+          return next;
+        });
+      }
+    } catch (e) {
+      toast({ title: "Lỗi", description: "Không thể thay đổi trạng thái bookmark.", variant: "destructive" });
     }
   };
 
@@ -630,7 +716,7 @@ const KeywordMonitoring = () => {
 
   const totalArticlePages = Math.max(1, Math.ceil(filteredArticles.length / articlePageSize));
   const paginatedArticles = filteredArticles.slice(
-    (articlePage - 1) * articlePageSize,
+    0,
     articlePage * articlePageSize
   );
 
@@ -655,6 +741,30 @@ const KeywordMonitoring = () => {
       setEventPage(totalEventPages);
     }
   }, [eventPage, totalEventPages]);
+
+  const loadMoreRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const observer = new IntersectionObserver((entries) => {
+      if (entries[0].isIntersecting) {
+        if (articlePage < totalArticlePages) {
+          setArticlePage((prev) => prev + 1);
+        } else if (articles.length < totalArticlesServer) {
+          fetchArticles(articles.length, 100, true);
+        }
+      }
+    }, { threshold: 0.1 });
+
+    const currentRef = loadMoreRef.current;
+    if (currentRef) {
+      observer.observe(currentRef);
+    }
+    return () => {
+      if (currentRef) {
+        observer.unobserve(currentRef);
+      }
+    };
+  }, [articlePage, totalArticlePages, articles.length, totalArticlesServer]);
 
   return (
     <div className="space-y-6">
@@ -969,17 +1079,19 @@ const KeywordMonitoring = () => {
                   ⏱ Đang quét... {scanElapsedTime}s
                 </p>
               )}
-              {lastScanDuration !== null && !isScanning && (
+              {lastScanStats !== null && !isScanning && (
                 <p className="text-center text-[11px] text-muted-foreground mt-1">
-                  Thời gian quét lần gần nhất: <span className="font-medium text-primary">{lastScanDuration.toFixed(1)}s</span>
+                  Quét gần nhất: <span className="font-medium text-primary">{lastScanStats.date}</span> ({lastScanStats.duration.toFixed(1)}s)
                 </p>
               )}
             </div>
 
             <div className="grid grid-cols-2 gap-4 pt-2">
               <div className="text-center p-3 bg-secondary rounded-lg">
-                <div className="text-2xl font-bold text-foreground">{articles.length}</div>
-                <div className="text-xs text-muted-foreground">Bài viết đã lưu</div>
+                <div className="text-2xl font-bold text-foreground">
+                  {lastScanStats ? lastScanStats.savedCount : 0}
+                </div>
+                <div className="text-xs text-muted-foreground">Đã lưu gần nhất</div>
               </div>
               <div className="text-center p-3 bg-secondary rounded-lg">
                 <div className="text-2xl font-bold text-foreground">{rssSourceCount}</div>
@@ -1070,119 +1182,117 @@ const KeywordMonitoring = () => {
                   Thủ công
                 </Button>
               </div>
-              <div className="text-sm text-muted-foreground">
-                Hiển thị {filteredArticles.length}/{articles.length} bài viết • Trang {articlePage}/{totalArticlePages}
+              <div className="text-sm text-muted-foreground flex items-center gap-2">
+                <span>
+                  Hiển thị {filteredArticles.length}/{articles.length} bài viết đã tải
+                </span>
               </div>
             </div>
-          </div>
-          <div className="space-y-4">
-            {articles.length === 0 ? (
-              <div className="text-center text-muted-foreground py-4">Chưa có bài viết nào. Hãy thêm từ khóa và quét ngay!</div>
-            ) : filteredArticles.length === 0 ? (
-              <div className="text-center text-muted-foreground py-4">
-                Không có bài viết nào khớp với bộ lọc hiện tại.
-              </div>
-            ) : (
-              paginatedArticles.map((article, index) => (
-                <div
-                  key={index}
-                  className="flex items-start justify-between p-4 border border-border rounded-lg hover:bg-secondary/50 transition-colors"
-                >
-                  <div className="flex-1 space-y-2">
-                    <div className="flex items-start gap-3">
-                      <div className="flex-1">
-                        <h4 
-                          className="font-medium text-foreground flex items-center flex-wrap gap-2 relative"
-                          onMouseEnter={() => {
-                            hoverTimerRef.current = setTimeout(() => {
-                              setHoveredArticleId(index);
-                            }, 1000);
-                          }}
-                          onMouseLeave={() => {
-                            if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
-                            setHoveredArticleId(null);
-                          }}
-                        >
-                          <a href={article.link} target="_blank" rel="noreferrer" className="hover:underline line-clamp-1 break-all flex-1">
-                            {article.title}
-                          </a>
-                          
-                          {hoveredArticleId === index && (
-                             <div className="absolute top-full left-0 mt-2 w-96 bg-popover text-popover-foreground border shadow-md rounded-md p-3 z-50 animate-in fade-in zoom-in-95 duration-200">
-                               <p className="text-sm line-clamp-5 whitespace-pre-wrap">{article.summary || "Không có tóm tắt..."}</p>
-                               <div className="mt-2 text-xs text-muted-foreground flex justify-between">
+            <div className="space-y-4">
+              {articles.length === 0 ? (
+                <div className="text-center text-muted-foreground py-4">Chưa có bài viết nào. Hãy thêm từ khóa và quét ngay!</div>
+              ) : filteredArticles.length === 0 ? (
+                <div className="text-center text-muted-foreground py-4">
+                  Không có bài viết nào khớp với bộ lọc hiện tại.
+                </div>
+              ) : (
+                paginatedArticles.map((article, index) => (
+                  <div
+                    key={index}
+                    className="flex items-start justify-between p-4 border border-border rounded-lg hover:bg-secondary/50 transition-colors"
+                  >
+                    <div className="flex-1 space-y-2">
+                      <div className="flex items-start gap-3">
+                        <div className="flex-1">
+                          <h4
+                            className="font-medium text-foreground flex items-center flex-wrap gap-2 relative"
+                            onMouseEnter={() => {
+                              hoverTimerRef.current = setTimeout(() => {
+                                setHoveredArticleId(index);
+                              }, 1000);
+                            }}
+                            onMouseLeave={() => {
+                              if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+                              setHoveredArticleId(null);
+                            }}
+                          >
+                            <a href={article.link} target="_blank" rel="noreferrer" className="hover:underline line-clamp-1 break-all flex-1">
+                              {article.title}
+                            </a>
+
+                            {hoveredArticleId === index && (
+                              <div className="absolute top-full left-0 mt-2 w-96 bg-popover text-popover-foreground border shadow-md rounded-md p-3 z-50 animate-in fade-in zoom-in-95 duration-200">
+                                <p className="text-sm line-clamp-5 whitespace-pre-wrap">{article.summary || "Không có tóm tắt..."}</p>
+                                <div className="mt-2 text-xs text-muted-foreground flex justify-between">
                                   <span>Nguồn: {article.source}</span>
                                   <span>{new Date(article.published_date).toLocaleDateString('vi-VN')}</span>
-                               </div>
-                             </div>
-                          )}
+                                </div>
+                              </div>
+                            )}
 
-                          {new Date().getTime() - new Date(article.published_date).getTime() < 14 * 24 * 60 * 60 * 1000 && (
-                            <Badge className="bg-blue-100 text-blue-700 hover:bg-blue-200 border-transparent border py-0 px-2 h-5 text-[10px]">
-                              Mới
-                            </Badge>
-                          )}
-                        </h4>
-                        <p className="text-sm text-muted-foreground mt-1 flex items-center gap-2 flex-wrap">
-                          <span>{article.source}</span>
-                          <span>•</span>
-                          <span>{new Date(article.published_date).toLocaleString('vi-VN')}</span>
-                          {article.cases && article.cases.length > 0 && (
-                             article.cases.filter(c => c.case_count > 0).map((c, i) => (
-                               <span key={i} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300 border border-red-200 dark:border-red-800">
-                                 {c.disease_name}: {c.case_count.toLocaleString()} ca
-                                 {c.location ? ` (${c.location})` : ''}
-                               </span>
-                             ))
-                          )}
-                        </p>
+                            {new Date().getTime() - new Date(article.published_date).getTime() < 14 * 24 * 60 * 60 * 1000 && (
+                              <Badge className="bg-blue-100 text-blue-700 hover:bg-blue-200 border-transparent border py-0 px-2 h-5 text-[10px]">
+                                Mới
+                              </Badge>
+                            )}
+                          </h4>
+                          <p className="text-sm text-muted-foreground mt-1 flex items-center gap-2 flex-wrap">
+                            <span>{article.source}</span>
+                            <span>•</span>
+                            <span>{new Date(article.published_date).toLocaleString('vi-VN')}</span>
+                            {article.cases && article.cases.length > 0 && (
+                              article.cases.filter(c => c.case_count > 0).map((c, i) => (
+                                <span key={i} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300 border border-red-200 dark:border-red-800">
+                                  {c.disease_name}: {c.case_count.toLocaleString()} ca
+                                  {c.location && c.location.toLowerCase() !== "unknown" ? ` (${c.location})` : ''}
+                                </span>
+                              ))
+                            )}
+                          </p>
+                        </div>
+                        {article.is_whitelisted && (
+                          <Badge variant="secondary" className="bg-green-100 text-green-800 hover:bg-green-100">Uy tín</Badge>
+                        )}
+                        {!article.is_whitelisted && (
+                          <Badge variant="outline">Thủ công</Badge>
+                        )}
                       </div>
-                      {article.is_whitelisted && (
-                        <Badge variant="secondary" className="bg-green-100 text-green-800 hover:bg-green-100">Uy tín</Badge>
-                      )}
-                      {!article.is_whitelisted && (
-                        <Badge variant="outline">Thủ công</Badge>
-                      )}
+                      <div className="flex flex-wrap gap-1">
+                        {article.keywords_matched?.split(",").map((keyword, i) => (
+                          <Badge key={i} variant="outline" className="text-xs">
+                            {keyword.trim()}
+                          </Badge>
+                        ))}
+                      </div>
                     </div>
-                    <div className="flex flex-wrap gap-1">
-                      {article.keywords_matched?.split(",").map((keyword, i) => (
-                        <Badge key={i} variant="outline" className="text-xs">
-                          {keyword.trim()}
-                        </Badge>
-                      ))}
+                    <div className="pl-4 flex flex-col items-center justify-start gap-2">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => article.id && handleToggleBookmark(article.id)}
+                        className={bookmarkedArticleIds.has(article.id!) ? "text-primary" : "text-muted-foreground"}
+                      >
+                        {bookmarkedArticleIds.has(article.id!) ? (
+                          <BookmarkCheck className="h-5 w-5" />
+                        ) : (
+                          <Bookmark className="h-5 w-5" />
+                        )}
+                      </Button>
                     </div>
                   </div>
-                </div>
-              ))
+                ))
+              )}
+            </div>
+            {filteredArticles.length > 0 && (
+              <div ref={loadMoreRef} className="mt-4 py-4 text-center">
+                {articlePage < totalArticlePages || articles.length < totalArticlesServer ? (
+                  <div className="text-sm text-muted-foreground animate-pulse">Đang tải thêm...</div>
+                ) : (
+                  <div className="text-sm text-muted-foreground">Đã hiển thị tất cả bài viết.</div>
+                )}
+              </div>
             )}
           </div>
-          {filteredArticles.length > 0 && (
-            <div className="mt-4 flex items-center justify-end gap-2">
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => setArticlePage((current) => Math.max(1, current - 1))}
-                disabled={articlePage === 1}
-              >
-                <ChevronLeft className="mr-1 h-4 w-4" />
-                Trước
-              </Button>
-              <div className="text-sm text-muted-foreground">
-                Trang {articlePage} / {totalArticlePages}
-              </div>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => setArticlePage((current) => Math.min(totalArticlePages, current + 1))}
-                disabled={articlePage === totalArticlePages}
-              >
-                Sau
-                <ChevronRight className="ml-1 h-4 w-4" />
-              </Button>
-            </div>
-          )}
         </CardContent>
       </Card>
 

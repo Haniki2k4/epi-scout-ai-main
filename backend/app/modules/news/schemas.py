@@ -26,6 +26,12 @@ class ArticleDTO(ArticleBase):
     class Config:
         from_attributes = True
 
+class PaginatedArticles(BaseModel):
+    items: List[ArticleDTO]
+    total: int
+    skip: int
+    limit: int
+
 class DiseaseCaseDTO(BaseModel):
     disease_name: str
     case_count: int

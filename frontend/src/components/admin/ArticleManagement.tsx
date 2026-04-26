@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { FileText, Trash2, ArrowUpRight, RefreshCcw, ExternalLink, ChevronLeft, ChevronRight } from "lucide-react";
+import { FileText, Trash2, RefreshCcw, ExternalLink, ChevronLeft, ChevronRight } from "lucide-react";
 import { format } from "date-fns";
 import { vi } from "date-fns/locale";
 
@@ -32,13 +32,20 @@ interface ArticleModel {
   };
 }
 
+interface PaginatedArticles {
+  items: ArticleModel[];
+  total: number;
+  skip: number;
+  limit: number;
+}
+
 export default function ArticleManagement() {
   const queryClient = useQueryClient();
   const [page, setPage] = useState(1);
   const LIMIT = 8;
 
   // Fetch Articles
-  const { data: articles = [], isLoading } = useQuery<ArticleModel[]>({
+  const { data, isLoading } = useQuery<PaginatedArticles>({
     queryKey: ["admin_articles", page],
     queryFn: async () => {
       const res = await fetch(`/api/articles?skip=${(page - 1) * LIMIT}&limit=${LIMIT}`);
@@ -46,6 +53,10 @@ export default function ArticleManagement() {
       return res.json();
     },
   });
+
+  const articles = data?.items || [];
+  const total = data?.total || 0;
+  const totalPages = Math.ceil(total / LIMIT);
 
   // Delete Mutation
   const deleteArticleMutation = useMutation({
@@ -72,7 +83,7 @@ export default function ArticleManagement() {
       <CardHeader className="flex flex-row items-center justify-between">
         <div>
           <CardTitle>Danh sách Bài báo đã lưu</CardTitle>
-          <CardDescription>Quản lý toàn bộ dữ liệu tin tức được thu thập bởi hệ thống</CardDescription>
+          <CardDescription>Quản lý toàn bộ dữ liệu tin tức được thu thập bởi hệ thống ({total} bài báo)</CardDescription>
         </div>
       </CardHeader>
       <CardContent>
@@ -133,9 +144,9 @@ export default function ArticleManagement() {
                             <ExternalLink className="h-4 w-4" />
                           </a>
                         </Button>
-                        <Button 
-                          variant="ghost" 
-                          size="icon" 
+                        <Button
+                          variant="ghost"
+                          size="icon"
                           onClick={() => handleDelete(article.id)}
                           className="hover:bg-destructive/10 hover:text-destructive text-destructive"
                           disabled={deleteArticleMutation.isPending}
@@ -157,9 +168,9 @@ export default function ArticleManagement() {
             </Table>
           )}
         </div>
-        
+
         {/* Pagination Panel */}
-        {!isLoading && (
+        {!isLoading && totalPages > 1 && (
           <div className="mt-4 flex items-center justify-end gap-2">
             <Button
               type="button"
@@ -172,14 +183,14 @@ export default function ArticleManagement() {
               Trước
             </Button>
             <div className="text-sm text-muted-foreground">
-              Trang {page}
+              Trang {page} / {totalPages}
             </div>
             <Button
               type="button"
               variant="outline"
               size="sm"
-              onClick={() => setPage((current) => current + 1)}
-              disabled={articles.length < LIMIT}
+              onClick={() => setPage((current) => Math.min(totalPages, current + 1))}
+              disabled={page >= totalPages}
             >
               Sau
               <ChevronRight className="ml-1 h-4 w-4" />

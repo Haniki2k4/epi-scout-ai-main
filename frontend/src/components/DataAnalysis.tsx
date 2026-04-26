@@ -33,6 +33,10 @@ const DataAnalysis = () => {
   const [prophetForecast, setProphetForecast] = useState<ProphetForecast[]>([]);
   const [forecastDisease, setForecastDisease] = useState<string>("Sởi");
 
+  // State cho Mức độ đa dạng bệnh
+  const [keywordTimeseries, setKeywordTimeseries] = useState<{ date: string, keyword_count: number }[]>([]);
+  const [keywordZScoreSpikes, setKeywordZScoreSpikes] = useState<ZScoreSpike[]>([]);
+
   useEffect(() => {
     const fetchForecastData = async () => {
       try {
@@ -112,7 +116,35 @@ const DataAnalysis = () => {
       }
     };
 
+    const fetchDiversityData = async () => {
+      try {
+        const [timeseriesRes, zscoreRes] = await Promise.all([
+          fetch("/api/stats/keyword-timeseries?days=30"),
+          fetch("/api/stats/keyword-zscore?window=14&days=60")
+        ]);
+
+        if (timeseriesRes.ok) {
+          setKeywordTimeseries(await timeseriesRes.json());
+        }
+
+        if (zscoreRes.ok) {
+          const zData = await zscoreRes.json();
+          setKeywordZScoreSpikes(zData.map((d: any) => ({
+            date: d.date,
+            cases: d.count,
+            rolling_mean: d.ma,
+            rolling_std: 0,
+            z_score: d.zscore,
+            is_spike: d.spike_level === 'danger' || d.spike_level === 'alert'
+          })));
+        }
+      } catch (e) {
+        console.error("Failed to fetch diversity data", e);
+      }
+    };
+
     fetchAnalysisData();
+    fetchDiversityData();
   }, []);
 
   const reportWindowLabel = useMemo(() => {
@@ -156,9 +188,10 @@ const DataAnalysis = () => {
   return (
     <div className="space-y-6">
       <Tabs defaultValue="forecast" className="space-y-6">
-        <TabsList className="grid w-full grid-cols-3">
+        <TabsList className="grid w-full grid-cols-4">
           <TabsTrigger value="zscore">Phát hiện Đột biến</TabsTrigger>
           <TabsTrigger value="forecast">Dự báo sự kiện</TabsTrigger>
+          <TabsTrigger value="diversity">Tần suất Từ khóa</TabsTrigger>
           <TabsTrigger value="report">Báo cáo tự động</TabsTrigger>
         </TabsList>
 
@@ -167,7 +200,7 @@ const DataAnalysis = () => {
             <CardHeader className="flex flex-row items-center justify-between pb-2">
               <div className="space-y-1">
                 <CardTitle>Phát hiện Cảnh báo Đột biến (Z-Score Spikes)</CardTitle>
-                <CardDescription>Mô hình phát hiện tín hiệu bất thường dựa trên độ lệch chuẩn của số ca mắc theo ngày</CardDescription>
+                <CardDescription>Phát hiện sự bất thường dựa trên độ lệch chuẩn của <strong>số lượng bài báo</strong> nhắc đến bệnh theo ngày (Time-series Anomaly Detection)</CardDescription>
               </div>
               <Select value={forecastDisease} onValueChange={setForecastDisease}>
                 <SelectTrigger className="w-[180px]">
@@ -192,7 +225,7 @@ const DataAnalysis = () => {
                       itemStyle={{ color: "hsl(var(--foreground))" }}
                     />
                     <Legend />
-                    <Bar dataKey="cases" name="Số ca thực tế" fill="hsl(var(--chart-1))" radius={[4, 4, 0, 0]} maxBarSize={40} />
+                    <Bar dataKey="cases" name="Số bài báo nhắc đến" fill="hsl(var(--chart-1))" radius={[4, 4, 0, 0]} maxBarSize={40} />
                     <Line type="monotone" dataKey="rolling_mean" name="Trung bình trượt (14 ngày)" stroke="hsl(var(--chart-2))" strokeWidth={2} dot={false} />
                     {zscoreSpikes.filter(d => d.is_spike).map((entry, index) => (
                       <Line
@@ -269,8 +302,8 @@ const DataAnalysis = () => {
           <Card>
             <CardHeader className="flex flex-row items-center justify-between pb-2">
               <div className="space-y-1">
-                <CardTitle>Dự báo Xu hướng Truyền thông (Prophet AI)</CardTitle>
-                <CardDescription>Mô hình học máy Facebook Prophet dự báo xu hướng tương lai kèm khoảng tin cậy 80%</CardDescription>
+                <CardTitle>Xu hướng Sự quan tâm</CardTitle>
+                <CardDescription>Mô hình dự báo số lượng bài báo được viết về bệnh trong tương lai (Prophet AI - khoảng tin cậy 80%)</CardDescription>
               </div>
               <Select value={forecastDisease} onValueChange={setForecastDisease}>
                 <SelectTrigger className="w-[180px]">
@@ -404,6 +437,75 @@ const DataAnalysis = () => {
                   </p>
                 </div>
               )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="diversity" className="space-y-6">
+          <Card>
+            <CardHeader>
+              <CardTitle>Mức độ đa dạng từ khóa</CardTitle>
+              <CardDescription>Đánh giá sự lây lan và bùng phát của nhiều loại bệnh cùng lúc. Số lượng loại bệnh càng cao, mức độ đa dạng càng lớn.</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="h-[400px] mt-4">
+                <ResponsiveContainer width="100%" height="100%">
+                  <ComposedChart data={keywordZScoreSpikes.length > 0 ? keywordZScoreSpikes : keywordTimeseries.map(item => ({ date: item.date, cases: item.keyword_count, rolling_mean: item.keyword_count, z_score: 0, is_spike: false }))} margin={{ top: 20, right: 30, left: 0, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
+                    <XAxis dataKey="date" stroke="hsl(var(--muted-foreground))" tick={{ fontSize: 12 }} />
+                    <YAxis stroke="hsl(var(--muted-foreground))" tick={{ fontSize: 12 }} />
+                    <Tooltip
+                      contentStyle={{ backgroundColor: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: "8px" }}
+                      itemStyle={{ color: "hsl(var(--foreground))" }}
+                    />
+                    <Legend />
+                    <Bar dataKey="cases" name="Số loại bệnh" fill="hsl(var(--chart-3))" radius={[4, 4, 0, 0]} maxBarSize={40} />
+                    <Line type="monotone" dataKey="rolling_mean" name="Trung bình trượt (14 ngày)" stroke="hsl(var(--chart-4))" strokeWidth={2} dot={false} />
+                    {keywordZScoreSpikes.length > 0 && keywordZScoreSpikes.filter(d => d.is_spike).map((entry, index) => (
+                      <Line
+                        key={`spike-div-${index}`}
+                        dataKey="cases"
+                        data={[entry]}
+                        name="Cảnh báo đột biến"
+                        stroke="transparent"
+                        dot={{ r: 6, fill: "hsl(var(--destructive))", strokeWidth: 2, stroke: "hsl(var(--background))" }}
+                        activeDot={false}
+                        legendType="circle"
+                      />
+                    ))}
+                  </ComposedChart>
+                </ResponsiveContainer>
+              </div>
+
+              <div className="mt-6 grid gap-6 md:grid-cols-2">
+                <Card className="border shadow-none">
+                  <CardHeader className="py-4">
+                    <CardTitle className="text-destructive flex items-center gap-2 text-base">
+                      <AlertTriangle className="h-4 w-4" />
+                      Điểm Đa Dạng Bất Thường
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-3 pb-4">
+                    {keywordZScoreSpikes.filter(s => s.is_spike).slice(-3).reverse().map((spike, i) => (
+                      <div key={i} className="flex justify-between items-center p-3 rounded-lg bg-destructive/10 border border-destructive/20">
+                        <div>
+                          <div className="font-medium text-destructive">{spike.date}</div>
+                          <div className="text-xs text-muted-foreground">Z-Score: <span className="font-semibold">{spike.z_score.toFixed(2)}</span></div>
+                        </div>
+                        <div className="text-right">
+                          <div className="font-bold text-foreground">{spike.cases} loại bệnh</div>
+                          <div className="text-[10px] text-muted-foreground">+{(spike.cases - spike.rolling_mean).toFixed(1)} so với TB</div>
+                        </div>
+                      </div>
+                    ))}
+                    {keywordZScoreSpikes.filter(s => s.is_spike).length === 0 && (
+                      <div className="p-4 text-center text-sm text-muted-foreground bg-muted/50 rounded-lg">
+                        Không phát hiện sự đa dạng bất thường.
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              </div>
             </CardContent>
           </Card>
         </TabsContent>

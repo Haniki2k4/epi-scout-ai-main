@@ -146,7 +146,7 @@ HARD_EXCLUDE_TITLE_TERMS = [
     "lao xuống", "lao lên", "lao về", "lao bảo", "lao thẳng", "lao vào",
     "có chữa khỏi không", "đề cử", "hiệu quả", "giúp trị khỏi", 
     "tin tức sáng", "tin tức 24h", "tin tức hôm nay", "tin tức chiều",
-    "hồi sinh",
+    "hồi sinh", "hội thảo", "hội nghị"
 ]
 
 # Context terms that raise the epidemiological signal score
@@ -192,9 +192,9 @@ LLM_RECHECK_TIMEOUT_COOLDOWN_SECONDS = int(
 # ---------------------------------------------------------------------------
 
 LLM_SYSTEM_PROMPT = (
-    "Bạn là classifier dịch tễ học. "
-    "Nhiệm vụ duy nhất: phân tích bài báo và trả JSON hợp lệ. "
-    "Không giải thích thêm ngoài JSON."
+    "Bạn là chuyên gia dịch tễ học AI. "
+    "Nhiệm vụ: phân tích bài báo, TỰ ĐỘNG DỊCH/HIỂU NỘI DUNG NƯỚC NGOÀI (nếu có) sang Tiếng Việt và trả về JSON hợp lệ. "
+    "Lưu ý: Mọi text trong JSON (tên bệnh, location, reason...) BẰNG TIẾNG VIỆT hoặc TIẾNG ANH tùy theo chủ đề nhưng phải TƯƠNG ĐƯƠNG với từ khóa y tế Việt Nam. Không giải thích thêm ngoài JSON."
 )
 
 # Five carefully chosen few-shot examples:
@@ -273,8 +273,9 @@ _SCHEMA_BLOCK = """
       "disease_name": "<tên bệnh, PHẢI nằm trong danh sách keyword bên dưới>",
       "cumulative_cases": <số nguyên, 0 nếu không đề cập>,
       "new_cases": <số nguyên, số ca ghi nhận mới, 0 nếu không đề cập>,
-      "event_start_date": "<YYYY-MM-DD nếu báo cáo theo chu kỳ, null nếu trong ngày>",
-      "event_end_date": "<YYYY-MM-DD nếu báo cáo theo chu kỳ, null nếu trong ngày>"
+      "new_cases": <số nguyên, số ca ghi nhận mới, 0 nếu không đề cập>,
+      "event_start_date": "<YYYY-MM-DD tương ứng với thời gian bắt đầu sự kiện thực tế được nhắc đến, null nếu không rõ>",
+      "event_end_date": "<YYYY-MM-DD tương ứng với thời gian kết thúc sự kiện, null nếu không rõ>"
     }
   ],
   "validation_note": "<Giải thích ngắn tại sao bạn chọn các số liệu này>",
@@ -284,7 +285,8 @@ _SCHEMA_BLOCK = """
 
 **QUY TẮC BÓC TÁCH SỐ CA CỦA MẢNG 'diseases' (CỰC KỲ QUAN TRỌNG):**
 - NẾU báo cáo là TỔNG HỢP lũy kế tính từ quá khứ (ví dụ: "từ đầu năm đến nay", "tích lũy từ đầu năm tới 21 tháng 1"): TUYỆT ĐỐI BỎ QUA số ca đó (đặt cumulative_cases = 0, new_cases = 0).
-- CHỈ LẤY số liệu nếu bài báo báo cáo số ca TRONG MỘT CHU KỲ/KHOẢNG THỜI GIAN NGẮN (ví dụ: "từ 23/1 đến 29/1", "trong tuần 12", "tuần qua"). Khi đó nhập số ca vào 'new_cases' và điền chính xác 'event_start_date', 'event_end_date'.
+- CHỈ LẤY số liệu nếu bài báo báo cáo số ca TRONG MỘT CHU KỲ/KHOẢNG THỜI GIAN NGẮN (ví dụ: "từ 23/1 đến 29/1", "trong tuần 12", "tuần qua").
+- CHÚ Ý VỀ THỜI GIAN SỰ KIỆN (event_start_date, event_end_date): Trích xuất chính xác thời gian thực tế mà sự kiện bùng phát (vd: "hôm qua", "tuần trước" phải được quy đổi ra ngày YYYY-MM-DD dựa trên ngữ cảnh). Nếu sự kiện đã quá cũ, hệ thống sẽ tự động lọc. Mọi từ khóa ngoại ngữ (ví dụ flu, dengue) phải được quy chuẩn thành tiếng Việt (cúm, sốt xuất huyết).
 - Nếu bài chỉ đề cập MỘT bệnh: mảng có 1 phần tử.
 - Nếu bài đề cập NHIỀU bệnh: tạo một phần tử riêng cho MỖI bệnh. KHÔNG gộp số ca.
 - Mỗi phần tử PHẢI có trường 'disease_name' khớp với một keyword.
@@ -500,13 +502,17 @@ def extract_case_count(text: str, keywords: list[str]) -> int:
     if not text:
         return 0
     pattern = r"(\d+[\d.,]*)\s*(ca mắc|trường hợp|người mắc|ca tử vong|tử vong|f0)"
-    matches = re.findall(pattern, text, re.IGNORECASE)
-    if matches:
+    matches = re.finditer(pattern, text, re.IGNORECASE)
+    for m in matches:
+        start_idx = max(0, m.start() - 30)
+        context = text[start_idx:m.end()].lower()
+        if "lũy kế" in context or "tích lũy" in context or "từ đầu năm" in context:
+            continue
         try:
-            num_str = matches[0][0].replace(".", "").replace(",", "")
+            num_str = m.group(1).replace(".", "").replace(",", "")
             return int(num_str)
         except (ValueError, IndexError):
-            return 0
+            continue
     return 0
 
 
@@ -567,35 +573,41 @@ def build_event_fingerprint(
 
 def compute_event_similarity_score(
     title: str,
+    summary: str,
     pub_date: datetime,
     location: str | None,
     case_count: int,
     event,
 ) -> tuple[float, dict[str, float]]:
     title_similarity = compute_title_similarity(title, event.canonical_title)
-    title_score = title_similarity * 0.45
+    title_score = title_similarity * 0.35
+
+    # Lấy summary của bài viết mẫu (sự kiện) bằng cách fallback về canonical_title nếu chưa có
+    # Tuy nhiên NewsEvent không lưu summary, nên ta so sánh summary bài mới với title của Event
+    summary_similarity = compute_title_similarity(summary[:200], event.canonical_title)
+    summary_score = summary_similarity * 0.25
 
     normalized_location = normalize_text(location or "")
     event_location = normalize_text(event.location or "")
     if normalized_location and event_location:
         if normalized_location == event_location:
-            location_score = 0.25
+            location_score = 0.20
         elif normalized_location in event_location or event_location in normalized_location:
-            location_score = 0.15
+            location_score = 0.10
         else:
             location_score = 0.0
     elif not normalized_location and not event_location:
-        location_score = 0.1
+        location_score = 0.10
     else:
         location_score = 0.05
 
     day_diff = abs((pub_date.date() - event.event_date.date()).days)
     if day_diff == 0:
-        date_score = 0.2
+        date_score = 0.15
     elif day_diff == 1:
-        date_score = 0.14
+        date_score = 0.10
     elif day_diff == 2:
-        date_score = 0.08
+        date_score = 0.05
     else:
         date_score = 0.0
 
@@ -603,16 +615,17 @@ def compute_event_similarity_score(
         delta = abs(case_count - event.case_count)
         tolerance = max(3, int(max(case_count, event.case_count) * 0.3))
         if delta == 0:
-            case_score = 0.1
+            case_score = 0.05
         elif delta <= tolerance:
-            case_score = 0.07
+            case_score = 0.03
         else:
             case_score = 0.0
     else:
-        case_score = 0.04
+        case_score = 0.02
 
     breakdown = {
         "title": round(title_score, 3),
+        "summary": round(summary_score, 3),
         "location": round(location_score, 3),
         "date": round(date_score, 3),
         "case_count": round(case_score, 3),
@@ -629,6 +642,7 @@ def format_dedupe_reason(breakdown: dict[str, float], matched: bool) -> str:
 def resolve_event_for_article(
     db: Session,
     title: str,
+    summary: str,
     matched_keywords: str,
     pub_date: datetime,
     location: str | None,
@@ -636,7 +650,7 @@ def resolve_event_for_article(
     new_cases: int,
     severity: str | None,
 ) -> tuple[models.NewsEvent | None, float | None, str | None, int]:
-    MATCH_SCORE_THRESHOLD = 0.6
+    MATCH_SCORE_THRESHOLD = 0.75
     primary_keyword = extract_primary_keyword(matched_keywords)
     if not primary_keyword:
         return None, None, None, 0
@@ -655,8 +669,8 @@ def resolve_event_for_article(
     # Bước 3: Cập nhật best_match từ Vector thay vì vòng lặp tính điểm
     # -------------------------------------------------------------
 
-    start_date = pub_date - timedelta(days=2)
-    end_date = pub_date + timedelta(days=2)
+    start_date = pub_date - timedelta(days=3)
+    end_date = pub_date + timedelta(days=3)
     recent_events = crud.get_recent_events(
         db,
         disease_name=primary_keyword,
@@ -680,6 +694,7 @@ def resolve_event_for_article(
     for event in recent_events:
         score, breakdown = compute_event_similarity_score(
             title=title,
+            summary=summary,
             pub_date=pub_date,
             location=normalized_location,
             case_count=search_cases,
@@ -757,6 +772,7 @@ def resolve_event_for_article(
 def find_similar_event(
     db: Session,
     title: str,
+    summary: str,
     matched_keywords: str,
     pub_date: datetime,
     location: str | None,
@@ -769,8 +785,8 @@ def find_similar_event(
 
     normalized_location = normalize_text(location or "") or None
 
-    start_date = pub_date - timedelta(days=2)
-    end_date = pub_date + timedelta(days=2)
+    start_date = pub_date - timedelta(days=3)
+    end_date = pub_date + timedelta(days=3)
 
     # Tìm kiếm lần 1: theo bệnh + địa điểm + khoảng thời gian
     recent_events = crud.get_recent_events(
@@ -798,6 +814,7 @@ def find_similar_event(
     for event in recent_events:
         score, breakdown = compute_event_similarity_score(
             title=title,
+            summary=summary,
             pub_date=pub_date,
             location=normalized_location,
             case_count=case_count,
@@ -1497,6 +1514,7 @@ def scan_news(
                     event, event_match_score, dedupe_reason, event_current_total = resolve_event_for_article(
                         db=db,
                         title=title,
+                        summary=effective_summary,
                         matched_keywords=matched_kw_str,
                         pub_date=pub_date,
                         location=location_merged,
@@ -1584,6 +1602,7 @@ def scan_news(
                         best_match_sim, score_sim, breakdown_sim = find_similar_event(
                             db=db,
                             title=title,
+                            summary=effective_summary,
                             matched_keywords=matched_kw_str,
                             pub_date=pub_date,
                             location=location_merged,

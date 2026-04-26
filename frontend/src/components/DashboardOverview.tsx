@@ -4,6 +4,8 @@ import { AlertCircle, Globe, Activity, Info, MapPin, Component } from "lucide-re
 import { Badge } from "@/components/ui/badge";
 import {
   BarChart,
+  LineChart,
+  Line,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -12,6 +14,9 @@ import {
   Bar,
   Legend,
 } from "recharts";
+import { useRef } from "react";
+import { MapShell, MapShellRef } from "./map/MapShell";
+import { createProvinceDotLayers, prepareLocationData, MappedLocation } from "./map/ProvinceDotLayer";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -27,8 +32,17 @@ interface StackedResult { dates: string[]; diseases: string[]; data: StackedTren
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const MONTH_OPTIONS = [1, 2, 3, 6, 12];
-const BOW_DAYS_OPTIONS = [7, 30, 90];
+// label + months value (âm số = tuần): -1 = 1 tuần, -2 = 2 tuần
+type MonthOption = { label: string; months?: number; days?: number };
+const MONTH_OPTIONS: MonthOption[] = [
+  { label: "1 tuần", days: 7 },
+  { label: "2 tuần", days: 14 },
+  { label: "1 tháng", months: 1 },
+  { label: "3 tháng", months: 3 },
+  { label: "6 tháng", months: 6 },
+  { label: "12 tháng", months: 12 },
+];
+const BOW_DAYS_OPTIONS = [7, 14, 30, 90];
 const LOCATION_FILTER_OPTIONS = [
   { label: "30 ngày gần nhất", days: 30, month: null, year: null },
 ];
@@ -58,21 +72,42 @@ const DashboardOverview = () => {
     top_disease_mentions: 0,
   });
   const [topDiseases, setTopDiseases] = useState<TopDisease[]>([]);
-  const [selectedMonths, setSelectedMonths] = useState(1);
+  const [selectedPeriod, setSelectedPeriod] = useState<MonthOption>(MONTH_OPTIONS[2]); // mặc định 1 tháng
   const [loadingTopDiseases, setLoadingTopDiseases] = useState(false);
 
   // Location heatmap
   const [locationData, setLocationData] = useState<LocationItem[]>([]);
-  const [hoveredLocation, setHoveredLocation] = useState<LocationItem | null>(null);
+  const [hoveredLocation, setHoveredLocation] = useState<(MappedLocation & { x: number, y: number }) | null>(null);
   const [locationFilterIdx, setLocationFilterIdx] = useState(0);
 
-  // BoW
-  const [bowData, setBowData] = useState<{ word: string; value: number }[]>([]);
-  const [bowDays, setBowDays] = useState(30);
+  // DeckGL Map state
+  const mapRef = useRef<MapShellRef>(null);
+  const [geoJsonData, setGeoJsonData] = useState<any>(null);
 
-  // Stacked bar
+  useEffect(() => {
+    fetch('/vn_map_lite.geojson')
+      .then(res => res.json())
+      .then(data => setGeoJsonData(data))
+      .catch(err => console.error("Could not load map json:", err));
+  }, []);
+
+  // Interest Trends
+  const [interestResult, setInterestResult] = useState<StackedResult | null>(null);
+
+  // Stacked line
   const [stackedResult, setStackedResult] = useState<StackedResult | null>(null);
+
+  // Dùng state riêng cho 2 biểu đồ xu hướng
   const [stackedDays, setStackedDays] = useState(30);
+  const [interestDays, setInterestDays] = useState(30);
+
+  // Bộ lọc từ khóa cho biểu đồ xu hướng
+  const [selectedStackedDiseases, setSelectedStackedDiseases] = useState<string[]>([]);
+  const [selectedInterestDiseases, setSelectedInterestDiseases] = useState<string[]>([]);
+
+  // Custom dropdown open state
+  const [stackedDropdownOpen, setStackedDropdownOpen] = useState(false);
+  const [interestDropdownOpen, setInterestDropdownOpen] = useState(false);
 
   // ── Fetches ─────────────────────────────────────────────────────────────────
 
@@ -90,12 +125,16 @@ const DashboardOverview = () => {
     const fetchTopDiseases = async () => {
       setLoadingTopDiseases(true);
       try {
-        const res = await fetch(`/api/stats/top-diseases?months=${selectedMonths}`);
+        // Nếu có days thì dùng days, ngược lại dùng months
+        const url = selectedPeriod.days
+          ? `/api/stats/top-diseases?days=${selectedPeriod.days}`
+          : `/api/stats/top-diseases?months=${selectedPeriod.months}`;
+        const res = await fetch(url);
         if (res.ok) setTopDiseases(await res.json());
       } catch { } finally { setLoadingTopDiseases(false); }
     };
     fetchTopDiseases();
-  }, [selectedMonths]);
+  }, [selectedPeriod]);
 
   const fetchLocation = useCallback(async (idx: number) => {
     const filter = LOCATION_FILTER_OPTIONS[idx];
@@ -110,14 +149,20 @@ const DashboardOverview = () => {
   useEffect(() => { fetchLocation(locationFilterIdx); }, [locationFilterIdx, fetchLocation]);
 
   useEffect(() => {
-    const fetchBow = async () => {
+    const fetchInterest = async () => {
       try {
-        const res = await fetch(`/api/stats/bow?days=${bowDays}`);
-        if (res.ok) setBowData(await res.json());
+        const res = await fetch(`/api/stats/interest-trends?days=${interestDays}`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data && data.diseases) {
+            setInterestResult(data);
+            setSelectedInterestDiseases(data.diseases.slice(0, 5));
+          }
+        }
       } catch { }
     };
-    fetchBow();
-  }, [bowDays]);
+    fetchInterest();
+  }, [interestDays]);
 
   useEffect(() => {
     const fetchStacked = async () => {
@@ -125,7 +170,10 @@ const DashboardOverview = () => {
         const res = await fetch(`/api/stats/stacked-trends?days=${stackedDays}`);
         if (res.ok) {
           const data = await res.json();
-          if (data && data.diseases) setStackedResult(data);
+          if (data && data.diseases) {
+            setStackedResult(data);
+            setSelectedStackedDiseases(data.diseases.slice(0, 5));
+          }
         }
       } catch { }
     };
@@ -135,7 +183,21 @@ const DashboardOverview = () => {
   // ── Derived ──────────────────────────────────────────────────────────────────
 
   const maxMentions = locationData.length > 0 ? locationData[0].total_mentions : 1;
-  const maxBowValue = Math.max(...bowData.map((d) => d.value), 1);
+  const maxRiskScore = locationData.length > 0 ? (locationData[0] as any).risk_score || locationData[0].total_mentions : 1;
+
+  useEffect(() => {
+    if (mapRef.current) {
+      const mappedData = prepareLocationData(locationData);
+      const layers = createProvinceDotLayers(geoJsonData, mappedData, maxRiskScore, (info) => {
+        if (info.object && info.x !== undefined && info.y !== undefined) {
+          setHoveredLocation({ ...info.object, x: info.x, y: info.y });
+        } else {
+          setHoveredLocation(null);
+        }
+      });
+      mapRef.current.setLayers(layers);
+    }
+  }, [locationData, geoJsonData, maxRiskScore]);
 
   const getBarColor = (mentions: number) => {
     const ratio = mentions / maxMentions;
@@ -146,6 +208,11 @@ const DashboardOverview = () => {
   };
 
   const stackedChartData = stackedResult?.data.map((row) => ({
+    ...row,
+    name: row.date.split("-").slice(1).join("/"),
+  })) ?? [];
+
+  const interestChartData = interestResult?.data.map((row) => ({
     ...row,
     name: row.date.split("-").slice(1).join("/"),
   })) ?? [];
@@ -210,15 +277,51 @@ const DashboardOverview = () => {
                 <CardTitle>Xu hướng ca bệnh theo loại</CardTitle>
                 <CardDescription>Số ca từng bệnh chồng theo ngày</CardDescription>
               </div>
-              <select
-                value={stackedDays}
-                onChange={(e) => setStackedDays(Number(e.target.value))}
-                className="text-sm border border-border rounded px-2 py-1 bg-background text-foreground cursor-pointer"
-              >
-                <option value={7}>7 ngày</option>
-                <option value={14}>14 ngày</option>
-                <option value={30}>30 ngày</option>
-              </select>
+              <div className="flex gap-2">
+                {/* Multi-select keywords dropdown */}
+                {stackedResult && stackedResult.diseases.length > 0 && (
+                  <div className="relative">
+                    <div
+                      className="text-sm border border-border rounded px-3 py-1.5 bg-background text-foreground cursor-pointer flex items-center justify-between min-w-[120px]"
+                      onClick={() => setStackedDropdownOpen(!stackedDropdownOpen)}
+                    >
+                      <span>Chọn bệnh ({selectedStackedDiseases.length}/5)</span>
+                    </div>
+                    {stackedDropdownOpen && (
+                      <div className="absolute top-full mt-1 right-0 bg-popover border shadow-md rounded-md p-2 z-50 w-64 max-h-60 overflow-y-auto">
+                        {stackedResult.diseases.map(d => (
+                          <label key={d} className="flex items-center gap-2 py-1 px-2 hover:bg-muted rounded cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={selectedStackedDiseases.includes(d)}
+                              onChange={(e) => {
+                                if (e.target.checked) {
+                                  if (selectedStackedDiseases.length >= 5) return;
+                                  setSelectedStackedDiseases([...selectedStackedDiseases, d]);
+                                } else {
+                                  setSelectedStackedDiseases(selectedStackedDiseases.filter(item => item !== d));
+                                }
+                              }}
+                              disabled={!selectedStackedDiseases.includes(d) && selectedStackedDiseases.length >= 5}
+                            />
+                            <span className="text-sm line-clamp-1">{d}</span>
+                          </label>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                <select
+                  value={stackedDays}
+                  onChange={(e) => setStackedDays(Number(e.target.value))}
+                  className="text-sm border border-border rounded px-2 py-1 bg-background text-foreground cursor-pointer"
+                >
+                  <option value={7}>7 ngày</option>
+                  <option value={14}>14 ngày</option>
+                  <option value={30}>30 ngày</option>
+                </select>
+              </div>
             </div>
           </CardHeader>
           <CardContent>
@@ -228,10 +331,10 @@ const DashboardOverview = () => {
               </div>
             ) : (
               <ResponsiveContainer width="100%" height={300}>
-                <BarChart data={stackedChartData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                <LineChart data={stackedChartData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
                   <XAxis dataKey="name" stroke="hsl(var(--muted-foreground))" tick={{ fontSize: 10 }} />
-                  <YAxis stroke="hsl(var(--muted-foreground))" />
+                  <YAxis stroke="hsl(var(--muted-foreground))" tick={{ fontSize: 10 }} />
                   <Tooltip
                     contentStyle={{
                       backgroundColor: "hsl(var(--card))",
@@ -241,16 +344,18 @@ const DashboardOverview = () => {
                     }}
                   />
                   <Legend wrapperStyle={{ fontSize: 11 }} />
-                  {stackedResult.diseases.map((disease, i) => (
-                    <Bar
+                  {selectedStackedDiseases.map((disease, i) => (
+                    <Line
                       key={disease}
+                      type="monotone"
                       dataKey={disease}
-                      stackId="a"
-                      fill={DISEASE_COLORS[i % DISEASE_COLORS.length]}
-                      radius={i === stackedResult.diseases.length - 1 ? [4, 4, 0, 0] : [0, 0, 0, 0]}
+                      stroke={DISEASE_COLORS[i % DISEASE_COLORS.length]}
+                      strokeWidth={2}
+                      dot={false}
+                      activeDot={{ r: 4 }}
                     />
                   ))}
-                </BarChart>
+                </LineChart>
               </ResponsiveContainer>
             )}
           </CardContent>
@@ -267,12 +372,15 @@ const DashboardOverview = () => {
               <div className="flex items-center gap-2">
                 <label className="text-sm text-muted-foreground whitespace-nowrap">Trong:</label>
                 <select
-                  value={selectedMonths}
-                  onChange={(e) => setSelectedMonths(Number(e.target.value))}
+                  value={selectedPeriod.label}
+                  onChange={(e) => {
+                    const opt = MONTH_OPTIONS.find(o => o.label === e.target.value);
+                    if (opt) setSelectedPeriod(opt);
+                  }}
                   className="text-sm border border-border rounded px-2 py-1 bg-background text-foreground cursor-pointer"
                 >
-                  {MONTH_OPTIONS.map((m) => (
-                    <option key={m} value={m}>{m} tháng</option>
+                  {MONTH_OPTIONS.map((opt) => (
+                    <option key={opt.label} value={opt.label}>{opt.label}</option>
                   ))}
                 </select>
               </div>
@@ -328,138 +436,143 @@ const DashboardOverview = () => {
               </select>
             </div>
           </CardHeader>
-          <CardContent>
-            {locationData.length === 0 ? (
-              <div className="flex items-center justify-center h-[300px] text-sm text-muted-foreground">
-                Chưa có dữ liệu địa danh cụ thể trong khoảng thời gian này
-              </div>
-            ) : (
-              <div className="relative space-y-2 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
-                {locationData.map((loc, i) => {
-                  const ratio = loc.total_mentions / maxMentions;
-                  return (
-                    <div
-                      key={loc.location}
-                      className="group relative"
-                      onMouseEnter={() => setHoveredLocation(loc)}
-                      onMouseLeave={() => setHoveredLocation(null)}
-                    >
-                      <div className="flex items-center gap-2 cursor-pointer">
-                        <span className="w-5 text-xs text-muted-foreground shrink-0 text-right">{i + 1}</span>
-                        <span className="w-32 shrink-0 text-sm font-medium truncate" title={loc.location}>{loc.location}</span>
-                        <div className="flex-1 bg-secondary rounded-full h-5 overflow-hidden">
-                          <div
-                            className={`h-full rounded-full transition-all duration-300 ${getBarColor(loc.total_mentions)}`}
-                            style={{ width: `${(ratio * 100).toFixed(1)}%` }}
-                          />
-                        </div>
-                        <span className="text-xs text-muted-foreground shrink-0 w-8 text-right">{loc.total_mentions}</span>
-                      </div>
+          <CardContent className="p-0 relative">
+            <div className="relative w-full h-[400px]">
+              <MapShell ref={mapRef} className="absolute inset-0 rounded-b-xl overflow-hidden" />
 
-                      {/* Tooltip khi hover */}
-                      {hoveredLocation?.location === loc.location && (
-                        <div className="absolute left-36 top-1 z-50 bg-card border border-border rounded-lg shadow-lg p-3 w-56 text-sm pointer-events-none">
-                          <p className="font-semibold text-foreground mb-1">📍 {loc.location}</p>
-                          <p className="text-muted-foreground text-xs mb-2">
-                            {loc.total_mentions} lượt nhắc · {loc.total_cases.toLocaleString()} ca
-                          </p>
-                          <div className="space-y-1">
-                            {loc.diseases.map((d) => (
-                              <div key={d.disease_name} className="flex justify-between text-xs">
-                                <span className="truncate text-foreground">{d.disease_name}</span>
-                                <span className="text-muted-foreground shrink-0 ml-2">{d.mentions} bài</span>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
+              {/* Thanh cảnh báo nổi (pill) khi không có dữ liệu, nằm giữa không chắn nút Zoom */}
+              {locationData.length === 0 && (
+                <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-yellow-400/60 backdrop-blur-md text-yellow-950 px-6 py-2 text-center text-sm font-medium z-10 rounded-full border border-yellow-500/30 shadow-md shadow-yellow-500/10 whitespace-nowrap">
+                  Chưa có dữ liệu địa danh cụ thể trong khoảng thời gian này
+                </div>
+              )}
+
+              {/* Tooltip hiển thị khi hover lên chấm bản đồ */}
+              {hoveredLocation && locationData.length > 0 && (
+                <div
+                  className="absolute z-50 bg-card border border-border rounded-lg shadow-lg p-3 w-56 text-sm pointer-events-none"
+                  style={{ left: hoveredLocation.x + 15, top: hoveredLocation.y + 15 }}
+                >
+                  <p className="font-semibold text-foreground mb-1">📍 {hoveredLocation.name}</p>
+                  <p className="text-muted-foreground text-xs mb-2">
+                    {hoveredLocation.mentions} lượt nhắc · {hoveredLocation.cases.toLocaleString()} ca
+                  </p>
+                  <div className="space-y-1">
+                    {hoveredLocation.diseases.map((d) => (
+                      <div key={d.disease_name} className="flex justify-between text-xs">
+                        <span className="truncate text-foreground">{d.disease_name}</span>
+                        <span className="text-muted-foreground shrink-0 ml-2">{d.mentions} bài</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+            {/* Legend màu được đính đè góc Map */}
+            {locationData.length > 0 && (
+              <div className="absolute bottom-4 right-4 bg-background/80 backdrop-blur-md rounded-md border border-border p-2 flex items-center gap-2 text-[10px] text-muted-foreground shadow-sm">
+                <span>Tâm dịch bé</span>
+                <div className="w-2 h-2 rounded-full bg-red-400 opacity-50" />
+                <div className="w-3 h-3 rounded-full bg-red-500 opacity-80" />
+                <div className="w-5 h-5 rounded-full bg-red-600 opacity-100 flex items-center justify-center shadow-red-500/50 shadow-md">
+                  <div className="w-2 h-2 rounded-full bg-background" />
+                </div>
+                <span>Tâm dịch lớn</span>
               </div>
             )}
-            {/* Legend màu */}
-            <div className="flex items-center gap-2 text-[10px] text-muted-foreground mt-4 justify-end">
-              <span>Ít</span>
-              <div className="w-3 h-3 rounded-full bg-emerald-400" />
-              <div className="w-3 h-3 rounded-full bg-yellow-400" />
-              <div className="w-3 h-3 rounded-full bg-orange-400" />
-              <div className="w-3 h-3 rounded-full bg-red-500" />
-              <span>Nhiều</span>
-            </div>
           </CardContent>
         </Card>
 
-        {/* Bag of Words - Word Cloud */}
+        {/* Sự Quan Tâm - Line Chart thay thế WordCloud */}
         <Card className="border-t-4 border-t-emerald-500">
           <CardHeader>
             <div className="flex items-center justify-between flex-wrap gap-2">
               <div>
                 <CardTitle className="flex items-center gap-2">
                   <Component className="w-5 h-5 text-emerald-500" />
-                  Word Cloud (Từ khóa trọng tâm)
+                  Sự quan tâm truyền thông
                 </CardTitle>
-                <CardDescription>Tần suất từ khóa dịch bệnh - Word Cloud</CardDescription>
+                <CardDescription>Số lượng bài báo nhắc đến top bệnh theo ngày</CardDescription>
               </div>
-              <select
-                value={bowDays}
-                onChange={(e) => setBowDays(Number(e.target.value))}
-                className="text-sm border border-border rounded px-2 py-1 bg-background text-foreground cursor-pointer"
-              >
-                {BOW_DAYS_OPTIONS.map((d) => <option key={d} value={d}>{d} ngày</option>)}
-              </select>
+              <div className="flex gap-2">
+                {/* Multi-select keywords dropdown */}
+                {interestResult && interestResult.diseases.length > 0 && (
+                  <div className="relative">
+                    <div
+                      className="text-sm border border-border rounded px-3 py-1.5 bg-background text-foreground cursor-pointer flex items-center justify-between min-w-[120px]"
+                      onClick={() => setInterestDropdownOpen(!interestDropdownOpen)}
+                    >
+                      <span>Chọn bệnh ({selectedInterestDiseases.length}/5)</span>
+                    </div>
+                    {interestDropdownOpen && (
+                      <div className="absolute top-full mt-1 right-0 bg-popover border shadow-md rounded-md p-2 z-50 w-64 max-h-60 overflow-y-auto">
+                        {interestResult.diseases.map(d => (
+                          <label key={d} className="flex items-center gap-2 py-1 px-2 hover:bg-muted rounded cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={selectedInterestDiseases.includes(d)}
+                              onChange={(e) => {
+                                if (e.target.checked) {
+                                  if (selectedInterestDiseases.length >= 5) return;
+                                  setSelectedInterestDiseases([...selectedInterestDiseases, d]);
+                                } else {
+                                  setSelectedInterestDiseases(selectedInterestDiseases.filter(item => item !== d));
+                                }
+                              }}
+                              disabled={!selectedInterestDiseases.includes(d) && selectedInterestDiseases.length >= 5}
+                            />
+                            <span className="text-sm line-clamp-1">{d}</span>
+                          </label>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                <select
+                  value={interestDays}
+                  onChange={(e) => setInterestDays(Number(e.target.value))}
+                  className="text-sm border border-border rounded px-2 py-1 bg-background text-foreground cursor-pointer"
+                >
+                  {BOW_DAYS_OPTIONS.map((d) => <option key={d} value={d}>{d} ngày</option>)}
+                </select>
+              </div>
             </div>
           </CardHeader>
           <CardContent>
-            <div className="relative flex flex-wrap items-center justify-center content-center gap-x-4 gap-y-2 h-[350px] overflow-hidden p-6 rounded-xl bg-gradient-to-br from-secondary/20 to-secondary/5 border border-emerald-500/10 shadow-inner">
-              {bowData.length === 0 ? (
-                <div className="text-sm text-muted-foreground">Chưa đủ dữ liệu biểu diễn</div>
-              ) : (
-                bowData.map((w, idx) => {
-                  const ratio = w.value / maxBowValue;
-                  // Font size phân cấp mạnh từ 12px đến 48px
-                  const fontSize = Math.floor(12 + Math.pow(ratio, 1.5) * 48);
-
-                  // Palette màu sắc đa dạng giống ảnh mẫu (Purple, Teal, Green, Orange, Blue)
-                  const cloudColors = [
-                    "text-purple-600 dark:text-purple-400",
-                    "text-emerald-600 dark:text-emerald-400",
-                    "text-blue-600 dark:text-blue-400",
-                    "text-amber-600 dark:text-amber-400",
-                    "text-rose-600 dark:text-rose-400",
-                    "text-indigo-600 dark:text-indigo-400",
-                    "text-cyan-600 dark:text-cyan-400"
-                  ];
-                  const colorClass = cloudColors[idx % cloudColors.length];
-
-                  // Tạo độ xoay nhẹ ngẫu nhiên (-5 đến 5 độ) để trông tự nhiên
-                  const rotation = (idx % 3 === 0) ? (idx % 2 === 0 ? "rotate-2" : "-rotate-2") : "";
-
-                  return (
-                    <span
-                      key={w.word + idx}
-                      title={`${w.word}: ${w.value} bài`}
-                      style={{
-                        fontSize: `${fontSize}px`,
-                        fontWeight: ratio > 0.5 ? 800 : ratio > 0.2 ? 600 : 400,
-                        opacity: 0.5 + ratio * 0.5,
-                      }}
-                      className={`
-                        inline-block transition-all duration-500 cursor-default
-                        hover:scale-125 hover:z-10 hover:drop-shadow-md
-                        ${colorClass} ${rotation}
-                        leading-tight font-sans tracking-tight
-                      `}
-                    >
-                      {w.word}
-                    </span>
-                  );
-                })
-              )}
-
-              {/* Overlay trang trí để tạo cảm giác chuyên nghiệp */}
-              <div className="absolute inset-0 pointer-events-none border border-emerald-500/5 rounded-xl"></div>
-            </div>
+            {(!interestResult || interestResult.diseases.length === 0) ? (
+              <div className="flex items-center justify-center h-[350px] text-muted-foreground text-sm">
+                Chưa có dữ liệu biểu diễn
+              </div>
+            ) : (
+              <ResponsiveContainer width="100%" height={350}>
+                <LineChart data={interestChartData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
+                  <XAxis dataKey="name" stroke="hsl(var(--muted-foreground))" tick={{ fontSize: 10 }} />
+                  <YAxis stroke="hsl(var(--muted-foreground))" tick={{ fontSize: 10 }} />
+                  <Tooltip
+                    contentStyle={{
+                      backgroundColor: "hsl(var(--card))",
+                      border: "1px solid hsl(var(--border))",
+                      borderRadius: "var(--radius)",
+                      fontSize: 12,
+                    }}
+                  />
+                  <Legend wrapperStyle={{ fontSize: 11 }} />
+                  {selectedInterestDiseases.map((disease, i) => (
+                    <Line
+                      key={disease}
+                      type="monotone"
+                      dataKey={disease}
+                      stroke={DISEASE_COLORS[(i + 5) % DISEASE_COLORS.length]}
+                      strokeWidth={2}
+                      dot={false}
+                      activeDot={{ r: 4 }}
+                    />
+                  ))}
+                </LineChart>
+              </ResponsiveContainer>
+            )}
           </CardContent>
         </Card>
       </div>
