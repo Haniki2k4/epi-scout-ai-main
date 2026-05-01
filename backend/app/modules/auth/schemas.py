@@ -13,6 +13,11 @@ class UserUpdate(BaseModel):
     password: Optional[str] = None
     role: Optional[str] = None
     is_active: Optional[bool] = None
+    email: Optional[str] = None
+    report_schedule_type: Optional[str] = None
+    report_schedule_time: Optional[str] = None
+    report_schedule_day: Optional[int] = None
+    report_filter_id: Optional[int] = None
 
 class UserStatusUpdate(BaseModel):
     is_active: bool
@@ -22,6 +27,11 @@ class UserStatusUpdate(BaseModel):
 class UserInDBBase(UserBase):
     id: int
     role: str
+    email: Optional[str] = None
+    report_schedule_type: Optional[str] = "none"
+    report_schedule_time: Optional[str] = None
+    report_schedule_day: Optional[int] = None
+    report_filter_id: Optional[int] = None
     is_active: bool
     created_at: datetime
 

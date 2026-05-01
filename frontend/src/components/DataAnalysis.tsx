@@ -6,10 +6,15 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, Scatter } from "recharts";
-import { TrendingUp, Download, FileText, BarChart3, Database, Sparkles, ShieldAlert, Send, CalendarClock, RadioTower, MapPin, AlertTriangle } from "lucide-react";
+import { TrendingUp, Download, FileText, BarChart3, Database, Sparkles, ShieldAlert, Send, CalendarClock, RadioTower, MapPin, AlertTriangle, Table2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { NewsEvent, ZScoreSpike, ProphetForecast } from "@/types";
 import { ComposedChart, Area } from "recharts";
+import {
+  Dialog, DialogContent, DialogDescription, DialogFooter,
+  DialogHeader, DialogTitle,
+} from "@/components/ui/dialog";
+import { useToast } from "@/components/ui/use-toast";
 
 type OverviewStats = {
   total_articles: number;
@@ -17,7 +22,12 @@ type OverviewStats = {
   alert_count: number;
 };
 
-const DataAnalysis = () => {
+interface DataAnalysisProps {
+  showOnlyReport?: boolean;
+}
+
+const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
+  const { toast } = useToast();
   const [stats, setStats] = useState<OverviewStats>({
     total_articles: 0,
     total_cases: 0,
@@ -32,6 +42,14 @@ const DataAnalysis = () => {
   const [zscoreSpikes, setZscoreSpikes] = useState<ZScoreSpike[]>([]);
   const [prophetForecast, setProphetForecast] = useState<ProphetForecast[]>([]);
   const [forecastDisease, setForecastDisease] = useState<string>("Sởi");
+
+  // State báo cáo
+  const [exportingWord, setExportingWord] = useState(false);
+  const [exportingExcel, setExportingExcel] = useState(false);
+  const [emailDialogOpen, setEmailDialogOpen] = useState(false);
+  const [sendingEmail, setSendingEmail] = useState(false);
+  const [emailAttachWord, setEmailAttachWord] = useState(true);
+  const [emailAttachExcel, setEmailAttachExcel] = useState(true);
 
   // State cho Mức độ đa dạng bệnh
   const [keywordTimeseries, setKeywordTimeseries] = useState<{ date: string, keyword_count: number }[]>([]);
@@ -147,10 +165,116 @@ const DataAnalysis = () => {
     fetchDiversityData();
   }, []);
 
+  // --- Report scope to hours mapping ---
+  const scopeHours = useMemo(() => {
+    if (reportScope === "daily") return 24;
+    if (reportScope === "weekly") return 72;
+    return 720; // monthly ~30 days
+  }, [reportScope]);
+
   const reportWindowLabel = useMemo(() => {
     if (reportScope === "daily") return "24 giờ gần nhất";
+    if (reportScope === "weekly") return "72 giờ (3 ngày) gần nhất";
     return "30 ngày gần nhất";
   }, [reportScope]);
+
+  // --- Hàm xuất báo cáo Word ---
+  const handleExportWord = async () => {
+    setExportingWord(true);
+    try {
+      const token = localStorage.getItem("token");
+      const res = await fetch("/api/report/generate", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ scope_hours: scopeHours }),
+      });
+      if (!res.ok) throw new Error("Tạo báo cáo thất bại");
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `BaoCao_DichBenh_${new Date().toISOString().slice(0, 10)}.docx`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast({ title: "Xuất thành công", description: "File Word đã được tải về" });
+    } catch (e: unknown) {
+      toast({
+        title: "Lỗi",
+        description: e instanceof Error ? e.message : "Xuất Word thất bại",
+        variant: "destructive",
+      });
+    } finally {
+      setExportingWord(false);
+    }
+  };
+
+  // --- Hàm xuất Excel (Mẫu QĐ 2018) ---
+  const handleExportExcel = async () => {
+    setExportingExcel(true);
+    try {
+      const token = localStorage.getItem("token");
+      const res = await fetch("/api/report/export-excel", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ scope_hours: scopeHours }),
+      });
+      if (!res.ok) throw new Error("Xuất Excel thất bại");
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `BieuMau_EBS_QD2018_${new Date().toISOString().slice(0, 10)}.xlsx`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast({ title: "Xuất thành công", description: "File Excel (Mẫu QĐ 2018) đã được tải về" });
+    } catch (e: unknown) {
+      toast({
+        title: "Lỗi",
+        description: e instanceof Error ? e.message : "Xuất Excel thất bại",
+        variant: "destructive",
+      });
+    } finally {
+      setExportingExcel(false);
+    }
+  };
+
+  // --- Hàm gửi email ---
+  const handleSendEmail = async () => {
+    setSendingEmail(true);
+    try {
+      const token = localStorage.getItem("token");
+      const res = await fetch("/api/report/send-email", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({
+          scope_hours: scopeHours,
+          attach_docx: emailAttachWord,
+          attach_excel: emailAttachExcel,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "Gửi email thất bại");
+      toast({ title: "Gửi email thành công", description: data.message });
+      setEmailDialogOpen(false);
+    } catch (e: unknown) {
+      toast({
+        title: "Lỗi",
+        description: e instanceof Error ? e.message : "Gửi email thất bại",
+        variant: "destructive",
+      });
+    } finally {
+      setSendingEmail(false);
+    }
+  };
 
   const topSignals = useMemo(() => {
     return events.slice(0, 3).map((event, index) => ({
@@ -185,14 +309,251 @@ const DataAnalysis = () => {
     ];
   }, [reportWindowLabel, stats, topSignals, trends]);
 
+  const reportTabContent = (
+    <div className="space-y-6">
+      <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+        <div>
+          <h3 className="text-lg font-semibold text-foreground">Cấu hình tham số</h3>
+          <p className="text-sm text-muted-foreground">Chọn đối tượng và khung thời gian cho báo cáo tự động.</p>
+        </div>
+        <div className="flex gap-2">
+          <Button variant="outline" className="gap-2" onClick={handleExportExcel} disabled={exportingExcel}>
+            <Table2 className="h-4 w-4 text-chart-2" />
+            {exportingExcel ? "Đang xuất..." : "Biểu mẫu QĐ 2018"}
+          </Button>
+          <Button variant="outline" className="gap-2" onClick={handleExportWord} disabled={exportingWord}>
+            <FileText className="h-4 w-4 text-primary" />
+            {exportingWord ? "Đang xuất..." : "Xuất Word"}
+          </Button>
+          <Button className="gap-2" onClick={() => setEmailDialogOpen(true)}>
+            <Send className="h-4 w-4" />
+            Gửi Email List
+          </Button>
+        </div>
+      </div>
+
+      <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+        <div className="space-y-2">
+          <Label>Khung thời gian</Label>
+          <Select value={reportScope} onValueChange={setReportScope}>
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="daily">24h qua (Báo cáo ngày)</SelectItem>
+              <SelectItem value="weekly">72h qua (Báo cáo tuần/cuối tuần)</SelectItem>
+              <SelectItem value="monthly">30 ngày qua (Báo cáo tháng)</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+
+        <div className="space-y-2">
+          <Label>Đối tượng nhận báo cáo</Label>
+          <Select value={reportAudience} onValueChange={setReportAudience}>
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="cdc">CDC / Trung tâm y tế dự phòng</SelectItem>
+              <SelectItem value="moh">Bộ Y tế (Cục Y tế dự phòng)</SelectItem>
+              <SelectItem value="hospital">Bệnh viện (Khoa truyền nhiễm)</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+
+        <div className="space-y-2">
+          <Label>Phạm vi địa lý (Mô phỏng)</Label>
+          <Select value={reportRegion} onValueChange={setReportRegion}>
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Toàn quốc</SelectItem>
+              <SelectItem value="north">Miền Bắc</SelectItem>
+              <SelectItem value="central">Miền Trung</SelectItem>
+              <SelectItem value="south">Miền Nam</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+
+      <Card>
+        <CardContent className="pt-6">
+          <div className="space-y-2">
+            <Label>Tiêu đề báo cáo</Label>
+            <Input 
+              value={reportTitle} 
+              onChange={e => setReportTitle(e.target.value)}
+              className="text-lg font-medium"
+            />
+            <p className="text-xs text-muted-foreground">Tiêu đề này sẽ được in trong file Word xuất ra.</p>
+          </div>
+        </CardContent>
+      </Card>
+
+      <div className="space-y-6">
+        <Card>
+          <CardHeader>
+            <CardTitle>Preview báo cáo tuần</CardTitle>
+            <CardDescription>Snapshot được tạo từ dữ liệu đang có trong hệ thống</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="rounded-xl border bg-secondary/40 p-4">
+              <div className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Bản xem trước</div>
+              <div className="mt-2 text-lg font-semibold text-foreground">{reportTitle}</div>
+              <div className="mt-1 text-sm text-muted-foreground">
+                {reportAudience === "cdc" ? "CDC tỉnh/thành" : reportAudience === "moh" ? "Bộ Y tế" : "Bệnh viện tuyến tỉnh"}
+                {" • "}
+                {reportRegion === "all" ? "Toàn quốc" : reportRegion === "north" ? "Miền Bắc" : reportRegion === "central" ? "Miền Trung" : "Miền Nam"}
+              </div>
+            </div>
+            <div className="space-y-3">
+              <div className="rounded-lg border p-4">
+                <div className="text-sm font-medium text-foreground">Tóm tắt điều hành</div>
+                <p className="mt-2 text-sm text-muted-foreground">
+                  Trong {reportWindowLabel}, hệ thống ghi nhận {stats.total_articles} bài viết, {stats.total_cases} ca và {stats.alert_count} tín hiệu cảnh báo.
+                  Dữ liệu cho thấy cụm sự kiện nổi bật tập trung ở các chủ đề có độ phủ nguồn cao, phù hợp để đưa vào báo cáo nhanh.
+                </p>
+              </div>
+              <div className="rounded-lg border p-4">
+                <div className="text-sm font-medium text-foreground">Tín hiệu nổi bật cần chú ý</div>
+                <div className="mt-3 space-y-3">
+                  {topSignals.length === 0 ? (
+                    <div className="text-sm text-muted-foreground">Chưa có event nổi bật để hiển thị.</div>
+                  ) : (
+                    topSignals.map((signal) => (
+                      <div key={signal.id} className="rounded-lg bg-secondary/60 p-3">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <div className="font-medium text-foreground">{signal.title}</div>
+                            <div className="mt-1 text-sm text-muted-foreground">
+                              {signal.location} • {signal.articleCount} bài • {signal.sourceCount} nguồn
+                            </div>
+                          </div>
+                          <Badge variant={signal.level === "Ưu tiên cao" ? "default" : "secondary"}>{signal.level}</Badge>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Tín hiệu rủi ro</CardTitle>
+            <CardDescription>Các khối cần xuất hiện trong báo cáo tự động</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="flex items-start gap-3 rounded-lg border p-3">
+              <ShieldAlert className="mt-0.5 h-5 w-5 text-destructive" />
+              <div>
+                <div className="font-medium text-foreground">Cảnh báo tăng đột biến</div>
+                <div className="text-sm text-muted-foreground">{stats.alert_count} tín hiệu cảnh báo đang tồn tại trong hệ thống.</div>
+              </div>
+            </div>
+            <div className="flex items-start gap-3 rounded-lg border p-3">
+              <RadioTower className="mt-0.5 h-5 w-5 text-primary" />
+              <div>
+                <div className="font-medium text-foreground">Độ phủ truyền thông</div>
+                <div className="text-sm text-muted-foreground">
+                  {events[0] ? `${events[0].source_count} nguồn đang cùng đề cập event mạnh nhất.` : "Chưa đủ dữ liệu để đánh giá độ phủ nguồn."}
+                </div>
+              </div>
+            </div>
+            <div className="flex items-start gap-3 rounded-lg border p-3">
+              <MapPin className="mt-0.5 h-5 w-5 text-chart-2" />
+              <div>
+                <div className="font-medium text-foreground">Điểm nóng địa bàn</div>
+                <div className="text-sm text-muted-foreground">
+                  {events.find((event) => event.location)?.location || "Chưa rõ"} đang là địa bàn có tín hiệu xuất hiện sớm nhất trong nhóm event hiện tại.
+                </div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      <Dialog open={emailDialogOpen} onOpenChange={setEmailDialogOpen}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Send className="h-5 w-5 text-primary" />
+              Gửi báo cáo qua Email
+            </DialogTitle>
+            <DialogDescription>
+              Hệ thống sẽ tạo báo cáo và gửi đến danh sách email đã cấu hình bởi Admin.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-2">
+            <div className="rounded-lg border p-3 text-sm space-y-2">
+              <p className="font-medium text-foreground">Thông tin báo cáo</p>
+              <p className="text-muted-foreground">
+                Khoảng thời gian: <strong>{scopeHours} giờ gần nhất</strong>
+              </p>
+            </div>
+
+            <div className="space-y-3">
+              <Label className="text-sm font-medium">File đính kèm</Label>
+              <div className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    id="attach-word-3"
+                    checked={emailAttachWord}
+                    onChange={e => setEmailAttachWord(e.target.checked)}
+                    className="rounded"
+                  />
+                  <Label htmlFor="attach-word-3" className="text-sm cursor-pointer">
+                    Báo cáo Word (.docx) — Tóm tắt dịch bệnh
+                  </Label>
+                </div>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    id="attach-excel-3"
+                    checked={emailAttachExcel}
+                    onChange={e => setEmailAttachExcel(e.target.checked)}
+                    className="rounded"
+                  />
+                  <Label htmlFor="attach-excel-3" className="text-sm cursor-pointer">
+                    Biểu mẫu Excel (.xlsx) — Phụ lục I QĐ 2018/QĐ-BYT
+                  </Label>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => setEmailDialogOpen(false)}>Hủy</Button>
+            <Button
+              onClick={handleSendEmail}
+              disabled={sendingEmail || (!emailAttachWord && !emailAttachExcel)}
+              className="gap-2"
+            >
+              <Send className="h-4 w-4" />
+              {sendingEmail ? "Đang gửi..." : "Gửi ngay"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+
+  if (showOnlyReport) {
+    return reportTabContent;
+  }
+
   return (
     <div className="space-y-6">
       <Tabs defaultValue="forecast" className="space-y-6">
-        <TabsList className="grid w-full grid-cols-4">
+        <TabsList className="grid w-full grid-cols-3">
           <TabsTrigger value="zscore">Phát hiện Đột biến</TabsTrigger>
           <TabsTrigger value="forecast">Dự báo sự kiện</TabsTrigger>
           <TabsTrigger value="diversity">Tần suất Từ khóa</TabsTrigger>
-          <TabsTrigger value="report">Báo cáo tự động</TabsTrigger>
         </TabsList>
 
         <TabsContent value="zscore" className="space-y-6">
@@ -508,255 +869,6 @@ const DataAnalysis = () => {
               </div>
             </CardContent>
           </Card>
-        </TabsContent>
-
-        <TabsContent value="report" className="space-y-6">
-          <div className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
-            <Card className="border-l-4 border-l-primary">
-              <CardHeader>
-                <div className="flex items-start justify-between gap-4">
-                  <div>
-                    <CardTitle>{reportTitle}</CardTitle>
-                    <CardDescription>Biến phần mô tả tĩnh thành một bộ khung báo cáo có thể vận hành được</CardDescription>
-                  </div>
-                  <Badge className="bg-primary/10 text-primary hover:bg-primary/10">
-                    <Sparkles className="mr-1 h-3.5 w-3.5" />
-                    AI-assisted
-                  </Badge>
-                </div>
-              </CardHeader>
-              <CardContent className="space-y-5">
-                <div className="grid gap-4 md:grid-cols-2">
-                  <div className="space-y-2">
-                    <Label htmlFor="report-title">Tên báo cáo</Label>
-                    <Input
-                      id="report-title"
-                      value={reportTitle}
-                      onChange={(e) => setReportTitle(e.target.value)}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>Chu kỳ</Label>
-                    <Select value={reportScope} onValueChange={setReportScope}>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Chọn chu kỳ" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="daily">Hàng ngày</SelectItem>
-                        <SelectItem value="weekly">Hàng tuần</SelectItem>
-                        <SelectItem value="monthly">Hàng tháng</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="space-y-2">
-                    <Label>Đối tượng nhận</Label>
-                    <Select value={reportAudience} onValueChange={setReportAudience}>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Chọn đối tượng nhận" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="cdc">CDC tỉnh/thành</SelectItem>
-                        <SelectItem value="moh">Bộ Y tế</SelectItem>
-                        <SelectItem value="hospital">Bệnh viện tuyến tỉnh</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="space-y-2">
-                    <Label>Phạm vi</Label>
-                    <Select value={reportRegion} onValueChange={setReportRegion}>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Chọn phạm vi" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="all">Toàn quốc</SelectItem>
-                        <SelectItem value="north">Miền Bắc</SelectItem>
-                        <SelectItem value="central">Miền Trung</SelectItem>
-                        <SelectItem value="south">Miền Nam</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
-
-                <div className="mt-4 rounded-3xl bg-muted/30 p-4">
-                  <div className="grid gap-4 md:grid-cols-3">
-                    <div className="min-h-[168px] rounded-2xl bg-card p-5 shadow-sm ring-1 ring-border">
-                      <Database className="mb-3 h-8 w-8 text-primary" />
-                      <h4 className="font-medium text-foreground">Nguồn dữ liệu</h4>
-                      <p className="mt-1 text-sm leading-6 text-muted-foreground">Articles, Events, Trends, cảnh báo và whitelist nội bộ</p>
-                    </div>
-                    <div className="min-h-[168px] rounded-2xl bg-card p-5 shadow-sm ring-1 ring-border">
-                      <BarChart3 className="mb-3 h-8 w-8 text-accent" />
-                      <h4 className="font-medium text-foreground">Phân tích tự động</h4>
-                      <p className="mt-1 text-sm leading-6 text-muted-foreground">Tóm tắt tín hiệu nổi bật, số ca, event nổi trội và độ phủ nguồn</p>
-                    </div>
-                    <div className="min-h-[168px] rounded-2xl bg-card p-5 shadow-sm ring-1 ring-border">
-                      <Send className="mb-3 h-8 w-8 text-chart-2" />
-                      <h4 className="font-medium text-foreground">Đầu ra báo cáo</h4>
-                      <p className="mt-1 text-sm leading-6 text-muted-foreground">Preview trên UI, sẵn sàng làm bước tiếp theo là export PDF/email</p>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="mt-6 rounded-2xl bg-gradient-to-br from-sky-50 to-cyan-50 p-5 shadow-sm ring-1 ring-sky-100">
-                  <div className="flex items-center gap-2 text-sm font-medium text-sky-800">
-                    <CalendarClock className="h-4 w-4" />
-                    Khung thời gian báo cáo: {reportWindowLabel}
-                  </div>
-                  <div className="mt-4 space-y-3">
-                    {reportSections.map((section) => (
-                      <div key={section} className="flex items-start gap-3 text-sm text-slate-700">
-                        <div className="mt-1.5 h-2 w-2 rounded-full bg-sky-500"></div>
-                        <span>{section}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="flex flex-wrap gap-3">
-                  <Button size="lg">
-                    <Download className="mr-2 h-4 w-4" />
-                    Tải preview báo cáo
-                  </Button>
-                  <Button size="lg" variant="outline">
-                    <Send className="mr-2 h-4 w-4" />
-                    Mô phỏng gửi email
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
-
-            <div className="space-y-6">
-              <Card>
-                <CardHeader>
-                  <CardTitle>Preview báo cáo tuần</CardTitle>
-                  <CardDescription>Snapshot được tạo từ dữ liệu đang có trong hệ thống</CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  <div className="rounded-xl border bg-secondary/40 p-4">
-                    <div className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Bản xem trước</div>
-                    <div className="mt-2 text-lg font-semibold text-foreground">{reportTitle}</div>
-                    <div className="mt-1 text-sm text-muted-foreground">
-                      {reportAudience === "cdc" ? "CDC tỉnh/thành" : reportAudience === "moh" ? "Bộ Y tế" : "Bệnh viện tuyến tỉnh"}
-                      {" • "}
-                      {reportRegion === "all" ? "Toàn quốc" : reportRegion === "north" ? "Miền Bắc" : reportRegion === "central" ? "Miền Trung" : "Miền Nam"}
-                    </div>
-                  </div>
-                  <div className="space-y-3">
-                    <div className="rounded-lg border p-4">
-                      <div className="text-sm font-medium text-foreground">Tóm tắt điều hành</div>
-                      <p className="mt-2 text-sm text-muted-foreground">
-                        Trong {reportWindowLabel}, hệ thống ghi nhận {stats.total_articles} bài viết, {stats.total_cases} ca và {stats.alert_count} tín hiệu cảnh báo.
-                        Dữ liệu cho thấy cụm sự kiện nổi bật tập trung ở các chủ đề có độ phủ nguồn cao, phù hợp để đưa vào báo cáo nhanh.
-                      </p>
-                    </div>
-                    <div className="rounded-lg border p-4">
-                      <div className="text-sm font-medium text-foreground">Tín hiệu nổi bật cần chú ý</div>
-                      <div className="mt-3 space-y-3">
-                        {topSignals.length === 0 ? (
-                          <div className="text-sm text-muted-foreground">Chưa có event nổi bật để hiển thị.</div>
-                        ) : (
-                          topSignals.map((signal) => (
-                            <div key={signal.id} className="rounded-lg bg-secondary/60 p-3">
-                              <div className="flex items-start justify-between gap-3">
-                                <div>
-                                  <div className="font-medium text-foreground">{signal.title}</div>
-                                  <div className="mt-1 text-sm text-muted-foreground">
-                                    {signal.location} • {signal.articleCount} bài • {signal.sourceCount} nguồn
-                                  </div>
-                                </div>
-                                <Badge variant={signal.level === "Ưu tiên cao" ? "default" : "secondary"}>{signal.level}</Badge>
-                              </div>
-                            </div>
-                          ))
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-
-              <Card>
-                <CardHeader>
-                  <CardTitle>Tín hiệu rủi ro</CardTitle>
-                  <CardDescription>Các khối cần xuất hiện trong báo cáo tự động</CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                  <div className="flex items-start gap-3 rounded-lg border p-3">
-                    <ShieldAlert className="mt-0.5 h-5 w-5 text-destructive" />
-                    <div>
-                      <div className="font-medium text-foreground">Cảnh báo tăng đột biến</div>
-                      <div className="text-sm text-muted-foreground">{stats.alert_count} tín hiệu cảnh báo đang tồn tại trong hệ thống.</div>
-                    </div>
-                  </div>
-                  <div className="flex items-start gap-3 rounded-lg border p-3">
-                    <RadioTower className="mt-0.5 h-5 w-5 text-primary" />
-                    <div>
-                      <div className="font-medium text-foreground">Độ phủ truyền thông</div>
-                      <div className="text-sm text-muted-foreground">
-                        {events[0] ? `${events[0].source_count} nguồn đang cùng đề cập event mạnh nhất.` : "Chưa đủ dữ liệu để đánh giá độ phủ nguồn."}
-                      </div>
-                    </div>
-                  </div>
-                  <div className="flex items-start gap-3 rounded-lg border p-3">
-                    <MapPin className="mt-0.5 h-5 w-5 text-chart-2" />
-                    <div>
-                      <div className="font-medium text-foreground">Điểm nóng địa bàn</div>
-                      <div className="text-sm text-muted-foreground">
-                        {events.find((event) => event.location)?.location || "Chưa rõ"} đang là địa bàn có tín hiệu xuất hiện sớm nhất trong nhóm event hiện tại.
-                      </div>
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-
-              <Card className="border-l-4 border-l-primary">
-                <CardHeader>
-                  <CardTitle>Giải pháp DHIS2 Integration</CardTitle>
-                  <CardDescription>Giữ phần hiện có, nhưng gắn chặt hơn với bài toán báo cáo thực tế</CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  <div className="grid gap-4 md:grid-cols-2">
-                    <div>
-                      <h4 className="mb-2 font-medium text-foreground">Ưu điểm</h4>
-                      <ul className="space-y-2 text-sm text-muted-foreground">
-                        <li className="flex items-start gap-2">
-                          <div className="mt-1.5 h-1.5 w-1.5 rounded-full bg-accent"></div>
-                          <span>Tích hợp nhiều nguồn dữ liệu vào cùng một pipeline báo cáo</span>
-                        </li>
-                        <li className="flex items-start gap-2">
-                          <div className="mt-1.5 h-1.5 w-1.5 rounded-full bg-accent"></div>
-                          <span>Dễ nối báo cáo event-based thay vì chỉ đếm bài báo</span>
-                        </li>
-                        <li className="flex items-start gap-2">
-                          <div className="mt-1.5 h-1.5 w-1.5 rounded-full bg-accent"></div>
-                          <span>Mở đường cho export, email schedule và dashboard theo tuyến</span>
-                        </li>
-                      </ul>
-                    </div>
-                    <div>
-                      <h4 className="mb-2 font-medium text-foreground">Thách thức</h4>
-                      <ul className="space-y-2 text-sm text-muted-foreground">
-                        <li className="flex items-start gap-2">
-                          <div className="mt-1.5 h-1.5 w-1.5 rounded-full bg-destructive"></div>
-                          <span>Cần đồng bộ taxonomy bệnh và địa bàn giữa crawler với DHIS2</span>
-                        </li>
-                        <li className="flex items-start gap-2">
-                          <div className="mt-1.5 h-1.5 w-1.5 rounded-full bg-destructive"></div>
-                          <span>Cần cơ chế duyệt trước khi gửi báo cáo chính thức</span>
-                        </li>
-                        <li className="flex items-start gap-2">
-                          <div className="mt-1.5 h-1.5 w-1.5 rounded-full bg-destructive"></div>
-                          <span>Cần mapping event sang chỉ số nghiệp vụ để không đếm trùng nguồn báo</span>
-                        </li>
-                      </ul>
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-            </div>
-          </div>
-
-
         </TabsContent>
       </Tabs>
     </div>

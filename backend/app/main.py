@@ -9,7 +9,11 @@ from .core.database import get_db, Base, engine
 from .core.logger import get_logger
 from .modules.news import crawler, crud, models, schemas, stats
 from .modules.auth import router as auth_router, security
+from .modules.auth import router_alerts as alerts_router
 from .modules.admin import router_users as admin_users_router
+from .modules.admin import router_scheduler as admin_scheduler_router
+from .modules.report import router as report_router
+from . import scheduler as app_scheduler
 
 app = FastAPI(description="Hệ thống quét và tự động phân tích tin tức dịch tễ.")
 logger = get_logger("backend.main")
@@ -47,9 +51,20 @@ def init_database() -> None:
         finally:
             db.close()
     crawler.log_llm_preflight_status(force_refresh=True)
+    # Khởi động APScheduler
+    app_scheduler.start_scheduler()
+
+
+@app.on_event("shutdown")
+def shutdown_scheduler() -> None:
+    app_scheduler.stop_scheduler()
+
 
 app.include_router(auth_router.router)
+app.include_router(alerts_router.router)
 app.include_router(admin_users_router.router)
+app.include_router(admin_scheduler_router.router)
+app.include_router(report_router.router)
 
 # CORS configuration
 origins = [
@@ -75,22 +90,36 @@ def scan_news(
     db: Session = Depends(get_db),
     current_user=Depends(security.get_current_active_user)
 ):
-    logger.info("Scan requested | fetch_unknown={} start_date={} end_date={} keywords_count={}",
-                request.fetch_unknown, request.start_date, request.end_date,
+    logger.info("Scan requested | start_date={} end_date={} keywords_count={}",
+                request.start_date, request.end_date,
                 len(request.keywords_to_scan) if request.keywords_to_scan is not None else "all")
     result = crawler.scan_news(
         db,
-        request.fetch_unknown,
         request.start_date,
         request.end_date,
         keywords_to_scan=request.keywords_to_scan,
     )
     logger.info(
-        "Scan completed | saved_trusted_count={} unknown_articles={}",
+        "Scan completed | saved_trusted_count={}",
         result.saved_trusted_count,
-        len(result.unknown_articles),
     )
     return result
+
+@app.get("/api/scan-status")
+def get_scan_status(
+    db: Session = Depends(get_db)
+):
+    """Lấy trạng thái scan hiện tại cho tất cả người dùng (hiển thị banner)."""
+    from backend.app import scheduler as app_scheduler
+    config = app_scheduler._get_or_create_config(db)
+    sched = app_scheduler.get_scheduler()
+    return {
+        "scheduler_running": sched.running,
+        "is_scanning": getattr(crawler, "is_scanning_flag", False), # Ta sẽ thêm cờ is_scanning vào crawler
+        "last_run_at": config.last_run_at,
+        "last_run_saved_count": config.last_run_saved_count,
+        "next_run_at": config.next_run_at,
+    }
 
 @app.get("/api/articles", response_model=schemas.PaginatedArticles)
 def read_articles(
@@ -305,9 +334,17 @@ def read_rss_sources(db: Session = Depends(get_db)):
     return sources
 
 @app.get("/api/keywords", response_model=List[schemas.KeywordDTO])
-def read_keywords(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    logger.info("Read keywords requested | skip={} limit={}", skip, limit)
-    keywords = crud.get_keywords(db, skip=skip, limit=limit)
+def read_keywords(
+    skip: int = 0, 
+    limit: int = 100, 
+    only_active: bool = True,
+    db: Session = Depends(get_db)
+):
+    logger.info("Read keywords requested | skip={} limit={} only_active={}", skip, limit, only_active)
+    if only_active:
+        keywords = crud.get_active_keywords(db)
+    else:
+        keywords = crud.get_keywords(db, skip=skip, limit=limit)
     logger.info("Read keywords completed | count={}", len(keywords))
     return keywords
 
@@ -381,6 +418,19 @@ def update_keyword_api(
         
     logger.info("Update keyword completed | keyword_id={}", keyword_id)
     return updated
+
+@app.patch("/api/keywords/{keyword_id}/toggle", response_model=schemas.KeywordDTO)
+def toggle_keyword_active_api(
+    keyword_id: int,
+    body: schemas.RssSourceToggleRequest,
+    db: Session = Depends(get_db),
+    current_admin=Depends(security.require_admin_role)
+):
+    logger.info("Toggle keyword requested | keyword_id={} is_active={}", keyword_id, body.is_active)
+    db_keyword = crud.toggle_keyword_active(db, keyword_id, body.is_active)
+    if not db_keyword:
+        raise HTTPException(status_code=404, detail="Keyword not found")
+    return db_keyword
 
 
 @app.get("/api/events", response_model=List[schemas.NewsEventDTO])

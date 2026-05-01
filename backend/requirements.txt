@@ -17,3 +17,7 @@ sentence-transformers
 torch
 python-dateutil
 pytz
+APScheduler
+openpyxl
+python-docx
+httpx

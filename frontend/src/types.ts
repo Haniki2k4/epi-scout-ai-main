@@ -31,7 +31,6 @@ export interface RssSource {
 
 export interface ScanResult {
   saved_trusted_count: number;
-  unknown_articles: Article[];
   execution_time?: number;
 }
 

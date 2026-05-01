@@ -168,8 +168,21 @@ def update_disease_case(db: Session, case_id: int, new_count: int, article_id: i
 # --- Keywords ---
 
 def get_keywords(db: Session, skip: int = 0, limit: int = 100):
-    # Sort by ID descending to show newest first (Recent)
+    """Lấy tất cả keywords (admin quản lý, bắt kể is_active)."""
     return db.query(models.Keyword).order_by(models.Keyword.id.desc()).offset(skip).limit(limit).all()
+
+def get_active_keywords(db: Session):
+    """Lấy keyword is_active=True — dùng cho auto-scan và manual scan (keywords_to_scan=None)."""
+    return db.query(models.Keyword).filter(models.Keyword.is_active == True).order_by(models.Keyword.id.desc()).all()
+
+def toggle_keyword_active(db: Session, keyword_id: int, is_active: bool) -> models.Keyword | None:
+    """Admin bật/tắt keyword khỏi auto-scan."""
+    db_keyword = db.query(models.Keyword).filter(models.Keyword.id == keyword_id).first()
+    if db_keyword:
+        db_keyword.is_active = is_active
+        db.commit()
+        db.refresh(db_keyword)
+    return db_keyword
 
 def create_keyword(db: Session, keyword: schemas.KeywordCreate):
     db_keyword = models.Keyword(text=keyword.text)

@@ -1,0 +1,252 @@
+"""
+Auto Crawler Scheduler - APScheduler integration
+Tự động quét bài báo theo chu kỳ cấu hình bởi Admin.
+"""
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.interval import IntervalTrigger
+from apscheduler.triggers.cron import CronTrigger
+from datetime import datetime, timedelta
+import pytz
+
+from .core.database import SessionLocal
+from .modules.news import crawler, models
+from .modules.auth import models as auth_models
+from .modules.report import email_sender, generator, docx_builder, excel_builder
+from .core.logger import get_logger
+
+logger = get_logger("backend.scheduler")
+
+# Múi giờ Việt Nam
+VN_TZ = pytz.timezone("Asia/Ho_Chi_Minh")
+
+# Singleton scheduler
+_scheduler: AsyncIOScheduler | None = None
+
+
+def get_scheduler() -> AsyncIOScheduler:
+    global _scheduler
+    if _scheduler is None:
+        _scheduler = AsyncIOScheduler(timezone=VN_TZ)
+    return _scheduler
+
+
+def _get_or_create_config(db) -> models.SchedulerConfig:
+    """Lấy hoặc tạo mới bản ghi cấu hình scheduler (singleton id=1)."""
+    config = db.query(models.SchedulerConfig).filter(models.SchedulerConfig.id == 1).first()
+    if not config:
+        config = models.SchedulerConfig(
+            id=1,
+            is_enabled=True,
+            interval_hours=6,
+        )
+        db.add(config)
+        db.commit()
+        db.refresh(config)
+    return config
+
+
+async def run_scheduled_scan() -> None:
+    """
+    Job được APScheduler gọi định kỳ.
+    Quét từ last_run_at đến now, dùng toàn bộ keyword is_active=True.
+    """
+    with SessionLocal() as db:
+        try:
+            config = _get_or_create_config(db)
+
+            if not config.is_enabled:
+                logger.info("Auto-scan skipped | reason=scheduler_disabled")
+                return
+
+            now = datetime.now(VN_TZ)
+            # Quét từ lần chạy cuối (hoặc mặc định 6h trước nếu chạy lần đầu)
+            start_date = config.last_run_at or (now - timedelta(hours=config.interval_hours))
+
+            logger.info(
+                "Auto-scan started | start_date={} end_date={}",
+                start_date.strftime("%Y-%m-%d %H:%M"),
+                now.strftime("%Y-%m-%d %H:%M"),
+            )
+
+            # keywords_to_scan=None → crawler sẽ dùng tất cả keyword is_active=True
+            result = crawler.scan_news(
+                db=db,
+                start_date=start_date,
+                end_date=now,
+                keywords_to_scan=None,
+            )
+
+            # Cập nhật config sau khi chạy xong
+            config.last_run_at = now
+            config.last_run_saved_count = result.saved_trusted_count
+            config.next_run_at = now + timedelta(hours=config.interval_hours)
+            db.commit()
+
+            logger.info(
+                "Auto-scan completed | saved={} next_run={}",
+                result.saved_trusted_count,
+                config.next_run_at.strftime("%Y-%m-%d %H:%M"),
+            )
+
+        except Exception as e:
+            logger.error("Auto-scan failed | error={}", str(e))
+        finally:
+            db.close()
+
+
+async def send_personal_email_job(user_id: int) -> None:
+    """
+    Job gửi email cho một người dùng cụ thể theo cấu hình của họ.
+    """
+    with SessionLocal() as db:
+        try:
+            user = db.query(auth_models.User).filter(auth_models.User.id == user_id).first()
+            if not user or not user.is_active or not user.email or user.report_schedule_type == "none":
+                return
+
+            logger.info("Personal email job started | user_id={}", user_id)
+
+            # --- 1. Lọc nội dung nếu có bộ lọc cá nhân ---
+            # Lưu ý: Cần update generator.get_report_data để hỗ trợ filter_keywords
+            # Tạm thời cứ tạo báo cáo mặc định 24h
+            scope_hours = 24
+            
+            # Nếu user có chọn bộ lọc, ta sẽ lấy thông tin bộ lọc đó (Sẽ triển khai sau ở generator)
+            alert = None
+            if user.report_filter_id:
+                alert = db.query(auth_models.UserAlert).filter(auth_models.UserAlert.id == user.report_filter_id).first()
+            
+            report_data = generator.get_report_data(db, scope_hours=scope_hours, alert=alert)
+            docx_bytes = docx_builder.build_word_report(report_data)
+            excel_bytes = excel_builder.build_ebs_excel(report_data)
+
+            # 3. Gửi
+            result = email_sender.send_report_email(
+                db=db,
+                docx_bytes=docx_bytes,
+                excel_bytes=excel_bytes,
+                report_date=report_data["generated_at"],
+                custom_recipients=[user.email],
+            )
+            
+            logger.info("Personal email completed | user_id={} success={}", user_id, result["success"])
+
+        except Exception as e:
+            logger.error("Personal email failed | user_id={} error={}", user_id, str(e))
+        finally:
+            db.close()
+
+
+def update_user_email_schedule(user_id: int, schedule_type: str, schedule_time: str, schedule_day: int) -> None:
+    """Đăng ký hoặc xóa job gửi email cho user"""
+    scheduler = get_scheduler()
+    job_id = f"email_user_{user_id}"
+    
+    if scheduler.get_job(job_id):
+        scheduler.remove_job(job_id)
+        
+    if schedule_type == "none" or not schedule_time:
+        return
+
+    try:
+        hour, minute = map(int, schedule_time.split(":"))
+    except ValueError:
+        return
+        
+    trigger = None
+    if schedule_type == "daily":
+        trigger = CronTrigger(hour=hour, minute=minute, timezone=VN_TZ)
+    elif schedule_type == "weekly" and schedule_day is not None:
+        # CronTrigger day_of_week: 0-6 (mon-sun)
+        trigger = CronTrigger(day_of_week=schedule_day, hour=hour, minute=minute, timezone=VN_TZ)
+    elif schedule_type == "hourly":
+        trigger = CronTrigger(minute=minute, timezone=VN_TZ)
+        
+    if trigger:
+        scheduler.add_job(
+            send_personal_email_job,
+            trigger=trigger,
+            id=job_id,
+            name=f"Auto Email User {user_id}",
+            args=[user_id],
+            replace_existing=True,
+            misfire_grace_time=300
+        )
+        logger.info("Scheduled email for user | user_id={} type={} time={}", user_id, schedule_type, schedule_time)
+
+
+def _reschedule_job(scheduler: AsyncIOScheduler, interval_hours: int, run_now: bool = False) -> None:
+    """Xóa job cũ và thêm job mới với chu kỳ mới. Nếu run_now=True, sẽ chạy ngay lập tức một lần."""
+    if scheduler.get_job("auto_scan"):
+        scheduler.remove_job("auto_scan")
+
+    # Nếu run_now=True, đặt thời điểm chạy kế tiếp là ngay bây giờ
+    next_run_time = datetime.now(VN_TZ) if run_now else None
+
+    scheduler.add_job(
+        run_scheduled_scan,
+        trigger=IntervalTrigger(hours=interval_hours, timezone=VN_TZ),
+        id="auto_scan",
+        name="Auto Crawler Scan",
+        next_run_time=next_run_time,
+        replace_existing=True,
+        misfire_grace_time=300,  # Bỏ qua nếu trễ > 5 phút
+    )
+    logger.info("Scheduler job rescheduled | interval_hours={} run_now={}", interval_hours, run_now)
+
+
+def start_scheduler() -> None:
+    """Khởi động scheduler khi FastAPI startup."""
+    run_now = False
+    with SessionLocal() as db:
+        config = _get_or_create_config(db)
+        interval_hours = config.interval_hours
+        
+        # Nếu chưa từng chạy hoặc lần chạy cuối đã quá lâu so với interval, cho chạy ngay
+        if not config.last_run_at:
+            run_now = True
+        else:
+            # Đảm bảo so sánh cùng múi giờ
+            last_run = config.last_run_at
+            if last_run.tzinfo is None:
+                last_run = VN_TZ.localize(last_run)
+            
+            diff = datetime.now(VN_TZ) - last_run
+            if diff.total_seconds() >= interval_hours * 3600:
+                run_now = True
+                
+        # Load all user schedules
+        users = db.query(auth_models.User).filter(
+            auth_models.User.is_active == True,
+            auth_models.User.report_schedule_type != "none"
+        ).all()
+
+    scheduler = get_scheduler()
+    _reschedule_job(scheduler, interval_hours, run_now=run_now)
+
+    # Đăng ký các job gửi email cá nhân
+    for u in users:
+        update_user_email_schedule(
+            u.id, 
+            u.report_schedule_type, 
+            u.report_schedule_time, 
+            u.report_schedule_day
+        )
+
+    if not scheduler.running:
+        scheduler.start()
+        logger.info("APScheduler started | interval_hours={} scheduled_emails={}", interval_hours, len(users))
+
+
+def stop_scheduler() -> None:
+    """Dừng scheduler khi FastAPI shutdown."""
+    scheduler = get_scheduler()
+    if scheduler.running:
+        scheduler.shutdown(wait=False)
+        logger.info("APScheduler stopped")
+
+
+def update_scheduler_interval(new_interval_hours: int) -> None:
+    """Cập nhật chu kỳ chạy job, áp dụng ngay lập tức."""
+    scheduler = get_scheduler()
+    _reschedule_job(scheduler, new_interval_hours)

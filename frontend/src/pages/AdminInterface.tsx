@@ -1,11 +1,13 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useAuth } from "@/contexts/AuthContext";
 import { Link } from "react-router-dom";
-import { Activity, ArrowLeft, Users, Shield, Database } from "lucide-react";
+import { Activity, ArrowLeft, Users, Shield, Database, Clock, Mail } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import UserManagement from "@/components/admin/UserManagement";
 import ArticleManagement from "@/components/admin/ArticleManagement";
 import ResourceManagement from "@/components/admin/ResourceManagement";
+import SchedulerConfig from "@/components/admin/SchedulerConfig";
+import EmailConfig from "@/components/admin/EmailConfig";
 
 export default function AdminInterface() {
   const { user } = useAuth();
@@ -73,10 +75,16 @@ export default function AdminInterface() {
         {/* Content Tabs */}
         <div className="mt-8">
           <Tabs defaultValue="users" className="w-full">
-            <TabsList className="grid w-full grid-cols-3 max-w-[600px] mb-6">
+            <TabsList className="grid w-full grid-cols-5 max-w-[900px] mb-6">
               <TabsTrigger value="users">Tài Khoản</TabsTrigger>
               <TabsTrigger value="articles">Bài Báo</TabsTrigger>
-              <TabsTrigger value="resources">Từ Khóa & RSS</TabsTrigger>
+              <TabsTrigger value="resources">Từ Khóa &amp; RSS</TabsTrigger>
+              <TabsTrigger value="scheduler" className="gap-1.5">
+                <Clock className="h-3.5 w-3.5" />Lịch Quét
+              </TabsTrigger>
+              <TabsTrigger value="email" className="gap-1.5">
+                <Mail className="h-3.5 w-3.5" />Cấu hình Email
+              </TabsTrigger>
             </TabsList>
             <TabsContent value="users" className="mt-0">
               <UserManagement />
@@ -86,6 +94,12 @@ export default function AdminInterface() {
             </TabsContent>
             <TabsContent value="resources" className="mt-0">
               <ResourceManagement />
+            </TabsContent>
+            <TabsContent value="scheduler" className="mt-0">
+              <SchedulerConfig />
+            </TabsContent>
+            <TabsContent value="email" className="mt-0">
+              <EmailConfig />
             </TabsContent>
           </Tabs>
         </div>

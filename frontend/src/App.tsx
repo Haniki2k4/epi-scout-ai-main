@@ -9,6 +9,7 @@ import LoginPage from "./pages/LoginPage";
 import AdminInterface from "./pages/AdminInterface";
 import { AuthProvider } from "./contexts/AuthContext";
 import { ProtectedRoute, PublicRoute, AdminRoute } from "./components/auth/AuthGuard";
+import { ScanStatusBanner } from "./components/ScanStatusBanner";
 
 const queryClient = new QueryClient();
 
@@ -16,6 +17,7 @@ const App = () => (
   <QueryClientProvider client={queryClient}>
     <TooltipProvider>
       <AuthProvider>
+        <ScanStatusBanner />
         <Toaster />
         <Sonner />
         <BrowserRouter>

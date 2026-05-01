@@ -68,3 +68,64 @@ def login_for_access_token(
 @router.get("/me", response_model=schemas.User)
 def read_users_me(current_user: schemas.User = Depends(security.get_current_active_user)):
     return current_user
+
+@router.put("/me", response_model=schemas.User)
+def update_user_me(
+    user_in: schemas.UserUpdate,
+    db: Session = Depends(get_db),
+    current_user: schemas.User = Depends(security.get_current_active_user)
+):
+    """Cập nhật thông tin cá nhân của người dùng hiện tại (email, tuỳ chọn nhận báo cáo)."""
+    user_db = crud.get_user_by_username(db, current_user.username)
+    if not user_db:
+        raise HTTPException(status_code=404, detail="Không tìm thấy người dùng")
+        
+    # Check email uniqueness
+    if user_in.email and user_in.email != user_db.email:
+        from .models import User
+        existing = db.query(User).filter(User.email == user_in.email).first()
+        if existing:
+            raise HTTPException(status_code=400, detail="Email này đã được sử dụng")
+
+    update_data = user_in.model_dump(exclude_unset=True)
+    
+    # Không cho phép tự đổi role hoặc is_active qua API này
+    update_data.pop("role", None)
+    update_data.pop("is_active", None)
+    
+    # Không cho phép đổi password qua API này (chỉ Admin)
+    update_data.pop("password", None)
+
+    for field, value in update_data.items():
+        setattr(user_db, field, value)
+
+    db.commit()
+    db.refresh(user_db)
+
+    # Cập nhật scheduler
+    from ...scheduler import update_user_email_schedule
+    update_user_email_schedule(
+        user_id=user_db.id,
+        schedule_type=user_db.report_schedule_type,
+        schedule_time=user_db.report_schedule_time,
+        schedule_day=user_db.report_schedule_day
+    )
+
+    return user_db
+
+@router.post("/me/send-report-now")
+async def send_report_now(
+    db: Session = Depends(get_db),
+    current_user: schemas.User = Depends(security.get_current_active_user)
+):
+    """Gửi ngay báo cáo vào email của user."""
+    user = crud.get_user_by_username(db, current_user.username)
+    if not user or not user.email:
+        raise HTTPException(status_code=400, detail="Bạn chưa cấu hình địa chỉ email")
+
+    from ...scheduler import send_personal_email_job
+    try:
+        await send_personal_email_job(user.id)
+        return {"success": True, "message": "Báo cáo đang được gửi đến email của bạn."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

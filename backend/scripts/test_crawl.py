@@ -32,9 +32,9 @@ def test_crawl():
                 count_new += 1
         print(f"   -> Đã thêm mới {count_new} từ khóa.")
         
-        # 2. Run Scan (fetch_unknown=True to see all results)
+        # 2. Run Scan
         print("2. Đang quét RSS từ các nguồn uy tín (VnExpress, DanTri, TuoiTre, ThanhNien, LaoDong, TienPhong...)...")
-        result = crawler.scan_news(db, fetch_unknown=True)
+        result = crawler.scan_news(db)
         
         print(f"\n--- KẾT QUẢ ---")
         print(f"Số bài viết Uy tín (Tự động lưu): {result.saved_trusted_count}")

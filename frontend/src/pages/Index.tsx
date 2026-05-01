@@ -1,10 +1,12 @@
 import { useState } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Activity, FileText, Search, BarChart3, Bookmark } from "lucide-react";
+import { Activity, FileText, Search, BarChart3, Bookmark, Bell, Settings } from "lucide-react";
 import DashboardOverview from "@/components/DashboardOverview";
 import KeywordMonitoring from "@/components/KeywordMonitoring";
 import DataAnalysis from "@/components/DataAnalysis";
 import BookmarksPage from "@/components/BookmarksPage";
+import AlertsPage from "@/components/AlertsPage";
+import { UserSettingsModal } from "@/components/UserSettingsModal";
 import { useAuth } from "@/contexts/AuthContext";
 import { Link, useNavigate } from "react-router-dom";
 import {
@@ -76,6 +78,14 @@ const Index = () => {
                     >
                       <Bookmark className="mr-2 h-4 w-4" /> Bookmark đã lưu
                     </DropdownMenuItem>
+                    <UserSettingsModal>
+                      <DropdownMenuItem
+                        onSelect={(e) => e.preventDefault()} // Ngăn dropdown đóng khi click vào modal trigger
+                        className="cursor-pointer focus:bg-primary focus:text-primary-foreground"
+                      >
+                        <Settings className="mr-2 h-4 w-4" /> Cài đặt báo cáo
+                      </DropdownMenuItem>
+                    </UserSettingsModal>
                     <DropdownMenuItem
                       onClick={() => logout()}
                       className="text-destructive focus:bg-destructive focus:text-destructive-foreground cursor-pointer"
@@ -93,18 +103,26 @@ const Index = () => {
       {/* Main Content */}
       <main className="container mx-auto px-4 py-6">
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
-          <TabsList className="grid w-full grid-cols-3 lg:w-auto lg:inline-grid">
+          <TabsList className="grid w-full grid-cols-5 lg:w-auto lg:inline-grid">
             <TabsTrigger value="overview" className="gap-2">
               <BarChart3 className="h-4 w-4" />
               <span className="hidden sm:inline">Tổng quan</span>
             </TabsTrigger>
             <TabsTrigger value="keyword" className="gap-2">
               <Search className="h-4 w-4" />
-              <span className="hidden sm:inline">Quét từ khóa</span>
+              <span className="hidden sm:inline">Tin tức</span>
             </TabsTrigger>
             <TabsTrigger value="analysis" className="gap-2">
               <FileText className="h-4 w-4" />
               <span className="hidden sm:inline">Phân tích</span>
+            </TabsTrigger>
+            <TabsTrigger value="report" className="gap-2">
+              <FileText className="h-4 w-4" />
+              <span className="hidden sm:inline">Báo cáo tự động</span>
+            </TabsTrigger>
+            <TabsTrigger value="alerts" className="gap-2">
+              <Bell className="h-4 w-4" />
+              <span className="hidden sm:inline">Cảnh báo</span>
             </TabsTrigger>
           </TabsList>
 
@@ -118,6 +136,14 @@ const Index = () => {
 
           <TabsContent value="analysis" className="space-y-6">
             <DataAnalysis />
+          </TabsContent>
+
+          <TabsContent value="report" className="space-y-6">
+            <DataAnalysis showOnlyReport={true} />
+          </TabsContent>
+
+          <TabsContent value="alerts" className="space-y-6">
+            <AlertsPage />
           </TabsContent>
 
           {/* Tab bookmarks ẩn khỏi TabsList, chỉ navigate từ dropdown */}

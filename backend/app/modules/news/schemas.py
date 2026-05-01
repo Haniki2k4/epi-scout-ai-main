@@ -42,6 +42,7 @@ class DiseaseCaseDTO(BaseModel):
 # Update forward references if needed, but strings work fine in Pydantic v2
 class KeywordBase(BaseModel):
     text: str
+    is_active: bool = True
 
 class KeywordCreate(KeywordBase):
     pass
@@ -52,14 +53,12 @@ class KeywordDTO(KeywordBase):
         from_attributes = True
 
 class ScanRequest(BaseModel):
-    fetch_unknown: bool = False # If true, also returns unknown articles
     start_date: Optional[datetime] = None
     end_date: Optional[datetime] = None
     keywords_to_scan: Optional[List[str]] = None  # None = dùng hết từ DB, [] = quét hết, ["x","y"] = lọc
 
 class ScanResult(BaseModel):
     saved_trusted_count: int
-    unknown_articles: List[ArticleBase]
     execution_time: Optional[float] = None
     disease_counts: Optional[dict] = None  # {"sốt xuất huyết": 3, "tay chân miệng": 1}
 
