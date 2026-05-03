@@ -1,62 +1,65 @@
 # Epi Scout AI
 
-Hệ thống giám sát tin tức dịch bệnh từ RSS, gồm:
+Hệ thống giám sát tin tức dịch bệnh đa người dùng, gồm:
 
 - `frontend/`: React + Vite + shadcn/ui
-- `backend/`: FastAPI + crawler + MySQL
-- `docker-compose.yml`: dịch vụ database local
+- `backend/`: FastAPI + crawler + analytics + reporting
+- `docker-compose.yml`: hạ tầng local cho MySQL và Qdrant
 
-Project hiện đã hoàn thiện đầy đủ các tính năng của một hệ thống giám sát dịch tễ chuyên nghiệp:
+Project hiện tại đã vượt mức demo crawl RSS đơn giản. Ngoài luồng quét theo keyword, hệ thống đã có:
 
-- **Quản trị người dùng & Xác thực**: Hệ thống phân quyền RBAC (Admin/User), JWT Auth.
-- **Quản lý linh hoạt**: Keyword, Whitelist và **RSS Sources** đều được quản lý động qua UI Admin.
-- **Lọc đa tầng nâng cao**: Regex context + Local Embedding Similarity + LLM re-check (GPT-4o/Qwen).
-- **Phân tích & Dự báo**:
-  - Phát hiện đột biến bằng thuật toán **Z-Score**.
-  - Dự báo xu hướng bằng **Meta Prophet**.
-  - Trực quan hóa qua Heatmap, WordCloud và Stacked Trend Charts.
-- **Chống trùng bài (Deduplication)**: Heuristic chấm điểm similarity dựa trên title, location, case count và date.
-- **Kiến trúc Crawler module**: Dễ dàng mở rộng nguồn crawl (RSS, Sitemap, Google News).
+- xác thực người dùng và phân quyền `user` / `admin`
+- quản trị keyword và RSS source trên admin panel
+- auto scan bằng APScheduler
+- lọc nhiều tầng: regex/context + LLM re-check tùy chọn
+- gom nhiều article về cùng một `NewsEvent`
+- lưu `DiseaseCase` để phục vụ thống kê theo bệnh, thời gian và địa bàn
+- dashboard heatmap, top disease, trend, z-score, forecast
+- bookmark bài viết, alert cá nhân và feed theo bộ lọc riêng
+- xuất báo cáo Word/Excel và gửi email qua Mailtrap
 
 ## 1. Bài toán đặt ra
 
-Mục tiêu ban đầu:
+Mục tiêu hiện tại của hệ thống:
 
-- quản lý danh sách từ khóa giám sát như `H5N1`, `sốt xuất huyết`, `não mô cầu`
+- theo dõi các từ khóa dịch tễ như `H5N1`, `sốt xuất huyết`, `sởi`, `bạch hầu`
 - quét nhiều nguồn RSS để phát hiện bài viết liên quan dịch tễ
-- tự động lưu bài từ nguồn tin tin cậy
-- cho phép người dùng duyệt bài từ nguồn chưa có trong whitelist
-- hiển thị danh sách bài viết, thống kê, xu hướng
+- giảm false positive từ các bài tư vấn/lifestyle hoặc tin không phải ổ dịch
+- gom nhiều bài báo về cùng một sự kiện để tránh nhìn dữ liệu rời rạc
+- cung cấp dashboard, cảnh báo cá nhân và báo cáo cho vận hành
 
-Trong quá trình làm, project phát sinh thêm các bài toán thực tế:
+Trong quá trình làm, hệ thống phát sinh thêm các nhu cầu thực tế:
 
-- RSS feed chứa nhiều bài tư vấn/lifestyle gây false positive
-- summary RSS có HTML bẩn như `href`, `img`
-- LLM classifier có thể timeout hoặc bị `429`
-- cùng một sự kiện có thể được nhiều báo đưa thành nhiều bài khác nhau
-- modal danh sách nguồn chưa xác thực dài nhưng không scroll
-- endpoint lưu bài thủ công nhận sai payload khi gửi nhiều bài một lúc
+- nguồn tin cần quản lý động thay vì hardcode trong code
+- bài RSS thường chứa HTML bẩn hoặc summary quá nghèo
+- LLM classifier có thể timeout hoặc bị rate limit
+- cùng một sự kiện có thể xuất hiện trên nhiều nguồn với wording khác nhau
+- người dùng nghiệp vụ cần theo dõi bài theo bộ lọc riêng và nhận báo cáo định kỳ
+- admin cần cấu hình lịch quét, tài khoản, email và dữ liệu nguồn ngay trên UI
 
 ## 2. Cách giải quyết các bài toán
 
-### 2.1. Lọc bài viết
+### 2.1. Luồng crawl và lọc bài viết
 
-Luồng lọc hiện tại:
+Luồng backend hiện tại:
 
-1. Crawl RSS
-2. Chuẩn hóa text
-3. Stage-1 regex/context filter
-4. Stage-2 LLM re-check
-5. Chuẩn hóa metadata: keyword, location, case count, severity
-6. Lưu article, disease case và event
+1. Load keyword đang active từ DB
+2. Load RSS source đang active từ bảng `rss_sources`
+3. Parse feed, chuẩn hóa title/summary, cố gắng lấy thêm `sapo`
+4. Stage-1 regex/context filter
+5. Stage-2 LLM re-check nếu được bật
+6. Trích xuất disease, location, case count, severity
+7. Gom article vào `NewsEvent`
+8. Lưu `ArticleIdentity`, `ArticleDetails` và `DiseaseCase`
 
 Những điểm đã xử lý:
 
-- `normalize_text()` strip HTML tags để tránh hiện nguyên `href`/`img`
-- stage-1 chỉ match khi keyword thực sự xuất hiện trong title/summary
-- hard exclude các title tư vấn/lifestyle rõ ràng
-- LLM disabled thì thực sự bypass API call
-- output LLM bị lệch schema không còn làm văng cả feed
+- `normalize_text()` strip HTML tag trong title/summary
+- stage-1 chỉ giữ các bài có tín hiệu keyword + context đủ mạnh
+- hard exclude các title tư vấn/lifestyle/video rõ ràng
+- có thể bypass hoàn toàn LLM khi `LLM_RECHECK_ENABLED=false`
+- nếu có quét theo khoảng ngày, crawler bổ sung truy vấn Google News RSS cho tập domain trusted
+- domain trusted được suy ra từ các RSS source đang active, không còn hardcode trong luồng chính
 
 ### 2.2. LLM timeout / rate limit
 
@@ -65,110 +68,161 @@ Những điểm đã xử lý:
 - preflight kiểm tra model/key/base URL
 - cooldown khi gặp `429`
 - cooldown ngắn khi gặp timeout
-- skip LLM trong thời gian cooldown thay vì tiếp tục spam request lỗi
+- skip tạm LLM trong thời gian cooldown thay vì spam request lỗi
 
 Biến môi trường liên quan:
 
 ```env
 LLM_RECHECK_ENABLED=false
-LLM_RECHECK_MODEL=
+LLM_RECHECK_MODEL=gemini-2.5-flash
 OPENAI_API_KEY=
-OPENAI_BASE_URL=https://api.openai.com/v1
+OPENAI_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai
 LLM_RECHECK_TIMEOUT_SECONDS=20
 LLM_RECHECK_RATE_LIMIT_COOLDOWN_SECONDS=300
 LLM_RECHECK_TIMEOUT_COOLDOWN_SECONDS=60
 ```
 
-### 2.3. Nguồn chưa xác thực
+### 2.3. Quản lý nguồn crawl
 
 Luồng hiện tại:
 
-- bài từ source không nằm trong whitelist sẽ đi vào modal `Phát hiện nguồn chưa xác thực`
-- người dùng có thể:
-  - lưu bài đã chọn
-  - thêm domain vào whitelist
+- danh sách nguồn nằm trong bảng `rss_sources`
+- startup sẽ seed default RSS sources nếu bảng còn trống
+- admin có thể:
+  - thêm nguồn RSS mới
+  - bật/tắt nguồn
+  - xóa nguồn không dùng nữa
 
-Đã xử lý thêm:
+Điểm cần lưu ý:
 
-- `POST /api/whitelist` hiện idempotent, thêm trùng không còn `400`
-- frontend lưu từng article thay vì gửi cả mảng vào endpoint single-item
-- modal có scroll đúng khi danh sách dài
+- mô hình hiện tại vẫn là `RSS-first`
+- chưa có abstraction chung cho `sitemap`, `html_list`, `google_news`, `custom`
 
-### 2.4. Trùng bài giữa nhiều nguồn
+### 2.4. Gom bài theo sự kiện
 
-Hệ thống hiện dùng `soft dedupe theo event`, không hard dedupe theo article.
+Hệ thống hiện dùng `event-level dedupe`, không hard dedupe article.
 
 Tư duy:
 
-- `2 article`
+- `n article`
 - `1 event`
 
 Nghĩa là nếu nhiều báo cùng đưa một sự kiện:
 
-- vẫn giữ toàn bộ article để giữ nguồn và chi tiết bổ sung
+- vẫn giữ toàn bộ article để bảo toàn nguồn
 - nhưng gom chúng về cùng một `NewsEvent`
-
-### 2.5. Similarity score
-
-Event matching hiện không còn là rule `or` đơn giản.
-
-Hệ thống chấm điểm theo:
-
-- `title`
-- `location`
-- `date`
-- `case_count`
-
-Nếu tổng điểm vượt ngưỡng, article sẽ gắn vào event cũ. Nếu không, tạo event mới.
 
 Mỗi article hiện lưu thêm:
 
+- `event_id`
 - `event_match_score`
 - `dedupe_reason`
 
-để truy vết vì sao bài đó được gom vào event nào.
+để truy vết lý do vì sao bài được gắn vào event nào.
 
-## 3. Kiến trúc hệ thống
+### 2.5. Dashboard, phân tích và báo cáo
 
-### 3.1. Luồng hoạt động chính (Pipeline)
+Hệ thống hiện đã có:
 
-1. **Thu thập (Collect)**: Đọc danh sách Website/RSS từ Database -> Multi-threaded Crawler.
-2. **Tiền xử lý (Pre-process)**: Strip HTML bẩn, chuẩn hóa Unicode, bóc tách Sapo.
-3. **Lọc (Filter)**: 
-   - Stage 1: Regex/Context scoring để lọc tin rác.
-   - Stage 2: Similarity matching với dữ liệu 48h gần nhất để tránh trùng lặp Article.
-   - Stage 3: LLM Re-check (nếu bật) để bóc tách số ca (`case_count`), địa điểm (`location`) và độ nghiêm trọng.
-4. **Phân tích (Analytics)**:
-   - Gom nhóm Article vào các **NewsEvent**.
-   - Chạy mô hình Prophet để dự báo và Z-Score để cảnh báo bất thường.
-5. **Phân phối (Distribution)**: API cho Frontend React hiển thị Dashboard và Admin Panel.
+- `overview stats`
+- top disease theo mốc thời gian
+- heatmap địa danh trên bản đồ Việt Nam
+- stacked trend và interest trend theo bệnh
+- z-score spike detection
+- forecast xu hướng bằng Prophet
+- keyword diversity / keyword z-score
+- xuất Word report
+- xuất Excel theo biểu mẫu EBS
+- gửi email báo cáo qua Mailtrap
 
-### 3.2. Chế độ phân quyền (RBAC)
+### 2.6. Alert cá nhân và lịch gửi báo cáo
 
-- **Admin**: Quản lý toàn bộ hệ thống (User, RSS Sources, Keywords, Whitelist).
-- **User (Operator)**: Chạy Scan, duyệt bài viết chưa xác thực, xem báo cáo phân tích.
+Người dùng hiện có thể:
+
+- tạo nhiều `UserAlert` theo keyword và địa bàn
+- xem feed bài viết khớp với từng alert
+- bookmark bài viết để xem lại
+- cấu hình email cá nhân
+- chọn lịch gửi `hourly`, `daily`, `weekly`
+- chọn nhận báo cáo toàn hệ thống hoặc theo một alert cụ thể
+
+## 3. Kiến trúc hiện tại
+
+### 3.1. Luồng backend
+
+1. Người dùng đăng nhập để lấy JWT
+2. Admin quản trị keyword, RSS source, user, scheduler và email config
+3. Khi scan chạy:
+   - load keyword active
+   - load RSS source active
+   - parse feed
+   - filter bằng regex/context
+   - LLM re-check nếu bật
+   - trích xuất disease/location/case count
+   - resolve article -> event
+   - lưu article, event, disease case
+4. Module stats đọc dữ liệu đã lưu để trả dashboard
+5. Module report dựng file Word/Excel và gửi email
+
+### 3.2. Luồng frontend
+
+Màn hình chính hiện có các tab:
+
+- `Tổng quan`
+- `Tin tức`
+- `Phân tích`
+- `Báo cáo tự động`
+- `Cảnh báo`
+- `Bookmark` (đi từ menu người dùng)
+
+Admin panel hiện có:
+
+- quản lý tài khoản
+- quản lý article
+- quản lý keyword và RSS source
+- cấu hình scheduler / manual scan
+- cấu hình email gửi báo cáo
+
+### 3.3. Luồng scheduler
+
+1. FastAPI startup -> khởi động APScheduler
+2. Scheduler đọc `scheduler_config`
+3. Theo chu kỳ cấu hình, hệ thống auto scan từ `last_run_at` đến `now`
+4. Kết quả scan cập nhật:
+   - `last_run_at`
+   - `next_run_at`
+   - `last_run_saved_count`
+5. Nếu user có lịch email, scheduler đăng ký thêm job gửi báo cáo cá nhân
 
 ## 4. Cấu trúc thư mục
 
 ```text
 .
 ├── backend
-│   ├── alembic/            # Database migrations
+│   ├── alembic
 │   ├── app
-│   │   ├── core/           # Security, Code base, Logger
+│   │   ├── core
+│   │   │   ├── database.py
+│   │   │   └── logger.py
 │   │   ├── modules
-│   │   │   ├── admin/      # Quản lý User, RSS Sources
-│   │   │   ├── auth/       # JWT, Security logic
-│   │   │   └── news/       # Crawler, Stats, Models, CRUD
-│   │   └── main.py         # FastAPI routes & entry point
+│   │   │   ├── admin
+│   │   │   ├── auth
+│   │   │   ├── news
+│   │   │   └── report
+│   │   ├── main.py
+│   │   └── scheduler.py
 │   ├── requirements.txt
-│   └── scripts/            # Debug tools
+│   └── scripts
 ├── frontend
+│   ├── public
 │   ├── src
-│   │   ├── components/     # UI Components (shadcn/ui)
-│   │   ├── contexts/       # AuthContext, ThemeContext
-│   │   ├── pages/          # Dashboard, Analytics, Admin
-│   │   └── services/       # API calling (Axios hooks)
+│   │   ├── components
+│   │   ├── contexts
+│   │   └── pages
+│   ├── package.json
+│   └── vite.config.ts
+├── docs
+│   └── feature-crawl-data-expansion.md
 ├── docker-compose.yml
 └── .env
 ```
@@ -176,44 +230,137 @@ Mỗi article hiện lưu thêm:
 ## 5. Các thành phần quan trọng
 
 ### 5.1. `backend/app/modules/news/crawler.py`
-Core logic của hệ thống:
-- Sử dụng `SentenceTransformer` (MiniLM-L12-v2) để tính tương đồng văn bản.
-- Tự động bóc tách Sapo từ các báo VN (VnExpress, Tuổi Trẻ, Thanh Niên...).
-- Quản lý cooldown khi gọi LLM bị rate limit hoặc timeout.
+
+Chứa logic chính:
+
+- parse RSS feeds
+- chuẩn hóa text
+- regex/context scoring
+- LLM re-check
+- cooldown khi provider lỗi
+- similarity scoring để ghép event
+- resolve article -> event
+- scan và lưu dữ liệu
 
 ### 5.2. `backend/app/modules/news/stats.py`
-Nơi thực hiện các phân tích nâng cao:
-- **Z-Score Spike Detection**: Tìm các ngày có số bài viết tăng đột biến so với trung bình 14 ngày trước đó.
-- **Prophet Forecast**: Sử dụng thư viện Prophet của Meta để dự báo số ca mắc trong 7-30 ngày tới.
-- **Heatmap Logic**: Tính toán mật độ dịch bệnh theo địa phương và thời gian.
 
-### 5.3. `backend/app/modules/auth/security.py`
-Xử lý bảo mật:
-- Băm mật khẩu bằng `passlib` (bcrypt).
-- Tạo và xác thực JWT token.
-- Middleware kiểm tra quyền hạn (Admin/User).
+Chứa logic thống kê phục vụ dashboard:
 
-## 6. API chính của hệ thống
+- overview stats
+- top disease
+- heatmap theo địa danh
+- stacked trends / interest trends
+- z-score spikes
+- forecast
 
-### Xác thực & Người dùng
-- `POST /api/auth/login`: Đăng nhập nhận token.
-- `GET /api/admin/users`: (Admin) Danh sách tài khoản.
+### 5.3. `backend/app/scheduler.py`
 
-### Giám sát & Bài viết
-- `POST /api/scan`: Chạy tiến trình crawl tin tức.
-- `GET /api/articles`: Danh sách bài viết toàn hệ thống (phân trang).
-- `GET /api/events`: Danh sách các sự kiện dịch tễ đã được gom nhóm.
+Chứa logic vận hành nền:
 
-### Phân tích (Analytics)
-- `GET /api/stats/overview`: Chỉ số tổng hợp (Top bệnh, số ca, lượt cảnh báo).
-- `GET /api/stats/zscore`: Dữ liệu phát hiện đột biến.
-- `GET /api/stats/forecast`: Dữ liệu dự báo AI.
-- `GET /api/stats/heatmap`: Mật độ địa bàn.
+- APScheduler bootstrap
+- auto scan theo chu kỳ
+- manual run từ admin panel
+- đăng ký lịch gửi email cá nhân
 
-### Quản trị (Admin)
-- `GET /api/rss-sources`: Quản lý danh sách nguồn tin.
-- `POST /api/keywords`: Quản lý bộ từ khóa giám sát.
-- `POST /api/whitelist`: Quản lý domain tin cậy.
+### 5.4. `backend/app/modules/report`
+
+Chứa pipeline báo cáo:
+
+- `generator.py`: gom dữ liệu báo cáo
+- `docx_builder.py`: dựng file Word
+- `excel_builder.py`: dựng file Excel EBS
+- `email_sender.py`: gửi email qua Mailtrap
+
+### 5.5. `frontend/src/components`
+
+Các màn hình vận hành chính:
+
+- `DashboardOverview.tsx`
+- `KeywordMonitoring.tsx`
+- `DataAnalysis.tsx`
+- `AlertsPage.tsx`
+- `admin/ResourceManagement.tsx`
+- `admin/SchedulerConfig.tsx`
+
+## 6. API hiện có
+
+### Auth
+
+- `POST /api/auth/login`
+- `GET /api/auth/me`
+- `PUT /api/auth/me`
+- `POST /api/auth/me/send-report-now`
+
+### Keywords
+
+- `GET /api/keywords`
+- `POST /api/keywords`
+- `PUT /api/keywords/{keyword_id}`
+- `PATCH /api/keywords/{keyword_id}/toggle`
+- `DELETE /api/keywords/{keyword_id}`
+
+### RSS Sources
+
+- `GET /api/rss-sources`
+- `POST /api/rss-sources`
+- `PATCH /api/rss-sources/{source_id}/toggle`
+- `DELETE /api/rss-sources/{source_id}`
+
+### Scan / Scheduler
+
+- `POST /api/scan`
+- `GET /api/scan-status`
+- `GET /api/scheduler/status`
+- `PUT /api/scheduler/config`
+- `POST /api/scheduler/run-now`
+
+### Articles / Events / Bookmarks
+
+- `GET /api/articles`
+- `POST /api/articles/save`
+- `DELETE /api/articles/{article_id}`
+- `GET /api/events`
+- `GET /api/events/{event_id}`
+- `POST /api/bookmarks/{article_id}`
+- `DELETE /api/bookmarks/{article_id}`
+- `GET /api/bookmarks`
+
+### Stats
+
+- `GET /api/stats/overview`
+- `GET /api/stats/trends`
+- `GET /api/stats/top-diseases`
+- `GET /api/stats/heatmap`
+- `GET /api/stats/interest-trends`
+- `GET /api/stats/stacked-trends`
+- `GET /api/stats/zscore`
+- `GET /api/stats/keyword-timeseries`
+- `GET /api/stats/keyword-zscore`
+- `GET /api/stats/forecast`
+
+### Alerts
+
+- `GET /api/alerts`
+- `POST /api/alerts`
+- `PUT /api/alerts/{alert_id}`
+- `DELETE /api/alerts/{alert_id}`
+- `GET /api/alerts/{alert_id}/feed`
+
+### Reports
+
+- `POST /api/report/generate`
+- `POST /api/report/export-excel`
+- `POST /api/report/send-email`
+- `GET /api/report/email-config`
+- `PUT /api/report/email-config`
+
+### Admin Users
+
+- `GET /api/admin/users`
+- `POST /api/admin/users`
+- `PUT /api/admin/users/{user_id}`
+- `PUT /api/admin/users/{user_id}/status`
+- `DELETE /api/admin/users/{user_id}`
 
 ## 7. Model dữ liệu nghiệp vụ
 
@@ -255,72 +402,98 @@ Thông tin nổi bật:
 - `severity`
 - `fingerprint`
 
+### 7.4. Tài nguyên và vận hành
+
+Các bảng vận hành chính:
+
+- `Keyword`
+- `RssSource`
+- `SchedulerConfig`
+- `EmailConfig`
+- `User`
+- `UserAlert`
+- `UserBookmark`
+
 ## 8. Quyết định kỹ thuật quan trọng
 
-### 8.1. Vì sao không hard dedupe article
+### 8.1. Vì sao vẫn giữ article riêng, nhưng thống kê theo event
 
 Nếu nhiều báo cùng đưa tin:
 
-- có thể là cùng event
-- nhưng khác góc nhìn
-- khác số liệu cập nhật
-- khác mức xác nhận
+- mỗi article vẫn có giá trị nguồn riêng
+- thông tin case/location có thể cập nhật khác nhau
+- nhưng thống kê vận hành nên nhìn theo event để giảm nhiễu
 
-Nên hiện tại:
+### 8.2. Vì sao trusted source dựa trên `rss_sources`
 
-- article vẫn được giữ riêng
-- thống kê nghiệp vụ nên dựa vào event
+Trusted domain hiện được suy ra từ danh sách RSS source đang active.
 
-### 8.2. Vì sao similarity score chưa quá phức tạp
+Ưu điểm:
 
-Project đang ở mức pragmatic:
+- admin quản lý nguồn ngay trên UI
+- crawler không còn phụ thuộc constant hardcode
+- thay đổi nguồn không cần sửa code
 
-- chưa dùng embedding/vector search
-- chưa crawl full-content một cách ổn định
-- chưa có ranking pipeline riêng
+Giới hạn:
 
-Nên scoring hiện tại ưu tiên:
+- hiện mới bao phủ tốt cho mô hình RSS
+- chưa phải source registry tổng quát cho nhiều adapter
 
-- dễ hiểu
-- dễ debug
-- dễ tune threshold
+### 8.3. Vì sao LLM re-check vẫn là tùy chọn
 
-### 8.3. Vì sao chưa dùng migration framework
+Project đang cần giữ scan ổn định trong môi trường dev/demo:
 
-Hiện project đang chạy theo hướng dev/demo nhanh:
+- regex/context filter xử lý phần lớn false positive
+- LLM chỉ là lớp tăng độ chính xác
+- có thể tắt hoàn toàn khi không có key/model hoặc khi cần chạy rẻ/nhanh
 
-- `Base.metadata.create_all()`
-- cộng với `ensure_news_schema()` để vá schema cũ
+### 8.4. Trạng thái migration
 
-Đây không phải cách nên dùng lâu dài ở production, nhưng phù hợp để tiếp tục phát triển nhanh trong giai đoạn hiện tại.
+Project hiện đã có `alembic` trong `backend/alembic`.
 
-## 9. Tính năng UI nổi bật
+Thực tế triển khai hiện nay:
 
-### 9.1. Tab Giám sát bài viết
-- Chạy Scan đa tầng với tùy chọn **Quét nguồn chưa xác thực**.
-- Quản lý bộ từ khóa động (Batch create/delete).
-- Dashboard bài viết: lọc theo bệnh, nguồn, thời gian, trạng thái (Manual/Auto).
-- Xem chi tiết **Sự kiện (Event)**: Biết được một sự kiện dịch bệnh được đưa tin bởi những báo nào, số lượng ca mắc cộng dồn thế nào.
+- dùng migration để cập nhật schema
+- startup sẽ seed default keywords và RSS sources nếu chưa có dữ liệu
 
-### 9.2. Tab Phân tích nâng cao
-- **Phát hiện đột biến**: Biểu đồ Z-Score trực quan, tự động đánh dấu các ngày có số bài tăng vọt (Danger/Alert).
-- **Dự báo xu hướng**: Sử dụng AI dự báo ngưỡng lây lan trong tương lai.
-- **Bản đồ địa bàn**: Heatmap hiển thị ổ dịch theo tỉnh thành.
+## 9. Tính năng UI đã làm
 
-### 9.3. Tab Quản trị hệ thống
-- Quản trị người dùng: Tạo tài khoản, đổi mật khẩu, phân quyền.
-- Quản trị nguồn tin: Bật/tắt các RSS feeds, thêm nguồn mới vào hệ thống mà không cần sửa code.
-- Quản trị Whitelist: Định nghĩa các domain tin cậy để tự động lưu bài.
+### 9.1. Giao diện người dùng
+
+Trong app chính, hiện đã có:
+
+- dashboard tổng quan với biểu đồ và bản đồ
+- danh sách bài viết đã lưu
+- search/filter/sort/pagination cho article
+- xem danh sách event và article trong từng event
+- bookmark bài viết
+- alert cá nhân
+- phân tích z-score / forecast / keyword diversity
+- tab báo cáo tự động
+- cấu hình email cá nhân và lịch nhận báo cáo
+
+### 9.2. Giao diện quản trị
+
+Trong admin panel, hiện đã có:
+
+- quản lý tài khoản
+- thêm/sửa/xóa/bật/tắt keyword
+- thêm/xóa/bật/tắt RSS source
+- xem và xóa article
+- bật/tắt auto scan
+- đổi chu kỳ scheduler
+- chạy manual scan theo khoảng ngày
+- cấu hình Mailtrap cho báo cáo
 
 ## 10. Cách chạy local
 
-## 10.1. Yêu cầu
+### 10.1. Yêu cầu
 
 - Python 3.12+
 - Node.js 18+
 - Docker + Docker Compose
 
-## 10.2. Biến môi trường
+### 10.2. Biến môi trường
 
 Project đọc `.env` ở root repo.
 
@@ -332,30 +505,63 @@ DB_PORT=3306
 DB_NAME=EpiScoutDB
 DB_USER=epi_scout
 DB_PASSWORD=epi_scout_dev_pw
+SECRET_KEY=change-me-in-production
 ```
 
-## 10.3. Chạy database
+Có thể dùng `DATABASE_URL` thay cho bộ biến DB rời.
+
+### 10.3. Chạy hạ tầng local
 
 ```bash
 docker compose up -d
 docker compose ps
 ```
 
-## 10.4. Chạy backend
+Services mặc định:
+
+- MySQL: `localhost:3306`
+- Qdrant: `localhost:6333`
+
+### 10.4. Cài backend
+
+```bash
+python -m venv .venv
+```
+
+Windows:
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+pip install -r backend\requirements.txt
+```
+
+Linux/macOS:
+
+```bash
+source .venv/bin/activate
+pip install -r backend/requirements.txt
+```
+
+### 10.5. Chạy migration
 
 ```bash
 cd backend
-python3 -m venv venv
-venv/bin/pip install -r requirements.txt
-cd /path/to/epi-scout-ai-main
-backend/venv/bin/python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000
+alembic upgrade head
+cd ..
+```
+
+### 10.6. Chạy backend
+
+```bash
+python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
 Backend mặc định:
 
 - `http://127.0.0.1:8000`
+- `http://127.0.0.1:8000/docs`
 
-## 10.5. Chạy frontend
+### 10.7. Chạy frontend
 
 ```bash
 cd frontend
@@ -369,89 +575,55 @@ Frontend mặc định:
 
 Trong dev mode, request `/api` được proxy về backend.
 
-## 11. Các lỗi đã gặp và đã xử lý
+## 11. Các cấu hình đáng chú ý
 
-### 11.1. Quét xong nhưng lưu bài thủ công bị `422`
+### 11.1. Database
 
-Nguyên nhân:
+- hỗ trợ `DATABASE_URL`
+- nếu không có, backend tự build kết nối MySQL từ `DB_SERVER`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`
 
-- frontend từng gửi cả mảng article vào endpoint chỉ nhận một article
+### 11.2. Auth
 
-Đã xử lý:
+- `SECRET_KEY`
+- JWT expiry mặc định 7 ngày
 
-- frontend giờ lưu từng bài riêng lẻ
+### 11.3. LLM Re-check
 
-### 11.2. Add whitelist bị `400 Bad Request`
+- `LLM_RECHECK_ENABLED`
+- `LLM_RECHECK_MODEL`
+- `OPENAI_API_KEY`
+- `OPENAI_BASE_URL`
+- `LLM_RECHECK_TIMEOUT_SECONDS`
+- `LLM_RECHECK_RATE_LIMIT_COOLDOWN_SECONDS`
+- `LLM_RECHECK_TIMEOUT_COOLDOWN_SECONDS`
 
-Nguyên nhân:
+### 11.4. Email report
 
-- backend reject domain đã tồn tại
+Cấu hình Mailtrap hiện lưu trong DB qua admin UI, không nằm trong `.env` mặc định.
 
-Đã xử lý:
+## 12. Tài liệu liên quan
 
-- endpoint whitelist giờ idempotent
+- thiết kế mở rộng nguồn crawl: [`docs/feature-crawl-data-expansion.md`](docs/feature-crawl-data-expansion.md)
 
-### 11.3. Modal unknown source không scroll
+## 13. Lệnh hay dùng
 
-Nguyên nhân:
-
-- thiếu `overflow/min-h` đúng trong flex layout
-
-Đã xử lý:
-
-- sửa layout `DialogContent` + `ScrollArea`
-
-### 11.4. Summary hiện nguyên HTML
-
-Nguyên nhân:
-
-- RSS summary chứa HTML nhưng trước đó chưa strip tag
-
-Đã xử lý:
-
-- strip HTML tag ở `normalize_text()`
-
-### 11.5. LLM bị timeout / `429`
-
-Đã xử lý:
-
-- cooldown theo timeout/rate limit
-- skip tạm LLM thay vì spam request lỗi
-
-## 12. Hạn chế hiện tại
-
-- Schema migration đang trong quá trình chuẩn hóa toàn bộ qua Alembic (vẫn còn một số bảng cũ chưa migrate hết).
-- Dự báo AI yêu cầu lượng dữ liệu lịch sử tối thiểu 90 ngày để đạt độ chính xác cao.
-- Crawler chưa hỗ trợ JavaScript Rendering (không crawl được bài viết ở các trang SPA).
-- Hệ thống thông báo (Notification) chưa được triển khai qua Email/Zalo.
-
-## 13. Hướng phát triển tiếp theo
-
-1. **Crawler Support**: Thêm adapter cho Google News API và Sitemap.
-2. **Notification Module**: Gửi cảnh báo ngay khi Z-Score phát hiện đột biến nguy hiểm.
-3. **Multi-language Support**: Hỗ trợ giám sát các báo quốc tế (tiếng Anh).
-4. **Export Report**: Xuất báo cáo dịch tễ định kỳ (PDF/Excel) tự động.
-5. **Mobile View**: Tối ưu hóa UI Dashboard cho thiết bị di động.
-
-## 14. Tài liệu liên quan
-
-- thiết kế mở rộng nguồn crawl: [`docs/feature-crawl-data-expansion.md`](/home/suno/Github/epi-scout-ai-main/docs/feature-crawl-data-expansion.md)
-
-## 15. Lệnh hay dùng
-
-Chạy DB:
+Chạy hạ tầng:
 
 ```bash
 docker compose up -d
 ```
 
+Chạy migration:
+
+```bash
+cd backend
+alembic upgrade head
+```
+
 Chạy backend:
 
 ```bash
-linux: backend/venv/bin/python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000
-windows: .\backend\venv\Scripts\python.exe -m uvicorn backend.main:app --host 127.0.0.1 --port 8000
-venv: .\backend\venv\Scripts\Activate.ps1
-      uvicorn backend.main:app --host 127.0.0.1 --port 8000
+python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
 Chạy frontend:
@@ -471,12 +643,5 @@ npm run build
 Kiểm tra RSS:
 
 ```bash
-Linux: backend/venv/bin/python backend/scripts/debug_rss.py
-Windows: backend\venv\Scripts\python.exe backend/scripts/debug_rss.py
-```
-
-Compile nhanh backend:
-
-```bash
-python3 -m py_compile backend/app/main.py backend/app/modules/news/models.py backend/app/modules/news/crud.py backend/app/modules/news/crawler.py backend/app/modules/news/schemas.py
+python backend/scripts/debug_rss.py
 ```
