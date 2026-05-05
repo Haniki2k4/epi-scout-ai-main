@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from typing import List
 from datetime import datetime
 import re
+import os
 from .core import database
 from .core.database import get_db, Base, engine
 from .core.logger import get_logger
@@ -67,12 +68,19 @@ app.include_router(admin_scheduler_router.router)
 app.include_router(report_router.router)
 
 # CORS configuration
-origins = [
+# Đọc từ env CORS_ORIGINS (dạng comma-separated), fallback về localhost khi dev
+_cors_env = os.environ.get("CORS_ORIGINS", "")
+_default_origins = [
     "http://localhost:5173",
     "http://localhost:8080",
     "http://127.0.0.1:5173",
     "http://127.0.0.1:8080",
 ]
+origins = (
+    [o.strip() for o in _cors_env.split(",") if o.strip()]
+    if _cors_env
+    else _default_origins
+)
 
 app.add_middleware(
     CORSMiddleware,
