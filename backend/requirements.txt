@@ -21,3 +21,5 @@ APScheduler
 openpyxl
 python-docx
 httpx
+PyJWT
+bcrypt
