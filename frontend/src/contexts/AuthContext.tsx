@@ -80,6 +80,12 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
           Authorization: `Bearer ${token}`
         };
       }
+      // Add ngrok bypass header for ALL requests
+      init = init || {};
+      init.headers = {
+        ...init.headers,
+        "ngrok-skip-browser-warning": "true"
+      };
       const response = await originalFetch(resolvedInput, init);
       // Auto logout on 401 Unauthorized (unless it's the login endpoint)
       if (response.status === 401 && !url.includes('/api/auth/login')) {
