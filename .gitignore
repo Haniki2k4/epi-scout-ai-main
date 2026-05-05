@@ -35,3 +35,6 @@ __pycache__/
 venv/
 .venv/
 
+# Scratch
+scratch/
+docs/draft.ini

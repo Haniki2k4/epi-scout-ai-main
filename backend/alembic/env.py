@@ -22,6 +22,7 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from app.core.database import engine, DB_USER, DB_PASSWORD, SERVER_NAME, DB_PORT, DATABASE_NAME
 from app.modules.news.models import Base
+from app.modules.auth.models import User, UserAlert  # import to register metadata
 
 # Construct raw url for offline mode without obfuscation
 raw_url = f"mysql+pymysql://{DB_USER}:{DB_PASSWORD}@{SERVER_NAME}:{DB_PORT}/{DATABASE_NAME}"

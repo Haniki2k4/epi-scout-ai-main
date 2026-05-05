@@ -22,23 +22,27 @@ class ArticleCreate(ArticleBase):
 
 class ArticleDTO(ArticleBase):
     id: int
+    cases: List["DiseaseCaseDTO"] = []
     class Config:
         from_attributes = True
 
-class WhitelistBase(BaseModel):
-    domain: str
-    is_active: bool = True
+class PaginatedArticles(BaseModel):
+    items: List[ArticleDTO]
+    total: int
+    skip: int
+    limit: int
 
-class WhitelistCreate(WhitelistBase):
-    pass
-
-class WhitelistDTO(WhitelistBase):
-    id: int
+class DiseaseCaseDTO(BaseModel):
+    disease_name: str
+    case_count: int
+    location: Optional[str] = None
     class Config:
         from_attributes = True
 
+# Update forward references if needed, but strings work fine in Pydantic v2
 class KeywordBase(BaseModel):
     text: str
+    is_active: bool = True
 
 class KeywordCreate(KeywordBase):
     pass
@@ -49,13 +53,14 @@ class KeywordDTO(KeywordBase):
         from_attributes = True
 
 class ScanRequest(BaseModel):
-    fetch_unknown: bool = False # If true, also returns unknown articles
     start_date: Optional[datetime] = None
     end_date: Optional[datetime] = None
+    keywords_to_scan: Optional[List[str]] = None  # None = dùng hết từ DB, [] = quét hết, ["x","y"] = lọc
 
 class ScanResult(BaseModel):
     saved_trusted_count: int
-    unknown_articles: List[ArticleBase]
+    execution_time: Optional[float] = None
+    disease_counts: Optional[dict] = None  # {"sốt xuất huyết": 3, "tay chân miệng": 1}
 
 
 class NewsEventBase(BaseModel):
@@ -88,3 +93,18 @@ class NewsEventDetailDTO(NewsEventBase):
 
     class Config:
         from_attributes = True
+
+
+class RssSourceCreate(BaseModel):
+    url: str
+    label: Optional[str] = None
+    category: Optional[str] = None
+    is_active: bool = True
+
+class RssSourceDTO(RssSourceCreate):
+    id: int
+    class Config:
+        from_attributes = True
+
+class RssSourceToggleRequest(BaseModel):
+    is_active: bool

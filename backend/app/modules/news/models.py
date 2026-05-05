@@ -103,19 +103,47 @@ class DiseaseCase(Base):
     
     article = relationship("ArticleIdentity", back_populates="cases")
 
-class WhitelistDomain(Base):
-    __tablename__ = "whitelist_domains"
 
-    id = Column(Integer, primary_key=True, index=True)
-    domain = Column(String(255), unique=True, index=True)
-    is_active = Column(Boolean, default=True)
 
 class Keyword(Base):
     __tablename__ = "keywords"
 
     id = Column(Integer, primary_key=True, index=True)
     text = Column(Unicode(255), unique=True, index=True) # Support Vietnamese keywords
+    is_active = Column(Boolean, default=True)             # Admin can disable keywords
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+class RssSource(Base):
+    __tablename__ = "rss_sources"
 
+    id = Column(Integer, primary_key=True, index=True)
+    url = Column(String(767), unique=True, index=True, nullable=False)
+    label = Column(Unicode(255), nullable=True)    # Tên tờ báo / kênh
+    category = Column(String(100), nullable=True)  # e.g. suc-khoe, the-gioi, global
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class SchedulerConfig(Base):
+    """Cấu hình Auto Crawler Scheduler - chỉ có 1 bản ghi (id=1)"""
+    __tablename__ = "scheduler_config"
+
+    id = Column(Integer, primary_key=True, default=1)
+    is_enabled = Column(Boolean, default=True)            # Bật/tắt auto-scan
+    interval_hours = Column(Integer, default=6)           # Chu kỳ quét (giờ)
+    last_run_at = Column(DateTime, nullable=True)         # Thời điểm quét lần cuối
+    next_run_at = Column(DateTime, nullable=True)         # Thời điểm quét tiếp theo
+    last_run_saved_count = Column(Integer, default=0)     # Số bài lưu lần cuối
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class EmailConfig(Base):
+    """Cấu hình gửi email qua Mailtrap API - chỉ có 1 bản ghi (id=1)"""
+    __tablename__ = "email_config"
+
+    id = Column(Integer, primary_key=True, default=1)
+    mailtrap_api_token = Column(String(255), nullable=True)  # Mailtrap API Token
+    mailtrap_inbox_id = Column(String(50), nullable=True)    # Mailtrap Inbox ID (cho Sandbox)
+    sender_email = Column(String(255), nullable=True)         # Địa chỉ gửi đi
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
