@@ -13,6 +13,8 @@ export interface Article {
   published_date: string;
   keywords_matched: string;
   is_whitelisted: boolean;
+  outbreak_relevance_score?: number;
+  is_suspected_false_positive?: boolean;
   tags?: string | null;
   event_id?: number | null;
   event_match_score?: number | null;

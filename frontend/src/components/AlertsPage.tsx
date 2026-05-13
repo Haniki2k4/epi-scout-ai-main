@@ -11,6 +11,7 @@ import {
 import { Bell, Plus, Trash2, ChevronRight, Edit2, ToggleLeft, ToggleRight, Newspaper } from "lucide-react";
 import { useToast } from "@/components/ui/use-toast";
 import { Article } from "@/types";
+import { useAlertFeedCounts } from "@/hooks/useNotificationBadge";
 
 // ---- Types ----
 interface UserAlert {
@@ -64,6 +65,11 @@ const AlertsPage = () => {
   const [feed, setFeed] = useState<AlertFeed | null>(null);
   const [loadingFeed, setLoadingFeed] = useState(false);
   const [loadingAlerts, setLoadingAlerts] = useState(true);
+  const [viewedAlertIds, setViewedAlertIds] = useState<number[]>([]);
+
+  // Badge số bài báo trên từng bộ lọc
+  const alertIds = alerts.map((a) => a.id);
+  const feedCounts = useAlertFeedCounts(alertIds, true);
 
   // Dialog tạo/chỉnh sửa
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -173,6 +179,10 @@ const AlertsPage = () => {
     try {
       const data = await API.getAlertFeed(alert.id);
       setFeed(data);
+      // Đánh dấu đã xem để ẩn badge
+      if (!viewedAlertIds.includes(alert.id)) {
+        setViewedAlertIds(prev => [...prev, alert.id]);
+      }
     } catch {
       toast({ title: "Lỗi", description: "Không thể tải feed bài báo", variant: "destructive" });
     } finally {
@@ -224,7 +234,14 @@ const AlertsPage = () => {
                 <CardHeader className="pb-2 pt-4 px-4">
                   <div className="flex items-start justify-between gap-2">
                     <div className="flex-1 min-w-0">
-                      <CardTitle className="text-sm font-semibold truncate">{alert.name}</CardTitle>
+                      <CardTitle className="text-sm font-semibold truncate flex items-center gap-1.5">
+                        <span className="truncate">{alert.name}</span>
+                        {feedCounts[alert.id] !== undefined && feedCounts[alert.id] > 0 && !viewedAlertIds.includes(alert.id) && (
+                          <Badge variant="default" className="text-[10px] h-4 px-1.5 rounded-full shrink-0">
+                            {feedCounts[alert.id] > 99 ? "99+" : feedCounts[alert.id]}
+                          </Badge>
+                        )}
+                      </CardTitle>
                       {alert.location_filter && (
                         <CardDescription className="text-xs mt-0.5">📍 {alert.location_filter}</CardDescription>
                       )}

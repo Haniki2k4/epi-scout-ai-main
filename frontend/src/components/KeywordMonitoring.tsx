@@ -5,11 +5,14 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Search, Plus, X, Play, Pause, Download, Settings, Trash2, CheckSquare, Square, ChevronLeft, ChevronRight, Bookmark, BookmarkCheck } from "lucide-react";
+import { Search, Plus, X, Play, Pause, Download, Settings, Trash2, CheckSquare, Square, ChevronLeft, ChevronRight, Bookmark, BookmarkCheck, Check, ChevronsUpDown } from "lucide-react";
 import { useToast } from "@/components/ui/use-toast";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
+import { cn, isDomestic } from "@/lib/utils";
 import { Article, Keyword, NewsEvent, NewsEventDetail } from "@/types";
 
 const SCAN_STATE_KEY = "epi_scout_scan_state";
@@ -40,6 +43,9 @@ const KeywordMonitoring = () => {
   const articlePageSize = 20;
   const [eventPage, setEventPage] = useState(1);
   const eventPageSize = 20;
+
+  // Combobox state
+  const [keywordOpen, setKeywordOpen] = useState(false);
 
   // Bookmarks
   const [bookmarkedArticleIds, setBookmarkedArticleIds] = useState<Set<number>>(new Set());
@@ -398,19 +404,63 @@ const KeywordMonitoring = () => {
                   ))}
                 </SelectContent>
               </Select>
-              <Select value={articleKeywordFilter} onValueChange={setArticleKeywordFilter}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Lọc theo keyword" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">Tất cả keyword</SelectItem>
-                  {articleKeywords.map((keyword) => (
-                    <SelectItem key={keyword} value={keyword}>
-                      {keyword}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              
+              <Popover open={keywordOpen} onOpenChange={setKeywordOpen}>
+                <PopoverTrigger asChild>
+                  <Button
+                    variant="outline"
+                    role="combobox"
+                    aria-expanded={keywordOpen}
+                    className="w-full justify-between font-normal text-muted-foreground"
+                  >
+                    {articleKeywordFilter === "all"
+                      ? "Lọc theo keyword"
+                      : articleKeywordFilter}
+                    <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-full p-0 min-w-[200px]">
+                  <Command>
+                    <CommandInput placeholder="Tìm kiếm keyword..." />
+                    <CommandList>
+                      <CommandEmpty>Không tìm thấy keyword.</CommandEmpty>
+                      <CommandGroup>
+                        <CommandItem
+                          onSelect={() => {
+                            setArticleKeywordFilter("all");
+                            setKeywordOpen(false);
+                          }}
+                        >
+                          <Check
+                            className={cn(
+                              "mr-2 h-4 w-4",
+                              articleKeywordFilter === "all" ? "opacity-100" : "opacity-0"
+                            )}
+                          />
+                          Tất cả keyword
+                        </CommandItem>
+                        {articleKeywords.map((keyword) => (
+                          <CommandItem
+                            key={keyword}
+                            onSelect={() => {
+                              setArticleKeywordFilter(keyword);
+                              setKeywordOpen(false);
+                            }}
+                          >
+                            <Check
+                              className={cn(
+                                "mr-2 h-4 w-4",
+                                articleKeywordFilter === keyword ? "opacity-100" : "opacity-0"
+                              )}
+                            />
+                            {keyword}
+                          </CommandItem>
+                        ))}
+                      </CommandGroup>
+                    </CommandList>
+                  </Command>
+                </PopoverContent>
+              </Popover>
               <Select value={articleSort} onValueChange={setArticleSort}>
                 <SelectTrigger>
                   <SelectValue placeholder="Sắp xếp" />
@@ -502,16 +552,25 @@ const KeywordMonitoring = () => {
                             )}
                           </h4>
                           <p className="text-sm text-muted-foreground mt-1 flex items-center gap-2 flex-wrap">
-                            <span>{article.source}</span>
+                            <span className="font-medium text-foreground">{article.source}</span>
                             <span>•</span>
                             <span>{new Date(article.published_date).toLocaleString('vi-VN')}</span>
+                            <span>•</span>
+                            {isDomestic(article.link, article.source) ? (
+                              <Badge variant="outline" className="text-[10px] text-blue-600 border-blue-200 bg-blue-50/50">Trong nước</Badge>
+                            ) : (
+                              <Badge variant="outline" className="text-[10px] text-emerald-600 border-emerald-200 bg-emerald-50/50">Quốc tế</Badge>
+                            )}
+                            
                             {article.cases && article.cases.length > 0 && (
-                              article.cases.filter(c => c.case_count > 0).map((c, i) => (
-                                <span key={i} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300 border border-red-200 dark:border-red-800">
-                                  {c.disease_name}: {c.case_count.toLocaleString()} ca
-                                  {c.location && c.location.toLowerCase() !== "unknown" ? ` (${c.location})` : ''}
-                                </span>
-                              ))
+                              <span className="ml-2 flex items-center gap-2 flex-wrap">
+                                {article.cases.filter(c => c.case_count > 0).map((c, i) => (
+                                  <span key={i} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300 border border-red-200 dark:border-red-800">
+                                    {c.disease_name}: {c.case_count.toLocaleString()} ca
+                                    {c.location && c.location.toLowerCase() !== "unknown" ? ` (${c.location})` : ''}
+                                  </span>
+                                ))}
+                              </span>
                             )}
                           </p>
                         </div>

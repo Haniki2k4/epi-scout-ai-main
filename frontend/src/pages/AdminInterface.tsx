@@ -1,16 +1,52 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useAuth } from "@/contexts/AuthContext";
 import { Link } from "react-router-dom";
-import { Activity, ArrowLeft, Users, Shield, Database, Clock, Mail } from "lucide-react";
+import { Activity, ArrowLeft, Users, Shield, Database, Clock, Mail, CheckCircle } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import UserManagement from "@/components/admin/UserManagement";
+import EvaluationManagement from "@/components/admin/EvaluationManagement";
 import ArticleManagement from "@/components/admin/ArticleManagement";
 import ResourceManagement from "@/components/admin/ResourceManagement";
 import SchedulerConfig from "@/components/admin/SchedulerConfig";
 import EmailConfig from "@/components/admin/EmailConfig";
+import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+
+type LlmStatus = {
+  current_model: string;
+  circuit_state: string;
+  fallback_count_today: number;
+  primary_error_rate: number;
+  last_fallback_at?: string | null;
+};
 
 export default function AdminInterface() {
   const { user } = useAuth();
+  const [llmStatus, setLlmStatus] = useState<LlmStatus | null>(null);
+
+  // Fetch danh sách user để đếm số lượng thực tế
+  const { data: userList = [] } = useQuery<{ id: number; is_active: boolean }[]>({
+    queryKey: ["admin_users"],
+    queryFn: async () => {
+      const res = await fetch("/api/admin/users");
+      if (!res.ok) return [];
+      const data = await res.json();
+      return Array.isArray(data) ? data : [];
+    },
+  });
+  const activeUserCount = userList.filter((u) => u.is_active).length;
+
+  useEffect(() => {
+    const fetchLlmStatus = async () => {
+      try {
+        const res = await fetch("/api/admin/llm-status");
+        if (res.ok) setLlmStatus(await res.json());
+      } catch {
+        setLlmStatus(null);
+      }
+    };
+    fetchLlmStatus();
+  }, []);
 
   return (
     <div className="min-h-screen bg-background p-6">
@@ -39,35 +75,33 @@ export default function AdminInterface() {
         </div>
 
         {/* Dashboard Cards */}
-        <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+        <div className="grid gap-6 md:grid-cols-2">
           <Card>
             <CardHeader className="flex flex-row items-center justify-between pb-2">
               <CardTitle className="text-sm font-medium">Quản lý Người Dùng</CardTitle>
               <Users className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">2</div>
-              <p className="text-xs text-muted-foreground mt-1">Tài khoản đang hoạt động</p>
+              <div className="text-2xl font-bold">{activeUserCount}</div>
+              <p className="text-xs text-muted-foreground mt-1">
+                Tài khoản đang hoạt động / {userList.length} tổng cộng
+              </p>
             </CardContent>
           </Card>
           <Card>
             <CardHeader className="flex flex-row items-center justify-between pb-2">
-              <CardTitle className="text-sm font-medium">Quản lý Dữ Liệu RSS</CardTitle>
-              <Database className="h-4 w-4 text-muted-foreground" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">Active</div>
-              <p className="text-xs text-muted-foreground mt-1">Hệ thống nguồn mở</p>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between pb-2">
-              <CardTitle className="text-sm font-medium">Máy Chủ Quét</CardTitle>
+              <CardTitle className="text-sm font-medium">LLM Fallback</CardTitle>
               <Activity className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold text-green-500">Đang chạy</div>
-              <p className="text-xs text-muted-foreground mt-1">Uvicorn Backend</p>
+              <div className="text-lg font-bold truncate" title={llmStatus?.current_model}>
+                {llmStatus?.current_model || "N/A"}
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">
+                {llmStatus
+                  ? `${llmStatus.circuit_state} – fallback ${llmStatus.fallback_count_today} lần – lỗi ${(llmStatus.primary_error_rate * 100).toFixed(1)}%`
+                  : "Chưa có dữ liệu"}
+              </p>
             </CardContent>
           </Card>
         </div>
@@ -75,8 +109,9 @@ export default function AdminInterface() {
         {/* Content Tabs */}
         <div className="mt-8">
           <Tabs defaultValue="users" className="w-full">
-            <TabsList className="grid w-full grid-cols-5 max-w-[900px] mb-6">
+            <TabsList className="grid w-full grid-cols-6 max-w-[1000px] mb-6">
               <TabsTrigger value="users">Tài Khoản</TabsTrigger>
+              <TabsTrigger value="evaluation" className="gap-1.5"><CheckCircle className="h-3.5 w-3.5" /> Đánh giá LLM</TabsTrigger>
               <TabsTrigger value="articles">Bài Báo</TabsTrigger>
               <TabsTrigger value="resources">Từ Khóa &amp; RSS</TabsTrigger>
               <TabsTrigger value="scheduler" className="gap-1.5">
@@ -88,6 +123,9 @@ export default function AdminInterface() {
             </TabsList>
             <TabsContent value="users" className="mt-0">
               <UserManagement />
+            </TabsContent>
+            <TabsContent value="evaluation" className="mt-0">
+              <EvaluationManagement />
             </TabsContent>
             <TabsContent value="articles" className="mt-0">
               <ArticleManagement />

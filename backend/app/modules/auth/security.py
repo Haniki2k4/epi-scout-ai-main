@@ -17,6 +17,7 @@ ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7 # 7 days
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
+oauth2_scheme_optional = OAuth2PasswordBearer(tokenUrl="/api/auth/login", auto_error=False)
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     password_bytes = plain_password.encode('utf-8')[:72]
@@ -71,9 +72,30 @@ def get_current_user_logic(db: Session, token: str) -> User:
 def get_current_user(db: Session = Depends(get_db), token: str = Depends(oauth2_scheme)) -> User:
     return get_current_user_logic(db, token)
 
+def get_optional_user(
+    db: Session = Depends(get_db),
+    token: str | None = Depends(oauth2_scheme_optional),
+) -> User | None:
+    if not token:
+        return None
+    try:
+        user = get_current_user_logic(db, token)
+    except HTTPException:
+        return None
+    return user if user.is_active else None
+
 def get_current_active_user(current_user: User = Depends(get_current_user)) -> User:
     if not current_user.is_active:
         raise HTTPException(status_code=400, detail="Tài khoản đã bị vô hiệu hóa")
+    return current_user
+
+def require_authenticated_user(current_user: User | None = Depends(get_optional_user)) -> User:
+    if current_user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     return current_user
 
 def require_admin_role(current_user: User = Depends(get_current_active_user)) -> User:

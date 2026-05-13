@@ -45,53 +45,57 @@ def _get_or_create_config(db) -> models.SchedulerConfig:
     return config
 
 
+import asyncio
+
 async def run_scheduled_scan() -> None:
     """
     Job được APScheduler gọi định kỳ.
     Quét từ last_run_at đến now, dùng toàn bộ keyword is_active=True.
+    Chạy trong thread riêng để không block event loop (và các request đăng nhập).
     """
-    with SessionLocal() as db:
-        try:
-            config = _get_or_create_config(db)
+    def _do_scan():
+        with SessionLocal() as db:
+            try:
+                config = _get_or_create_config(db)
 
-            if not config.is_enabled:
-                logger.info("Auto-scan skipped | reason=scheduler_disabled")
-                return
+                if not config.is_enabled:
+                    logger.info("Auto-scan skipped | reason=scheduler_disabled")
+                    return
 
-            now = datetime.now(VN_TZ)
-            # Quét từ lần chạy cuối (hoặc mặc định 6h trước nếu chạy lần đầu)
-            start_date = config.last_run_at or (now - timedelta(hours=config.interval_hours))
+                now = datetime.now(VN_TZ)
+                # Quét từ lần chạy cuối (hoặc mặc định 6h trước nếu chạy lần đầu)
+                start_date = config.last_run_at or (now - timedelta(hours=config.interval_hours))
 
-            logger.info(
-                "Auto-scan started | start_date={} end_date={}",
-                start_date.strftime("%Y-%m-%d %H:%M"),
-                now.strftime("%Y-%m-%d %H:%M"),
-            )
+                logger.info(
+                    "Auto-scan started | start_date={} end_date={}",
+                    start_date.strftime("%Y-%m-%d %H:%M"),
+                    now.strftime("%Y-%m-%d %H:%M"),
+                )
 
-            # keywords_to_scan=None → crawler sẽ dùng tất cả keyword is_active=True
-            result = crawler.scan_news(
-                db=db,
-                start_date=start_date,
-                end_date=now,
-                keywords_to_scan=None,
-            )
+                # keywords_to_scan=None → crawler sẽ dùng tất cả keyword is_active=True
+                result = crawler.scan_news(
+                    db=db,
+                    start_date=start_date,
+                    end_date=now,
+                    keywords_to_scan=None,
+                )
 
-            # Cập nhật config sau khi chạy xong
-            config.last_run_at = now
-            config.last_run_saved_count = result.saved_trusted_count
-            config.next_run_at = now + timedelta(hours=config.interval_hours)
-            db.commit()
+                # Cập nhật config sau khi chạy xong
+                config.last_run_at = now
+                config.last_run_saved_count = result.saved_trusted_count
+                config.next_run_at = now + timedelta(hours=config.interval_hours)
+                db.commit()
 
-            logger.info(
-                "Auto-scan completed | saved={} next_run={}",
-                result.saved_trusted_count,
-                config.next_run_at.strftime("%Y-%m-%d %H:%M"),
-            )
+                logger.info(
+                    "Auto-scan completed | saved={} next_run={}",
+                    result.saved_trusted_count,
+                    config.next_run_at.strftime("%Y-%m-%d %H:%M"),
+                )
 
-        except Exception as e:
-            logger.error("Auto-scan failed | error={}", str(e))
-        finally:
-            db.close()
+            except Exception as e:
+                logger.error("Auto-scan failed | error={}", str(e))
+                
+    await asyncio.to_thread(_do_scan)
 
 
 async def send_personal_email_job(user_id: int) -> None:

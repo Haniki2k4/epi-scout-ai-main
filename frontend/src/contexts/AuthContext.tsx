@@ -1,5 +1,4 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 
 export interface User {
@@ -13,6 +12,8 @@ export interface User {
 interface AuthContextType {
   user: User | null;
   token: string | null;
+  role: 'guest' | 'user' | 'admin';
+  isGuest: boolean;
   isAuthenticated: boolean;
   isLoading: boolean;
   login: (token: string) => void;
@@ -88,11 +89,10 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       };
       const response = await originalFetch(resolvedInput, init);
       // Auto logout on 401 Unauthorized (unless it's the login endpoint)
-      if (response.status === 401 && !url.includes('/api/auth/login')) {
+      if (response.status === 401 && token && !url.includes('/api/auth/login')) {
         localStorage.removeItem('token');
         setToken(null);
         setUser(null);
-        window.location.href = '/login';
       }
       return response;
     };
@@ -113,7 +113,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     setToken(null);
     setUser(null);
     toast.success('Đã đăng xuất thành công');
-    window.location.href = '/login'; // Force reload and redirect to avoid stale state
+    window.location.href = '/';
   };
 
   return (
@@ -121,6 +121,8 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       value={{
         user,
         token,
+        role: user?.role ?? 'guest',
+        isGuest: !user,
         isAuthenticated: !!user,
         isLoading,
         login,

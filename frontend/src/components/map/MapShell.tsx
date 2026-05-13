@@ -52,9 +52,11 @@ export const MapShell = forwardRef<MapShellRef, MapShellProps>(({ className }, r
       pitchWithRotate: false,
     });
 
+    let hasSwitchedToFallback = false;
     map.on('error', (e) => {
       const msg = String(e?.error?.message ?? '');
-      if (msg.includes('404') || msg.includes('Failed')) {
+      if (!hasSwitchedToFallback && (msg.includes('404') || msg.includes('Failed') || msg.includes('CORS'))) {
+        hasSwitchedToFallback = true;
         console.warn('[MapShell] Primary basemap failed, switching to fallback');
         map.setStyle(BASEMAP_FALLBACK);
       }

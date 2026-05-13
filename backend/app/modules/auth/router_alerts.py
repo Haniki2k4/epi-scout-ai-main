@@ -174,6 +174,60 @@ def delete_user_alert(
     return {"status": "success", "id": alert_id}
 
 
+@router.get("/active", response_model=List[news_schemas.ArticleDTO])
+def get_active_outbreak_alerts(
+    include_filtered: bool = False,
+    skip: int = 0,
+    limit: int = 50,
+    db: Session = Depends(get_db),
+):
+    query = (
+        db.query(news_models.ArticleIdentity)
+        .options(joinedload(news_models.ArticleIdentity.cases))
+        .join(news_models.ArticleDetails, news_models.ArticleIdentity.details)
+    )
+    if include_filtered:
+        query = query.filter(news_models.ArticleDetails.is_suspected_false_positive == True)
+    else:
+        query = query.filter(
+            news_models.ArticleDetails.outbreak_relevance_score >= 3,
+            news_models.ArticleDetails.is_suspected_false_positive == False,
+        )
+    return (
+        query.order_by(
+            news_models.ArticleDetails.outbreak_relevance_score.desc(),
+            news_models.ArticleIdentity.published_date.desc(),
+        )
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
+
+
+@router.get("/important-signals", response_model=List[news_schemas.ArticleDTO])
+def get_important_signals(
+    hours: int = 24,
+    min_score: int = 2,
+    db: Session = Depends(get_db),
+):
+    """Lấy các tín hiệu cảnh báo quan trọng (score >= 2) trong N giờ qua."""
+    from datetime import timedelta
+    since = datetime.utcnow() - timedelta(hours=hours)
+    
+    query = (
+        db.query(news_models.ArticleIdentity)
+        .options(joinedload(news_models.ArticleIdentity.cases))
+        .join(news_models.ArticleDetails, news_models.ArticleIdentity.details)
+        .filter(
+            news_models.ArticleIdentity.published_date >= since,
+            news_models.ArticleDetails.outbreak_relevance_score >= min_score,
+            news_models.ArticleDetails.is_suspected_false_positive == False,
+        )
+        .order_by(news_models.ArticleDetails.outbreak_relevance_score.desc())
+    )
+    return query.all()
+
+
 @router.get("/{alert_id}/feed", response_model=AlertFeedResponse)
 def get_alert_feed(
     alert_id: int,

@@ -45,26 +45,42 @@ def top_mentions(db: Session, months: int = 1):
 
 
 def get_overview_stats(db: Session):
-    total_articles = db.query(models.ArticleIdentity).count()
+    # Tổng sự kiện dịch tễ mới trong 7 ngày
+    seven_days_ago = datetime.utcnow() - timedelta(days=7)
+    total_events_7d = db.query(models.NewsEvent).filter(models.NewsEvent.event_date >= seven_days_ago).count()
 
-    # Sum total cases tracked (using NewsEvent to deduplicate)
-    total_cases = db.query(func.sum(models.NewsEvent.case_count)).scalar() or 0
+    # Số lượng keyword (bệnh) có bài báo trong hôm nay (theo ngày đăng bài)
+    today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    keywords_today = (
+        db.query(func.count(func.distinct(models.DiseaseCase.disease_name)))
+        .join(models.ArticleIdentity, models.ArticleIdentity.id == models.DiseaseCase.article_id)
+        .filter(
+            models.ArticleIdentity.published_date >= today_start,
+            models.DiseaseCase.disease_name.isnot(None),
+            models.DiseaseCase.disease_name != ""
+        )
+        .scalar() or 0
+    )
 
-    # Count alerts (articles with 'Cảnh báo' tag)
-    alert_count = (
-        db.query(models.ArticleIdentity)
-        .join(models.ArticleDetails)
-        .filter(models.ArticleDetails.tags.like("%Cảnh báo%"))
-        .count()
+    # Số lượng keyword (bệnh) có bài báo trong 7 ngày (theo ngày đăng bài)
+    keywords_7d = (
+        db.query(func.count(func.distinct(models.DiseaseCase.disease_name)))
+        .join(models.ArticleIdentity, models.ArticleIdentity.id == models.DiseaseCase.article_id)
+        .filter(
+            models.ArticleIdentity.published_date >= seven_days_ago,
+            models.DiseaseCase.disease_name.isnot(None),
+            models.DiseaseCase.disease_name != ""
+        )
+        .scalar() or 0
     )
 
     # Bệnh được nhắc đến nhiều nhất trong 1 tháng gần nhất
     top = top_mentions(db, months=1)
 
     return {
-        "total_articles": total_articles,
-        "total_cases": total_cases,
-        "alert_count": alert_count,
+        "total_events_7d": total_events_7d,
+        "keywords_today": keywords_today,
+        "keywords_7d": keywords_7d,
         "top_disease": top["disease_name"],
         "top_disease_mentions": top["article_count"],
         "last_updated": datetime.utcnow(),
@@ -356,7 +372,17 @@ def get_zscore_spikes(db, disease_name=None, window=14, days=60):
             ma = sum(window_data) / window
             variance = sum((x - ma) ** 2 for x in window_data) / window
             std = math.sqrt(variance)
-        zscore = (cnt - ma) / std if std > 0 else 0.0
+            
+        if std > 0:
+            zscore = (cnt - ma) / std
+        else:
+            # Epsilon smoothing / spike heuristic khi variance = 0
+            if cnt > ma:
+                # Nếu có ca mắc đột biến sau 1 thời gian dài im lặng
+                zscore = 2.0 + (cnt - ma) # Đảm bảo zscore tối thiểu là 2.0 (mức alert)
+            else:
+                zscore = 0.0
+                
         spike_level = 'danger' if zscore >= 3.0 else ('alert' if zscore >= 2.0 else 'normal')
         result.append({'date': d, 'count': cnt, 'ma': round(ma, 2), 'zscore': round(zscore, 2), 'spike_level': spike_level})
     return result
@@ -395,6 +421,34 @@ def get_prophet_forecast(db, disease_name=None, horizon_days=7):
         logging.getLogger("cmdstanpy").setLevel(logging.WARNING)
         df = pd.DataFrame(historical)
         df["ds"] = pd.to_datetime(df["ds"])
+        import numpy as np
+        
+        # 1. Train/Test Split để tính Metrics
+        test_days = 14
+        metrics = {"mae": None, "rmse": None, "eval_method": "not_enough_data"}
+        
+        if len(df) > test_days * 2:
+            train_df = df.iloc[:-test_days]
+            test_df = df.iloc[-test_days:]
+            
+            # Train model riêng để evaluate
+            m_eval = Prophet(weekly_seasonality=True, yearly_seasonality=False, daily_seasonality=False)
+            m_eval.fit(train_df)
+            eval_future = m_eval.make_future_dataframe(periods=test_days)
+            eval_forecast = m_eval.predict(eval_future)
+            
+            test_yhat = eval_forecast.iloc[-test_days:]['yhat'].values
+            test_y = test_df['y'].values
+            
+            mae = np.mean(np.abs(test_y - test_yhat))
+            rmse = np.sqrt(np.mean((test_y - test_yhat)**2))
+            metrics = {
+                "mae": round(float(mae), 2),
+                "rmse": round(float(rmse), 2),
+                "eval_method": f"test_last_{test_days}_days"
+            }
+            
+        # 2. Huấn luyện model chính trên toàn bộ dữ liệu
         m = Prophet(weekly_seasonality=True, yearly_seasonality=False,
                     daily_seasonality=False, uncertainty_samples=300, interval_width=0.80)
         m.fit(df)
@@ -410,7 +464,7 @@ def get_prophet_forecast(db, disease_name=None, horizon_days=7):
             for _, row in future_only.iterrows()
         ]
         return {"historical": historical, "forecast": forecast,
-                "disease": disease_name, "horizon_days": horizon_days}
+                "disease": disease_name, "horizon_days": horizon_days, "metrics": metrics}
     except ImportError:
         return {"historical": historical, "forecast": [], "disease": disease_name,
                 "horizon_days": horizon_days,
@@ -465,8 +519,78 @@ def get_keyword_zscore_spikes(db: Session, window: int = 14, days: int = 60):
             variance = sum((x - ma) ** 2 for x in window_data) / window
             std = math.sqrt(variance)
             
-        zscore = (cnt - ma) / std if std > 0 else 0.0
+        if std > 0:
+            zscore = (cnt - ma) / std
+        else:
+            if cnt > ma:
+                zscore = 2.0 + (cnt - ma)
+            else:
+                zscore = 0.0
+                
         spike_level = 'danger' if zscore >= 3.0 else ('alert' if zscore >= 2.0 else 'normal')
         result.append({'date': d, 'count': cnt, 'ma': round(ma, 2), 'zscore': round(zscore, 2), 'spike_level': spike_level})
         
+    return result
+
+
+def get_keyword_bubble_data(db: Session, days: int = 30, window: int = 14):
+    import math
+
+    start_date = datetime.utcnow() - timedelta(days=days - 1)
+    raw = (
+        db.query(
+            func.date_format(models.DiseaseCase.report_date, "%Y-%m-%d").label("date_str"),
+            models.DiseaseCase.disease_name,
+            func.count(func.distinct(models.DiseaseCase.article_id)).label("article_count"),
+        )
+        .filter(
+            models.DiseaseCase.report_date >= start_date,
+            models.DiseaseCase.disease_name.isnot(None),
+            models.DiseaseCase.disease_name != "",
+        )
+        .group_by(
+            func.date_format(models.DiseaseCase.report_date, "%Y-%m-%d"),
+            models.DiseaseCase.disease_name,
+        )
+        .all()
+    )
+
+    dates = [(start_date + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(days)]
+    disease_names = sorted({row.disease_name for row in raw})
+    counts_by_key = {
+        (row.disease_name, row.date_str): int(row.article_count or 0)
+        for row in raw
+    }
+
+    result = []
+    for disease_name in disease_names:
+        counts = [counts_by_key.get((disease_name, date), 0) for date in dates]
+        for index, date in enumerate(dates):
+            count = counts[index]
+            if count <= 0:
+                continue
+            if index < window:
+                baseline = counts[:index]
+            else:
+                baseline = counts[index - window:index]
+            ma = sum(baseline) / max(len(baseline), 1) if baseline else 0.0
+            variance = sum((item - ma) ** 2 for item in baseline) / max(len(baseline), 1) if baseline else 0.0
+            std = math.sqrt(variance)
+            if std > 0:
+                zscore = (count - ma) / std
+            elif count > ma:
+                zscore = 2.0 + (count - ma)
+            else:
+                zscore = 0.0
+            spike_level = "danger" if zscore >= 3.0 else ("alert" if zscore >= 2.0 else "normal")
+            previous_count = counts[index - 1] if index > 0 else 0
+            growth_rate = (count - previous_count) / previous_count if previous_count > 0 else (1.0 if count > 0 else 0.0)
+            result.append({
+                "keyword": disease_name,
+                "date": date,
+                "article_count": count,
+                "zscore": round(zscore, 2),
+                "spike_level": spike_level,
+                "growth_rate": round(growth_rate, 2),
+            })
     return result
