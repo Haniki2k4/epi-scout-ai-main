@@ -673,7 +673,7 @@ const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
         <TabsList className="grid w-full grid-cols-3">
           <TabsTrigger value="zscore">Phát hiện Đột biến</TabsTrigger>
           <TabsTrigger value="forecast">Dự báo sự kiện</TabsTrigger>
-          <TabsTrigger value="diversity">Tần suất Từ khóa</TabsTrigger>
+          <TabsTrigger value="diversity">Toàn cảnh thông tin</TabsTrigger>
         </TabsList>
 
         <TabsContent value="zscore" className="space-y-6">
@@ -938,8 +938,8 @@ const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
         <TabsContent value="diversity" className="space-y-6">
           <Card>
             <CardHeader>
-              <CardTitle>Mức độ đa dạng từ khóa</CardTitle>
-              <CardDescription>Đánh giá sự lây lan và bùng phát của nhiều loại bệnh cùng lúc. Số lượng loại bệnh càng cao, mức độ đa dạng càng lớn.</CardDescription>
+              <CardTitle>Toàn cảnh thông tin và phân bố  </CardTitle>
+              <CardDescription>Theo dõi luồng tin tức tập trung vào các dịch bệnh nào theo thời gian. Hình càng lớn, mức độ quan tâm của truyền thông trong ngày đó càng cao.</CardDescription>
             </CardHeader>
             <CardContent>
               <div className="mt-4">
@@ -985,7 +985,7 @@ const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
                   <CardHeader className="py-4">
                     <CardTitle className="text-destructive flex items-center gap-2 text-base">
                       <AlertTriangle className="h-4 w-4" />
-                      Điểm Đa Dạng Bất Thường
+                      Insight
                     </CardTitle>
                   </CardHeader>
                   <CardContent className="space-y-3 pb-4">

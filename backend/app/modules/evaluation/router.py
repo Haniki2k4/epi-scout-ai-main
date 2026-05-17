@@ -34,11 +34,19 @@ class ArticleForEvaluation(BaseModel):
     event_id: Optional[int] = None
     llm_label: str          # "relevant" | "irrelevant"
     human_label: Optional[str] = None   # Nhãn thực từ ArticleEvaluation
+    keyword_is_correct: Optional[bool] = None
+    corrected_keyword: Optional[str] = None
     is_verified: bool = False
     cases: List[DiseaseCaseInfo] = []
 
     class Config:
         from_attributes = True
+
+
+class EvaluationArticlesResponse(BaseModel):
+    items: List[ArticleForEvaluation]
+    total: int
+    total_verified: int
 
 
 def _normalize_excel_key(value) -> str:
@@ -156,10 +164,11 @@ def get_metrics(db: Session = Depends(get_db)):
     return crud.get_metrics(db)
 
 
-@router.get("/articles", response_model=List[ArticleForEvaluation])
+@router.get("/articles", response_model=EvaluationArticlesResponse)
 def get_articles_for_evaluation(
     skip: int = 0,
-    limit: int = 50,
+    limit: int = 100,
+    filter_label: Optional[str] = None,
     db: Session = Depends(get_db),
     current_admin=Depends(security.require_admin_role),
 ):
@@ -173,8 +182,17 @@ def get_articles_for_evaluation(
     """
     from ..news.models import DiseaseCase
 
+    query = db.query(ArticleIdentity)
+    if filter_label:
+        query = query.join(models.ArticleEvaluation).filter(models.ArticleEvaluation.human_label == filter_label)
+
+    total = query.count()
+    total_verified = db.query(models.ArticleEvaluation).filter(
+        models.ArticleEvaluation.human_label.isnot(None)
+    ).count()
+
     articles = (
-        db.query(ArticleIdentity)
+        query
         .options(
             joinedload(ArticleIdentity.details),
             joinedload(ArticleIdentity.cases),
@@ -214,12 +232,18 @@ def get_articles_for_evaluation(
                 event_id=a.event_id,
                 llm_label=llm_label,
                 human_label=eval_rec.human_label if eval_rec else None,
+                keyword_is_correct=eval_rec.keyword_is_correct if eval_rec else None,
+                corrected_keyword=eval_rec.corrected_keyword if eval_rec else None,
                 is_verified=eval_rec.is_verified if eval_rec else False,
                 cases=cases_info,
             )
         )
 
-    return results
+    return {
+        "items": results,
+        "total": total,
+        "total_verified": total_verified,
+    }
 
 @router.put("/{article_id}", response_model=schemas.ArticleEvaluationDTO)
 def update_human_label(
@@ -228,7 +252,15 @@ def update_human_label(
     db: Session = Depends(get_db),
     current_admin=Depends(security.require_admin_role)
 ):
-    eval_record = crud.update_human_label(db, article_id, body.human_label, current_admin.id)
+    eval_record = crud.update_human_label(
+        db, 
+        article_id, 
+        body.human_label, 
+        current_admin.id,
+        keyword_is_correct=body.keyword_is_correct,
+        corrected_keyword=body.corrected_keyword,
+        update_article_keyword=body.update_article_keyword
+    )
     return eval_record
 
 
@@ -389,3 +421,47 @@ def export_evaluations_excel(
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": "attachment; filename=llm_evaluation_dataset.xlsx"}
     )
+
+@router.post("/sync-dataset")
+def sync_dataset_to_file(db: Session = Depends(get_db), current_admin=Depends(security.require_admin_role)):
+    evals = db.query(models.ArticleEvaluation).filter(models.ArticleEvaluation.is_verified == True).all()
+    dataset_rows = []
+    
+    for e in evals:
+        if e.human_label in VALID_EVALUATION_LABELS:
+            title = _safe_text(e.article.title)
+            summary_text = _safe_text(e.article.summary)
+            if title and summary_text:
+                dataset_rows.append({
+                    "title": title,
+                    "summary": summary_text,
+                    "llm_label": e.llm_label or "relevant",
+                    "human_label": e.human_label,
+                })
+    
+    if not dataset_rows:
+        raise HTTPException(status_code=400, detail="Không có dữ liệu gán nhãn hợp lệ để đồng bộ.")
+        
+    try:
+        dataset_path = _write_labeled_dataset_for_llm(dataset_rows)
+        return {"message": f"Đã đồng bộ {len(dataset_rows)} mẫu dữ liệu cho mô hình.", "path": dataset_path}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Lỗi ghi file: {str(exc)}")
+
+@router.delete("/delete-irrelevant")
+def delete_irrelevant_articles(db: Session = Depends(get_db), current_admin=Depends(security.require_admin_role)):
+    evals = db.query(models.ArticleEvaluation).filter(
+        models.ArticleEvaluation.human_label.in_(["noise", "irrelevant"])
+    ).all()
+    
+    article_ids = [e.article_id for e in evals]
+    if not article_ids:
+        return {"message": "Không có bài báo nào cần xóa", "deleted_count": 0}
+        
+    # Remove from NewsEvents if linked
+    articles = db.query(ArticleIdentity).filter(ArticleIdentity.id.in_(article_ids)).all()
+    for a in articles:
+        db.delete(a)
+    
+    db.commit()
+    return {"message": f"Đã xóa {len(articles)} bài báo không relevant.", "deleted_count": len(articles)}

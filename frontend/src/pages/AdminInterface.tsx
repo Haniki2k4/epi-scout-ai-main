@@ -13,6 +13,8 @@ import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 type LlmStatus = {
+  primary_model: string;
+  fallback_model: string;
   current_model: string;
   circuit_state: string;
   fallback_count_today: number;
@@ -94,14 +96,28 @@ export default function AdminInterface() {
               <Activity className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
-              <div className="text-lg font-bold truncate" title={llmStatus?.current_model}>
-                {llmStatus?.current_model || "N/A"}
-              </div>
-              <p className="text-xs text-muted-foreground mt-1">
-                {llmStatus
-                  ? `${llmStatus.circuit_state} – fallback ${llmStatus.fallback_count_today} lần – lỗi ${(llmStatus.primary_error_rate * 100).toFixed(1)}%`
-                  : "Chưa có dữ liệu"}
-              </p>
+              {llmStatus ? (
+                <div className="space-y-2">
+                  <div className="flex justify-between items-center text-sm">
+                    <span className="text-muted-foreground">Mô hình chính:</span>
+                    <span className={`font-semibold ${llmStatus.circuit_state === 'CLOSED' ? 'text-green-600' : 'text-muted-foreground'}`} title={llmStatus.primary_model}>
+                      {llmStatus.primary_model?.split('/').pop() || 'N/A'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center text-sm">
+                    <span className="text-muted-foreground">Mô hình dự phòng:</span>
+                    <span className={`font-semibold ${llmStatus.circuit_state === 'OPEN' ? 'text-amber-600' : 'text-muted-foreground'}`} title={llmStatus.fallback_model}>
+                      {llmStatus.fallback_model?.split('/').pop() || 'N/A'}
+                    </span>
+                  </div>
+                  <div className="pt-2 mt-2 border-t text-xs text-muted-foreground flex justify-between">
+                    <span>Circuit: <strong className={llmStatus.circuit_state === 'OPEN' ? 'text-red-500' : 'text-green-500'}>{llmStatus.circuit_state}</strong></span>
+                    <span>Lỗi: {(llmStatus.primary_error_rate * 100).toFixed(1)}% ({llmStatus.fallback_count_today} fallback)</span>
+                  </div>
+                </div>
+              ) : (
+                <div className="text-sm text-muted-foreground">Chưa có dữ liệu</div>
+              )}
             </CardContent>
           </Card>
         </div>

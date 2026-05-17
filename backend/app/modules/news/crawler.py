@@ -113,7 +113,8 @@ def fetch_sapo(url: str) -> str | None:
             ".article_footer", ".article-footer", ".related-news", ".related_news",
             ".article_tag", ".article-tag", "#comment", "#ads", ".ads",
             "div[id*='adsweb']", "div[class*='related']",
-            ".box_comment_vne", ".box-tinlienquanv2", ".box-item-vne"
+            ".box_comment_vne", ".box-tinlienquanv2", ".box-item-vne",
+            "article.story", ".story"
         ]
         for selector in NOISY_SELECTORS:
             for el in soup.select(selector):
@@ -289,6 +290,26 @@ _CRITERIA_BLOCK = """
 - **QUY TẮC BỆNH CHÍNH:** Nếu bệnh chính của bài (ví dụ: Melioidosis) KHÔNG trong danh sách keyword → irrelevant, dù có nhắc biến chứng trùng keyword.
 
 **unsure** — thông tin quá mơ hồ, chưa có xác nhận chính thức
+
+## QUY TẮC XÁC ĐỊNH BỆNH (CỰC KỲ QUAN TRỌNG)
+
+Khi trích xuất 'disease_name' từ mảng 'diseases', bạn PHẢI xác nhận từ khóa đó thực sự là TÊN BỆNH, không phải từ đồng nghĩa hoặc ngữ cảnh khác:
+### Ví dụ về từ KHÔNG PHẢI bệnh (LOẠI BỎ):
+- **"lao"** trong ngữ cảnh: "lao động", "lao xuống", "lao lực", "lao tâm", "lao đao", "lao vào"→ LOẠI (không phải bệnh lao)
+- **"sốt"** trong ngữ cảnh: "sốt đất", "cơn sốt giá cả", "sốt vé", "sốt hàng", "sốt ruột" → LOẠI (không phải bệnh sốt)
+- **"cúm"** trong ngữ cảnh: "cúm giá", "cúm cầu" → LOẠI (không phải cúm)
+- **"ho"** trong ngữ cảnh: "hoàn thành", "hoa hồng" → LOẠI (không phải bệnh ho)
+
+### Cách xác định:
+1. **Xem ngữ cảnh trong câu**: Từ khóa có đi với các từ chỉ bệnh không? (VD: "mắc bệnh lao", "nhiễm bệnh lao", "bệnh lao", "ca bệnh lao", "ổ dịch lao")
+2. **Xem có số liệu ca bệnh không**: Nếu có "X ca", "X người mắc", "X bệnh nhân" → có khả năng là bệnh thật
+3. **Xem có từ chỉ địa điểm dịch tễ không**: "tại X", "ở X", "tỉnh X", "thành phố X"
+4. **Xem có từ chỉ thời gian dịch tễ không**: "hôm nay", "tuần này", "tháng này", "ghi nhận", "phát hiện"
+
+### QUYẾT ĐỊNH:
+- Nếu KHÔNG chắc chắn → KHÔNG cho vào 'diseases', để mảng rỗng.
+- Nếu từ khóa trong ngữ cảnh rõ ràng là hoạt động/hành động/tiếng Việt thuần → LOẠI BỎ.
+- Chỉ ghi nhận 'disease_name' khi có bằng chứng rõ ràng đang nói về BỆNH truyền nhiễm.
 """.strip()
 
 _SCHEMA_BLOCK = """
@@ -409,7 +430,8 @@ def _strip_structural_noise(soup) -> None:
         r"|nav|menu|ads|banner|advert|promo|signup|subscribe|newsletter"
         r"|tag[-_]cloud|author[-_]bio|related[-_]post|most[-_]read"
         r"|box[-_]category|box[-_]tag|box[-_]related|zone[-_]article"
-        r"|article[-_]related|cate[-_]new|other[-_]news|more[-_]news)",
+        r"|article[-_]related|cate[-_]new|other[-_]news|more[-_]news|story"
+        r"|zone zone--dont-miss|zone zone--more)",
         re.IGNORECASE,
     )
     for tag in soup.find_all(True):
@@ -1516,12 +1538,14 @@ def llm_recheck_article(
         if _llm_session_is_fallback or _llm_circuit_state == "OPEN":
             _activate_llm_fallback(_llm_session_fallback_reason or "circuit open")
             parsed = _call_llm_api(LLM_FALLBACK_MODEL, LLM_RECHECK_API_KEY, LLM_RECHECK_BASE_URL, prompt)
+            used_model = LLM_FALLBACK_MODEL
         else:
             _llm_circuit_state = "CLOSED"
             _llm_primary_attempts_today += 1
             try:
                 parsed = _call_llm_api(LLM_RECHECK_MODEL, LLM_RECHECK_API_KEY, LLM_RECHECK_BASE_URL, prompt)
                 _llm_circuit_failures = 0
+                used_model = LLM_RECHECK_MODEL
             except (LLMRateLimitError, LLMTimeoutError) as exc:
                 _llm_primary_failures_today += 1
                 _llm_circuit_failures += 1
@@ -1531,6 +1555,7 @@ def llm_recheck_article(
                     raise
                 _activate_llm_fallback(str(exc))
                 parsed = _call_llm_api(LLM_FALLBACK_MODEL, LLM_RECHECK_API_KEY, LLM_RECHECK_BASE_URL, prompt)
+                used_model = LLM_FALLBACK_MODEL
             except LLMError as exc:
                 _llm_primary_failures_today += 1
                 raise exc
@@ -1578,8 +1603,9 @@ def llm_recheck_article(
         "severity": _normalize_llm_severity(parsed.get("severity")),
     }
 
-    logger.debug(
-        "LLM recheck | label={} keywords={} location={} cases={} severity={} reason={}",
+    logger.info(
+        "LLM recheck success | model={} label={} keywords={} location={} cases={} severity={} reason={}",
+        used_model,
         label,
         normalized_keywords,
         meta["location"],

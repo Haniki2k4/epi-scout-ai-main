@@ -4,6 +4,9 @@ import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
+import { Switch } from "@/components/ui/switch";
+import { Input } from "@/components/ui/input";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   AlertCircle,
   BarChart3,
@@ -13,6 +16,8 @@ import {
   FileUp,
   RefreshCcw,
   Upload,
+  Trash2,
+  Database,
   X,
 } from "lucide-react";
 import { useToast } from "@/components/ui/use-toast";
@@ -43,6 +48,9 @@ interface Article {
   event_id?: number;
   llm_label: string;           // "relevant" | "irrelevant"
   human_label?: string;        // Nhãn thủ công đã lưu trong DB
+  keyword_is_correct?: boolean;
+  corrected_keyword?: string;
+  draft_keyword?: string;
   is_verified: boolean;
   cases: DiseaseCaseInfo[];    // Danh sách dịch bệnh từ disease_cases
 }
@@ -52,6 +60,9 @@ interface Metrics {
   precision: number;
   total_verified: number;
   agreement_rate: number;
+  cohens_kappa: number;
+  confusion_matrix: Record<string, Record<string, number>>;
+  disease_accuracy: number;
 }
 
 interface ImportSummary {
@@ -83,16 +94,25 @@ export default function EvaluationManagement() {
   const { toast } = useToast();
   const [articles, setArticles] = useState<Article[]>([]);
   const [metrics, setMetrics] = useState<Metrics>({ accuracy: 0, precision: 0, total_verified: 0, agreement_rate: 0 });
+  const [totalArticles, setTotalArticles] = useState(0);
+  const [totalVerified, setTotalVerified] = useState(0);
   const [loading, setLoading] = useState(false);
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [importing, setImporting] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [importResult, setImportResult] = useState<ImportResult | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [page, setPage] = useState(1);
+  const [syncing, setSyncing] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [filterLabel, setFilterLabel] = useState<string | null>(null);
+  const [savingKeywordId, setSavingKeywordId] = useState<number | null>(null);
+  const [savedKeywordId, setSavedKeywordId] = useState<number | null>(null);
+  const limit = 100;
 
   useEffect(() => {
     fetchData();
-  }, []);
+  }, [page, filterLabel]);
 
   const fetchData = async () => {
     setLoading(true);
@@ -107,10 +127,19 @@ export default function EvaluationManagement() {
       }
 
       // Fetch articles qua endpoint chuyên dụng:
-      // Trả về cases[], human_label thực từ DB, llm_label từ event_id
-      const aRes = await fetch("/api/evaluation/articles?limit=50", { headers });
+      const url = new URL("/api/evaluation/articles", window.location.origin);
+      url.searchParams.append("limit", limit.toString());
+      url.searchParams.append("skip", ((page - 1) * limit).toString());
+      if (filterLabel) {
+        url.searchParams.append("filter_label", filterLabel);
+      }
+
+      const aRes = await fetch(url.toString(), { headers });
       if (aRes.ok) {
-        setArticles(await aRes.json());
+        const data = await aRes.json();
+        setArticles((data.items || []).map((a: Article) => ({ ...a, draft_keyword: a.corrected_keyword })));
+        setTotalArticles(data.total || 0);
+        setTotalVerified(data.total_verified || 0);
       }
     } catch (e) {
       console.error(e);
@@ -141,6 +170,109 @@ export default function EvaluationManagement() {
       toast({ title: "Lỗi", description: "Không thể cập nhật nhãn", variant: "destructive" });
     }
   };
+
+  const handleUpdateKeyword = async (articleId: number, isCorrect: boolean, correctedKeyword?: string) => {
+    let updateGlobal = false;
+    // Ask if they want to update global if they typed a new keyword and article is relevant
+    if (correctedKeyword) {
+      updateGlobal = window.confirm(
+        "Bạn có muốn cập nhật keyword này làm keyword chính thức cho bài báo trên toàn hệ thống không?"
+      );
+    }
+
+    setSavingKeywordId(articleId);
+    try {
+      const token = localStorage.getItem("token");
+      const res = await fetch(`/api/evaluation/${articleId}`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          keyword_is_correct: isCorrect,
+          corrected_keyword: correctedKeyword,
+          update_article_keyword: updateGlobal
+        }),
+      });
+      if (res.ok) {
+        toast({ title: "Thành công", description: "Đã cập nhật kiểm chứng keyword" });
+        setArticles(articles.map(a => {
+          if (a.id === articleId) {
+            return {
+              ...a,
+              keyword_is_correct: isCorrect,
+              corrected_keyword: correctedKeyword,
+              draft_keyword: correctedKeyword,
+              keywords_matched: updateGlobal ? (correctedKeyword === "NONE" ? "" : correctedKeyword) : a.keywords_matched,
+              is_verified: true
+            };
+          }
+          return a;
+        }));
+        setSavedKeywordId(articleId);
+        setTimeout(() => setSavedKeywordId(null), 2000);
+        // Refresh metrics
+        const mRes = await fetch("/api/evaluation/metrics", { headers: { Authorization: `Bearer ${token}` } });
+        if (mRes.ok) setMetrics(await mRes.json());
+      }
+    } catch (e) {
+      toast({ title: "Lỗi", description: "Không thể cập nhật kiểm chứng keyword", variant: "destructive" });
+    } finally {
+      setSavingKeywordId(null);
+    }
+  };
+
+  const handleSyncDataset = async () => {
+    setSyncing(true);
+    try {
+      const token = localStorage.getItem("token");
+      const res = await fetch("/api/evaluation/sync-dataset", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = await res.json();
+      if (res.ok) {
+        toast({ title: "Đồng bộ thành công", description: data.message });
+      } else {
+        throw new Error(data.detail || "Đồng bộ thất bại");
+      }
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "Đồng bộ thất bại";
+      toast({ title: "Lỗi", description: msg, variant: "destructive" });
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  const handleDeleteIrrelevant = async () => {
+    if (!window.confirm("Bạn có chắc chắn muốn xóa tất cả các bài báo không relevant (Noise/Irrelevant) trên hệ thống? Hành động này không thể hoàn tác.")) {
+      return;
+    }
+    setDeleting(true);
+    try {
+      const token = localStorage.getItem("token");
+      const res = await fetch("/api/evaluation/delete-irrelevant", {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = await res.json();
+      if (res.ok) {
+        toast({ title: "Xóa thành công", description: data.message });
+        setPage(1);
+        fetchData();
+      } else {
+        throw new Error(data.detail || "Xóa thất bại");
+      }
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "Xóa thất bại";
+      toast({ title: "Lỗi", description: msg, variant: "destructive" });
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  const pendingDeleteCount = articles.filter(a => a.human_label === 'noise' || a.human_label === 'irrelevant').length;
 
   const handleExportExcel = async () => {
     try {
@@ -367,15 +499,19 @@ export default function EvaluationManagement() {
               </DialogFooter>
             </DialogContent>
           </Dialog>
-          <Button className="gap-2" onClick={handleExportExcel}>
+          <Button variant="outline" className="gap-2" onClick={handleExportExcel}>
             <Download className="h-4 w-4" />
-            Xuất Dataset (Excel)
+            Xuất Excel
+          </Button>
+          <Button className="gap-2" onClick={handleSyncDataset} disabled={syncing}>
+            {syncing ? <RefreshCcw className="h-4 w-4 animate-spin" /> : <Database className="h-4 w-4" />}
+            Đồng bộ Model
           </Button>
         </div>
       </div>
 
       {/* Metrics Cards */}
-      <div className="grid gap-4 md:grid-cols-3">
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Độ chính xác (Accuracy)</CardTitle>
@@ -396,19 +532,131 @@ export default function EvaluationManagement() {
         </Card>
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Tổng mẫu đã gán nhãn</CardTitle>
+            <CardTitle className="text-sm font-medium">Cohen's Kappa</CardTitle>
+            <AlertCircle className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">{metrics.cohens_kappa ?? 0}</div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Disease Name Accuracy</CardTitle>
+            <Bug className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">{metrics.disease_accuracy ?? 0}%</div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Mẫu đã gán nhãn</CardTitle>
             <CheckCircle className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{metrics.total_verified}</div>
+            <div className="text-2xl font-bold">{totalVerified} / {totalArticles}</div>
           </CardContent>
         </Card>
       </div>
 
-      {/* Table */}
+      {/* False Positive Analysis */}
       <Card>
         <CardHeader>
-          <CardTitle>Danh sách bài báo</CardTitle>
+          <CardTitle>Phân tích Hiệu suất Lọc</CardTitle>
+          <CardDescription>
+            Chi tiết đánh giá thủ công trên các bài báo được LLM giữ lại (phân loại là Relevant)
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {metrics.confusion_matrix && metrics.confusion_matrix["relevant"] ? (
+            <div className="space-y-6">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="rounded-lg border p-4">
+                  <div className="text-sm text-green-700 dark:text-green-400 font-medium mb-1">True Positive</div>
+                  <div className="text-3xl font-bold text-green-700 dark:text-green-400">
+                    {metrics.confusion_matrix["relevant"]["relevant"] || 0}
+                  </div>
+                </div>
+                <div className="rounded-lg border p-4">
+                  <div className="text-sm text-red-700 dark:text-red-400 font-medium mb-1">False Positive</div>
+                  <div className="text-3xl font-bold text-red-700 dark:text-red-400">
+                    {(metrics.confusion_matrix["relevant"]["noise"] || 0) + (metrics.confusion_matrix["relevant"]["irrelevant"] || 0)}
+                  </div>
+                </div>
+                <div className="rounded-lg border p-4">
+                  <div className="text-sm text-yellow-700 dark:text-yellow-400 font-medium mb-1">Unsure (Chưa rõ)</div>
+                  <div className="text-3xl font-bold text-yellow-700 dark:text-yellow-400">
+                    {metrics.confusion_matrix["relevant"]["unsure"] || 0}
+                  </div>
+                </div>
+              </div>
+
+              {/* Phân bổ chi tiết */}
+              <div className="pt-4 border-t">
+                <div className="flex items-center justify-between mb-3">
+                  <h4 className="text-sm font-semibold">Phân bổ nhãn thủ công chi tiết:</h4>
+                  {filterLabel && (
+                    <Button variant="ghost" size="sm" className="h-6 px-2 text-xs text-muted-foreground" onClick={() => setFilterLabel(null)}>
+                      Xóa lọc <X className="h-3 w-3 ml-1" />
+                    </Button>
+                  )}
+                </div>
+                <div className="flex flex-wrap gap-4">
+                  <Badge
+                    variant={filterLabel === "relevant" ? "default" : "outline"}
+                    className={`text-sm py-1.5 px-3 cursor-pointer ${filterLabel === "relevant" ? "" : "text-green-700 dark:text-green-400"}`}
+                    onClick={() => setFilterLabel(filterLabel === "relevant" ? null : "relevant")}
+                  >
+                    Relevant: <strong className="ml-1">{metrics.confusion_matrix["relevant"]["relevant"] || 0}</strong>
+                  </Badge>
+                  <Badge
+                    variant={filterLabel === "noise" ? "default" : "outline"}
+                    className={`text-sm py-1.5 px-3 cursor-pointer ${filterLabel === "noise" ? "" : "text-orange-700 dark:text-orange-400"}`}
+                    onClick={() => setFilterLabel(filterLabel === "noise" ? null : "noise")}
+                  >
+                    Noise: <strong className="ml-1">{metrics.confusion_matrix["relevant"]["noise"] || 0}</strong>
+                  </Badge>
+                  <Badge
+                    variant={filterLabel === "irrelevant" ? "default" : "outline"}
+                    className={`text-sm py-1.5 px-3 cursor-pointer ${filterLabel === "irrelevant" ? "" : "text-red-700 dark:text-red-400"}`}
+                    onClick={() => setFilterLabel(filterLabel === "irrelevant" ? null : "irrelevant")}
+                  >
+                    Irrelevant: <strong className="ml-1">{metrics.confusion_matrix["relevant"]["irrelevant"] || 0}</strong>
+                  </Badge>
+                  <Badge
+                    variant={filterLabel === "unsure" ? "default" : "outline"}
+                    className={`text-sm py-1.5 px-3 cursor-pointer ${filterLabel === "unsure" ? "" : "text-yellow-700 dark:text-yellow-400"}`}
+                    onClick={() => setFilterLabel(filterLabel === "unsure" ? null : "unsure")}
+                  >
+                    Unsure: <strong className="ml-1">{metrics.confusion_matrix["relevant"]["unsure"] || 0}</strong>
+                  </Badge>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="text-center text-muted-foreground py-8">
+              Chưa có dữ liệu đánh giá thủ công cho các bài báo
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Table */}
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between">
+          <div>
+            <CardTitle>Danh sách bài báo</CardTitle>
+            <CardDescription>Trang {page} - Đang hiển thị {articles.length} bài báo</CardDescription>
+          </div>
+          {pendingDeleteCount > 0 && (
+            <div className="flex items-center gap-3 bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400 px-4 py-2 rounded-lg border border-red-200 dark:border-red-900">
+              <span className="text-sm font-medium">Có {pendingDeleteCount} bài báo chờ xóa trên trang này.</span>
+              <Button size="sm" variant="destructive" className="gap-1.5 h-8" onClick={handleDeleteIrrelevant} disabled={deleting}>
+                {deleting ? <RefreshCcw className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                Xác nhận xóa
+              </Button>
+            </div>
+          )}
         </CardHeader>
         <CardContent>
           <div className="rounded-md border">
@@ -453,7 +701,7 @@ export default function EvaluationManagement() {
                           >
                             {article.title || article.link}
                           </a>
-                          {article.is_verified && (
+                          {article.is_verified && article.human_label && (
                             <span className="ml-1 inline-flex items-center text-[10px] text-green-600 dark:text-green-400 font-medium">
                               <CheckCircle className="h-3 w-3 mr-0.5" /> Đã gán nhãn
                             </span>
@@ -467,23 +715,102 @@ export default function EvaluationManagement() {
 
                         {/* Tên dịch bệnh */}
                         <TableCell>
-                          {article.keywords_matched ? (
-                            <div className="flex flex-wrap gap-1">
-                              {article.keywords_matched.split(",").map((name, idx) => (
-                                <Badge
-                                  key={idx}
-                                  variant="outline"
-                                  className="text-[10px] bg-orange-50 text-orange-700 border-orange-200 dark:bg-orange-900/20 dark:text-orange-400 dark:border-orange-800"
+                          <div className="space-y-2">
+                            {article.keywords_matched ? (
+                              <div className="flex flex-wrap gap-1">
+                                {article.keywords_matched.split(",").map((name, idx) => (
+                                  <Badge
+                                    key={idx}
+                                    variant="outline"
+                                    className="text-[10px] bg-orange-50 text-orange-700 border-orange-200 dark:bg-orange-900/20 dark:text-orange-400 dark:border-orange-800"
+                                  >
+                                    {name.trim()}
+                                  </Badge>
+                                ))}
+                              </div>
+                            ) : (
+                              <span className="text-xs text-muted-foreground italic block">
+                                Không xác định
+                              </span>
+                            )}
+
+                            {/* Keyword Verification */}
+                            <div className="pt-2 border-t border-border/50">
+                              <div className="flex flex-col gap-1.5 mb-2">
+                                <label className="text-xs font-medium text-muted-foreground">
+                                  Đúng keyword?
+                                </label>
+                                <Select
+                                  value={article.keyword_is_correct !== false ? "true" : "false"}
+                                  onValueChange={(val) => handleUpdateKeyword(article.id, val === "true", article.corrected_keyword)}
                                 >
-                                  {name.trim()}
-                                </Badge>
-                              ))}
+                                  <SelectTrigger className="w-[120px] h-7 text-xs">
+                                    <SelectValue />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="true">Đúng</SelectItem>
+                                    <SelectItem value="false">Sai</SelectItem>
+                                  </SelectContent>
+                                </Select>
+                              </div>
+                              {article.keyword_is_correct === false && (
+                                <div className="flex flex-col gap-1.5 mt-1">
+                                  <div className="flex gap-1">
+                                    <Input
+                                      className="h-7 text-xs flex-1"
+                                      placeholder="Nhập keyword đúng..."
+                                      value={article.draft_keyword && article.draft_keyword !== "NONE" ? article.draft_keyword : ""}
+                                      onChange={(e) => {
+                                        const val = e.target.value;
+                                        setArticles(articles.map(a => a.id === article.id ? { ...a, draft_keyword: val } : a));
+                                      }}
+                                      onKeyDown={(e) => {
+                                        if (e.key === 'Enter') {
+                                          handleUpdateKeyword(article.id, false, article.draft_keyword);
+                                        }
+                                      }}
+                                    />
+                                    <Button
+                                      size="sm"
+                                      className={`h-7 px-2 text-xs transition-colors ${savedKeywordId === article.id ? 'bg-green-600 hover:bg-green-700 text-white' : ''}`}
+                                      onClick={() => handleUpdateKeyword(article.id, false, article.draft_keyword)}
+                                      disabled={savingKeywordId === article.id}
+                                    >
+                                      {savingKeywordId === article.id ? (
+                                        <RefreshCcw className="h-3.5 w-3.5 animate-spin" />
+                                      ) : savedKeywordId === article.id ? (
+                                        <CheckCircle className="h-3.5 w-3.5 mr-1" />
+                                      ) : null}
+                                      {savedKeywordId === article.id ? 'Đã lưu' : 'Lưu'}
+                                    </Button>
+                                  </div>
+                                  <div className="flex items-center justify-between">
+                                    <div className="flex items-center gap-2">
+                                      <input
+                                        type="checkbox"
+                                        id={`no-kw-${article.id}`}
+                                        checked={article.draft_keyword === "NONE"}
+                                        onChange={(e) => {
+                                          const val = e.target.checked ? "NONE" : "";
+                                          setArticles(articles.map(a => a.id === article.id ? { ...a, draft_keyword: val } : a));
+                                        }}
+                                      />
+                                      <label htmlFor={`no-kw-${article.id}`} className="text-[10px] text-muted-foreground cursor-pointer">
+                                        Không có keyword
+                                      </label>
+                                    </div>
+                                    <span className="text-[10px] font-medium">
+                                      {article.corrected_keyword === article.draft_keyword && article.corrected_keyword ? (
+                                        <span className="text-green-600 dark:text-green-400 flex items-center gap-1"><CheckCircle className="h-3 w-3" /> Đã cập nhật</span>
+                                      ) : (
+                                        <span className="text-orange-500 flex items-center gap-1">Chưa cập nhật</span>
+                                      )}
+                                    </span>
+                                  </div>
+                                </div>
+                              )}
                             </div>
-                          ) : (
-                            <span className="text-xs text-muted-foreground italic">
-                              Không xác định
-                            </span>
-                          )}
+                          </div>
                         </TableCell>
 
                         {/* Nhãn LLM */}
@@ -525,6 +852,32 @@ export default function EvaluationManagement() {
                 )}
               </TableBody>
             </Table>
+          </div>
+
+          {/* Pagination */}
+          <div className="flex items-center justify-between mt-4">
+            <div className="text-sm text-muted-foreground">
+              Hiển thị {(page - 1) * limit + 1} - {Math.min(page * limit, totalArticles)} trong {totalArticles} bài báo
+            </div>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setPage(p => Math.max(1, p - 1))}
+                disabled={page === 1 || loading}
+              >
+                Trang trước
+              </Button>
+              <div className="text-sm font-medium px-2">Trang {page}</div>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setPage(p => p + 1)}
+                disabled={page * limit >= totalArticles || loading}
+              >
+                Trang tiếp
+              </Button>
+            </div>
           </div>
         </CardContent>
       </Card>
