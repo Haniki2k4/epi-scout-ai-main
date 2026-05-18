@@ -71,6 +71,14 @@ class ArticleIdentity(Base):
     @property
     def is_whitelisted(self):
         return self.details.is_whitelisted if self.details else False
+
+    @property
+    def outbreak_relevance_score(self):
+        return self.details.outbreak_relevance_score if self.details else 0.0
+
+    @property
+    def is_suspected_false_positive(self):
+        return self.details.is_suspected_false_positive if self.details else False
         
     @property
     def tags(self):
@@ -87,6 +95,8 @@ class ArticleDetails(Base):
     keywords_matched = Column(Unicode(500), nullable=True)
     tags = Column(Unicode(500), nullable=True) # New column for tags (e.g. "Mới, Cảnh báo")
     is_whitelisted = Column(Boolean, default=False)
+    outbreak_relevance_score = Column(Float, default=0.0)
+    is_suspected_false_positive = Column(Boolean, default=False)
     
     identity = relationship("ArticleIdentity", back_populates="details")
 
@@ -121,6 +131,7 @@ class RssSource(Base):
     url = Column(String(767), unique=True, index=True, nullable=False)
     label = Column(Unicode(255), nullable=True)    # Tên tờ báo / kênh
     category = Column(String(100), nullable=True)  # e.g. suc-khoe, the-gioi, global
+    source_type = Column(String(50), default="DOMESTIC") # Enum: DOMESTIC, INTERNATIONAL
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 

@@ -6,15 +6,19 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, Scatter } from "recharts";
-import { TrendingUp, Download, FileText, BarChart3, Database, Sparkles, ShieldAlert, Send, CalendarClock, RadioTower, MapPin, AlertTriangle, Table2 } from "lucide-react";
+import { TrendingUp, Download, FileText, BarChart3, Database, Sparkles, ShieldAlert, Send, CalendarClock, RadioTower, MapPin, AlertTriangle, Table2, Lock } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import { NewsEvent, ZScoreSpike, ProphetForecast } from "@/types";
+import { Article, NewsEvent, ZScoreSpike, ProphetForecast } from "@/types";
 import { ComposedChart, Area } from "recharts";
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter,
   DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
 import { useToast } from "@/components/ui/use-toast";
+import { DiseaseSelectorModal } from "@/components/DiseaseSelectorModal";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { useAuth } from "@/contexts/AuthContext";
+import { KeywordBubbleChart, KeywordBubblePoint } from "@/components/KeywordBubbleChart";
 
 type OverviewStats = {
   total_articles: number;
@@ -26,8 +30,42 @@ interface DataAnalysisProps {
   showOnlyReport?: boolean;
 }
 
+const STORAGE_KEY = "epi-scout-forecast-disease";
+const CACHE_KEY_PREFIX = "epi-scout-stats-cache-";
+const CACHE_TTL_MS = 5 * 60 * 1000;
+
+interface CacheEntry<T> {
+  data: T;
+  timestamp: number;
+}
+
+function getFromCache<T>(key: string): T | null {
+  try {
+    const stored = localStorage.getItem(key);
+    if (!stored) return null;
+    const entry: CacheEntry<T> = JSON.parse(stored);
+    if (Date.now() - entry.timestamp > CACHE_TTL_MS) {
+      localStorage.removeItem(key);
+      return null;
+    }
+    return entry.data;
+  } catch {
+    return null;
+  }
+}
+
+function setToCache<T>(key: string, data: T): void {
+  try {
+    const entry: CacheEntry<T> = { data, timestamp: Date.now() };
+    localStorage.setItem(key, JSON.stringify(entry));
+  } catch (e) {
+    console.warn("Cache write failed", e);
+  }
+}
+
 const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
   const { toast } = useToast();
+  const { isGuest } = useAuth();
   const [stats, setStats] = useState<OverviewStats>({
     total_articles: 0,
     total_cases: 0,
@@ -41,7 +79,11 @@ const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
   const [reportTitle, setReportTitle] = useState("Báo cáo giám sát dịch bệnh tuần");
   const [zscoreSpikes, setZscoreSpikes] = useState<ZScoreSpike[]>([]);
   const [prophetForecast, setProphetForecast] = useState<ProphetForecast[]>([]);
-  const [forecastDisease, setForecastDisease] = useState<string>("Sởi");
+  const [prophetMetrics, setProphetMetrics] = useState<{ mae: number | null, rmse: number | null, eval_method: string } | null>(null);
+  const [forecastDisease, setForecastDisease] = useState<string | null>(() => {
+    return localStorage.getItem(STORAGE_KEY);
+  });
+  const [isLoadingInitialDisease, setIsLoadingInitialDisease] = useState(false);
 
   // State báo cáo
   const [exportingWord, setExportingWord] = useState(false);
@@ -54,27 +96,88 @@ const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
   // State cho Mức độ đa dạng bệnh
   const [keywordTimeseries, setKeywordTimeseries] = useState<{ date: string, keyword_count: number }[]>([]);
   const [keywordZScoreSpikes, setKeywordZScoreSpikes] = useState<ZScoreSpike[]>([]);
+  const [keywordBubbleData, setKeywordBubbleData] = useState<KeywordBubblePoint[]>([]);
+  const [bubbleArticles, setBubbleArticles] = useState<Article[]>([]);
+  const [bubbleDialogOpen, setBubbleDialogOpen] = useState(false);
+  const [selectedBubble, setSelectedBubble] = useState<KeywordBubblePoint | null>(null);
+
+  useEffect(() => {
+    const initializeDisease = async () => {
+      const storedDisease = localStorage.getItem(STORAGE_KEY);
+      if (storedDisease) {
+        setForecastDisease(storedDisease);
+        return;
+      }
+      setIsLoadingInitialDisease(true);
+      try {
+        const topRes = await fetch("/api/stats/top-diseases?months=12");
+        if (topRes.ok) {
+          const topData = await topRes.json();
+          if (topData.length > 0 && topData[0].disease_name) {
+            const topDisease = topData[0].disease_name;
+            setForecastDisease(topDisease);
+            localStorage.setItem(STORAGE_KEY, topDisease);
+          } else {
+            setForecastDisease("Sởi");
+            localStorage.setItem(STORAGE_KEY, "Sởi");
+          }
+        } else {
+          setForecastDisease("Sởi");
+          localStorage.setItem(STORAGE_KEY, "Sởi");
+        }
+      } catch (e) {
+        console.error("Failed to fetch top disease", e);
+        setForecastDisease("Sởi");
+        localStorage.setItem(STORAGE_KEY, "Sởi");
+      } finally {
+        setIsLoadingInitialDisease(false);
+      }
+    };
+    initializeDisease();
+  }, []);
+
+  const handleDiseaseChange = (disease: string) => {
+    setForecastDisease(disease);
+    localStorage.setItem(STORAGE_KEY, disease);
+  };
 
   useEffect(() => {
     const fetchForecastData = async () => {
+      if (!forecastDisease) return;
+
+      const zscoreCacheKey = `${CACHE_KEY_PREFIX}zscore-${forecastDisease}`;
+      const forecastCacheKey = `${CACHE_KEY_PREFIX}forecast-${forecastDisease}`;
+
+      const cachedZscore = getFromCache<ZScoreSpike[]>(zscoreCacheKey);
+      const cachedForecast = getFromCache<ProphetForecast[]>(forecastCacheKey);
+
+      if (cachedZscore) {
+        setZscoreSpikes(cachedZscore);
+      }
+      if (cachedForecast) {
+        setProphetForecast(cachedForecast);
+      }
+
       try {
         const [zscoreRes, prophetRes] = await Promise.all([
-          fetch(`/api/stats/zscore?disease=${encodeURIComponent(forecastDisease)}`),
-          fetch(`/api/stats/forecast?disease=${encodeURIComponent(forecastDisease)}`),
+          cachedZscore ? Promise.resolve(new Response(JSON.stringify(cachedZscore))) : fetch(`/api/stats/zscore?disease=${encodeURIComponent(forecastDisease)}`),
+          cachedForecast ? Promise.resolve(new Response(JSON.stringify(cachedForecast))) : fetch(`/api/stats/forecast?disease=${encodeURIComponent(forecastDisease)}`),
         ]);
-        if (zscoreRes.ok) {
+
+        if (zscoreRes.ok && !cachedZscore) {
           const zData = await zscoreRes.json();
-          // Map backend schema to frontend Schema
-          setZscoreSpikes(zData.map((d: any) => ({
+          const mappedZscore = zData.map((d: any) => ({
             date: d.date,
             cases: d.count,
             rolling_mean: d.ma,
             rolling_std: 0,
             z_score: d.zscore,
             is_spike: d.spike_level === 'danger' || d.spike_level === 'alert'
-          })));
+          }));
+          setZscoreSpikes(mappedZscore);
+          setToCache(zscoreCacheKey, mappedZscore);
         }
-        if (prophetRes.ok) {
+        if (prophetRes.ok && !cachedForecast) {
           const pData = await prophetRes.json();
           const mappedForecast: ProphetForecast[] = [];
 
@@ -103,12 +206,19 @@ const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
             });
           }
           setProphetForecast(mappedForecast);
+          setToCache(forecastCacheKey, mappedForecast);
+
+          if (pData.metrics) {
+            setProphetMetrics(pData.metrics);
+          } else {
+            setProphetMetrics(null);
+          }
         }
       } catch (e) {
         console.error("Failed to fetch forecast data", e);
       }
     };
-    if (forecastDisease) fetchForecastData();
+    fetchForecastData();
   }, [forecastDisease]);
 
   useEffect(() => {
@@ -155,6 +265,10 @@ const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
             z_score: d.zscore,
             is_spike: d.spike_level === 'danger' || d.spike_level === 'alert'
           })));
+        }
+        const bubbleRes = await fetch("/api/stats/keyword-bubble?days=30&window=14");
+        if (bubbleRes.ok) {
+          setKeywordBubbleData(await bubbleRes.json());
         }
       } catch (e) {
         console.error("Failed to fetch diversity data", e);
@@ -276,6 +390,24 @@ const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
     }
   };
 
+  const handleBubbleClick = async (point: KeywordBubblePoint) => {
+    setSelectedBubble(point);
+    setBubbleDialogOpen(true);
+    setBubbleArticles([]);
+    try {
+      const res = await fetch(`/api/articles?keyword=${encodeURIComponent(point.keyword)}&date=${encodeURIComponent(point.date)}&limit=20`);
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "Khong the tai bai bao lien quan");
+      setBubbleArticles(data.items || []);
+    } catch (error) {
+      toast({
+        title: "Loi",
+        description: error instanceof Error ? error.message : "Khong the tai bai bao lien quan",
+        variant: "destructive",
+      });
+    }
+  };
+
   const topSignals = useMemo(() => {
     return events.slice(0, 3).map((event, index) => ({
       id: event.id,
@@ -317,16 +449,16 @@ const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
           <p className="text-sm text-muted-foreground">Chọn đối tượng và khung thời gian cho báo cáo tự động.</p>
         </div>
         <div className="flex gap-2">
-          <Button variant="outline" className="gap-2" onClick={handleExportExcel} disabled={exportingExcel}>
-            <Table2 className="h-4 w-4 text-chart-2" />
-            {exportingExcel ? "Đang xuất..." : "Biểu mẫu QĐ 2018"}
+          <Button variant="outline" className="gap-2" onClick={handleExportExcel} disabled={exportingExcel || isGuest} title={isGuest ? "Dang nhap de xuat bao cao" : undefined}>
+            {isGuest ? <Lock className="h-4 w-4" /> : <Table2 className="h-4 w-4 text-chart-2" />}
+            {exportingExcel ? "Đang xuất báo cáo..." : "Biểu mẫu QĐ 2018"}
           </Button>
-          <Button variant="outline" className="gap-2" onClick={handleExportWord} disabled={exportingWord}>
-            <FileText className="h-4 w-4 text-primary" />
-            {exportingWord ? "Đang xuất..." : "Xuất Word"}
+          <Button variant="outline" className="gap-2" onClick={handleExportWord} disabled={exportingWord || isGuest} title={isGuest ? "Dang nhap de xuat bao cao" : undefined}>
+            {isGuest ? <Lock className="h-4 w-4" /> : <FileText className="h-4 w-4 text-primary" />}
+            {exportingWord ? "Đang xuất báo cáo..." : "Báo cáo Word"}
           </Button>
-          <Button className="gap-2" onClick={() => setEmailDialogOpen(true)}>
-            <Send className="h-4 w-4" />
+          <Button className="gap-2" onClick={() => setEmailDialogOpen(true)} disabled={isGuest} title={isGuest ? "Dang nhap de gui email" : undefined}>
+            {isGuest ? <Lock className="h-4 w-4" /> : <Send className="h-4 w-4" />}
             Gửi Email List
           </Button>
         </div>
@@ -381,8 +513,8 @@ const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
         <CardContent className="pt-6">
           <div className="space-y-2">
             <Label>Tiêu đề báo cáo</Label>
-            <Input 
-              value={reportTitle} 
+            <Input
+              value={reportTitle}
               onChange={e => setReportTitle(e.target.value)}
               className="text-lg font-medium"
             />
@@ -392,85 +524,73 @@ const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
       </Card>
 
       <div className="space-y-6">
-        <Card>
+        <Card className="overflow-hidden">
           <CardHeader>
-            <CardTitle>Preview báo cáo tuần</CardTitle>
-            <CardDescription>Snapshot được tạo từ dữ liệu đang có trong hệ thống</CardDescription>
+            <CardTitle>Preview bảng báo cáo</CardTitle>
+            <CardDescription>Bản xem trước dữ liệu sẽ được xuất ra trong Phụ lục I</CardDescription>
           </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="rounded-xl border bg-secondary/40 p-4">
-              <div className="text-xs uppercase tracking-[0.2em] text-muted-foreground">Bản xem trước</div>
-              <div className="mt-2 text-lg font-semibold text-foreground">{reportTitle}</div>
-              <div className="mt-1 text-sm text-muted-foreground">
-                {reportAudience === "cdc" ? "CDC tỉnh/thành" : reportAudience === "moh" ? "Bộ Y tế" : "Bệnh viện tuyến tỉnh"}
-                {" • "}
-                {reportRegion === "all" ? "Toàn quốc" : reportRegion === "north" ? "Miền Bắc" : reportRegion === "central" ? "Miền Trung" : "Miền Nam"}
-              </div>
-            </div>
-            <div className="space-y-3">
-              <div className="rounded-lg border p-4">
-                <div className="text-sm font-medium text-foreground">Tóm tắt điều hành</div>
-                <p className="mt-2 text-sm text-muted-foreground">
-                  Trong {reportWindowLabel}, hệ thống ghi nhận {stats.total_articles} bài viết, {stats.total_cases} ca và {stats.alert_count} tín hiệu cảnh báo.
-                  Dữ liệu cho thấy cụm sự kiện nổi bật tập trung ở các chủ đề có độ phủ nguồn cao, phù hợp để đưa vào báo cáo nhanh.
-                </p>
-              </div>
-              <div className="rounded-lg border p-4">
-                <div className="text-sm font-medium text-foreground">Tín hiệu nổi bật cần chú ý</div>
-                <div className="mt-3 space-y-3">
-                  {topSignals.length === 0 ? (
-                    <div className="text-sm text-muted-foreground">Chưa có event nổi bật để hiển thị.</div>
+          <CardContent className="p-0">
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow className="bg-secondary/50">
+                    <TableHead className="w-[50px] font-bold">STT</TableHead>
+                    <TableHead className="min-w-[120px] font-bold">Ngày ghi nhận</TableHead>
+                    <TableHead className="min-w-[150px] font-bold">Địa điểm</TableHead>
+                    <TableHead className="min-w-[250px] font-bold">Mô tả dấu hiệu cảnh báo</TableHead>
+                    <TableHead className="min-w-[150px] font-bold">Nguồn tin</TableHead>
+                    <TableHead className="min-w-[100px] font-bold">Số ca</TableHead>
+                    <TableHead className="min-w-[120px] font-bold">Đánh giá</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {events.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={7} className="text-center py-6 text-muted-foreground">
+                        Không có dữ liệu sự kiện để hiển thị.
+                      </TableCell>
+                    </TableRow>
                   ) : (
-                    topSignals.map((signal) => (
-                      <div key={signal.id} className="rounded-lg bg-secondary/60 p-3">
-                        <div className="flex items-start justify-between gap-3">
-                          <div>
-                            <div className="font-medium text-foreground">{signal.title}</div>
-                            <div className="mt-1 text-sm text-muted-foreground">
-                              {signal.location} • {signal.articleCount} bài • {signal.sourceCount} nguồn
-                            </div>
+                    events.slice(0, 5).map((event, idx) => (
+                      <TableRow key={event.id}>
+                        <TableCell className="font-medium">{idx + 1}</TableCell>
+                        <TableCell>{new Date(event.event_date).toLocaleDateString("vi-VN")}</TableCell>
+                        <TableCell>{event.location || "Chưa rõ"}</TableCell>
+                        <TableCell>
+                          <div className="font-medium line-clamp-2" title={event.canonical_title}>
+                            {event.canonical_title}
                           </div>
-                          <Badge variant={signal.level === "Ưu tiên cao" ? "default" : "secondary"}>{signal.level}</Badge>
-                        </div>
-                      </div>
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex flex-wrap gap-1">
+                            {event.sources_preview.slice(0, 2).map((s, i) => (
+                              <Badge key={i} variant="outline" className="text-[10px] whitespace-nowrap">
+                                {s}
+                              </Badge>
+                            ))}
+                            {event.sources_preview.length > 2 && (
+                              <Badge variant="outline" className="text-[10px] whitespace-nowrap">+{event.sources_preview.length - 2}</Badge>
+                            )}
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          {event.case_count > 0 ? (
+                            <Badge variant="destructive">{event.case_count} ca</Badge>
+                          ) : "Chưa rõ"}
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant={idx === 0 ? "default" : "secondary"}>
+                            {idx === 0 ? "Cảnh báo" : "Theo dõi"}
+                          </Badge>
+                        </TableCell>
+                      </TableRow>
                     ))
                   )}
-                </div>
-              </div>
+                </TableBody>
+              </Table>
             </div>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>Tín hiệu rủi ro</CardTitle>
-            <CardDescription>Các khối cần xuất hiện trong báo cáo tự động</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <div className="flex items-start gap-3 rounded-lg border p-3">
-              <ShieldAlert className="mt-0.5 h-5 w-5 text-destructive" />
-              <div>
-                <div className="font-medium text-foreground">Cảnh báo tăng đột biến</div>
-                <div className="text-sm text-muted-foreground">{stats.alert_count} tín hiệu cảnh báo đang tồn tại trong hệ thống.</div>
-              </div>
-            </div>
-            <div className="flex items-start gap-3 rounded-lg border p-3">
-              <RadioTower className="mt-0.5 h-5 w-5 text-primary" />
-              <div>
-                <div className="font-medium text-foreground">Độ phủ truyền thông</div>
-                <div className="text-sm text-muted-foreground">
-                  {events[0] ? `${events[0].source_count} nguồn đang cùng đề cập event mạnh nhất.` : "Chưa đủ dữ liệu để đánh giá độ phủ nguồn."}
-                </div>
-              </div>
-            </div>
-            <div className="flex items-start gap-3 rounded-lg border p-3">
-              <MapPin className="mt-0.5 h-5 w-5 text-chart-2" />
-              <div>
-                <div className="font-medium text-foreground">Điểm nóng địa bàn</div>
-                <div className="text-sm text-muted-foreground">
-                  {events.find((event) => event.location)?.location || "Chưa rõ"} đang là địa bàn có tín hiệu xuất hiện sớm nhất trong nhóm event hiện tại.
-                </div>
-              </div>
+            <div className="p-4 border-t text-sm text-muted-foreground text-center bg-secondary/20">
+              Chỉ hiển thị tối đa 5 sự kiện nổi bật nhất. Hãy xuất file Excel hoặc Word để xem toàn bộ danh sách.
             </div>
           </CardContent>
         </Card>
@@ -553,26 +673,23 @@ const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
         <TabsList className="grid w-full grid-cols-3">
           <TabsTrigger value="zscore">Phát hiện Đột biến</TabsTrigger>
           <TabsTrigger value="forecast">Dự báo sự kiện</TabsTrigger>
-          <TabsTrigger value="diversity">Tần suất Từ khóa</TabsTrigger>
+          <TabsTrigger value="diversity">Toàn cảnh thông tin</TabsTrigger>
         </TabsList>
 
         <TabsContent value="zscore" className="space-y-6">
           <Card>
             <CardHeader className="flex flex-row items-center justify-between pb-2">
               <div className="space-y-1">
-                <CardTitle>Phát hiện Cảnh báo Đột biến (Z-Score Spikes)</CardTitle>
-                <CardDescription>Phát hiện sự bất thường dựa trên độ lệch chuẩn của <strong>số lượng bài báo</strong> nhắc đến bệnh theo ngày (Time-series Anomaly Detection)</CardDescription>
+                <CardTitle>Mô hình cảnh báo đột biến</CardTitle>
+                <CardDescription>Phát hiện bất thường dựa trên độ lệch chuẩn của <strong>số lượng bài báo</strong> nhắc đến bệnh theo ngày</CardDescription>
               </div>
-              <Select value={forecastDisease} onValueChange={setForecastDisease}>
-                <SelectTrigger className="w-[180px]">
-                  <SelectValue placeholder="Chọn dịch bệnh" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="Sởi">Sởi</SelectItem>
-                  <SelectItem value="Bạch hầu">Bạch hầu</SelectItem>
-                  <SelectItem value="Sốt xuất huyết">Sốt xuất huyết</SelectItem>
-                </SelectContent>
-              </Select>
+              <DiseaseSelectorModal
+                selectedDiseases={[forecastDisease || ""]}
+                onChange={(vals) => { if (vals.length > 0) handleDiseaseChange(vals[0]) }}
+                maxSelect={1}
+                triggerButtonText={isLoadingInitialDisease ? "Đang tải..." : (forecastDisease || "Chọn bệnh")}
+                disabled={isLoadingInitialDisease}
+              />
             </CardHeader>
             <CardContent>
               <div className="h-[400px] mt-4">
@@ -666,16 +783,13 @@ const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
                 <CardTitle>Xu hướng Sự quan tâm</CardTitle>
                 <CardDescription>Mô hình dự báo số lượng bài báo được viết về bệnh trong tương lai (Prophet AI - khoảng tin cậy 80%)</CardDescription>
               </div>
-              <Select value={forecastDisease} onValueChange={setForecastDisease}>
-                <SelectTrigger className="w-[180px]">
-                  <SelectValue placeholder="Chọn dịch bệnh" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="Sởi">Sởi</SelectItem>
-                  <SelectItem value="Bạch hầu">Bạch hầu</SelectItem>
-                  <SelectItem value="Sốt xuất huyết">Sốt xuất huyết</SelectItem>
-                </SelectContent>
-              </Select>
+              <DiseaseSelectorModal
+                selectedDiseases={[forecastDisease || ""]}
+                onChange={(vals) => { if (vals.length > 0) handleDiseaseChange(vals[0]) }}
+                maxSelect={1}
+                triggerButtonText={isLoadingInitialDisease ? "Đang tải..." : (forecastDisease || "Chọn bệnh")}
+                disabled={isLoadingInitialDisease}
+              />
             </CardHeader>
             <CardContent>
               <div className="h-[460px] mt-4">
@@ -791,11 +905,30 @@ const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
               </div>
 
               {prophetForecast.length > 0 && prophetForecast[prophetForecast.length - 1].is_future && (
-                <div className="mt-4 flex items-center gap-3 rounded-lg border border-blue-500/20 bg-blue-500/5 p-3">
-                  <div className="h-2 w-2 animate-pulse rounded-full bg-blue-500" />
-                  <p className="text-sm text-muted-foreground">
-                    Dự báo trong <span className="font-semibold text-foreground">{prophetForecast.filter(d => d.is_future).length} ngày</span> tiếp theo dựa trên lịch sử tự động thu thập.
-                  </p>
+                <div className="mt-4 flex flex-col gap-3">
+                  <div className="flex items-center gap-3 rounded-lg border border-blue-500/20 bg-blue-500/5 p-3">
+                    <div className="h-2 w-2 animate-pulse rounded-full bg-blue-500" />
+                    <p className="text-sm text-muted-foreground">
+                      Dự báo trong <span className="font-semibold text-foreground">{prophetForecast.filter(d => d.is_future).length} ngày</span> tiếp theo dựa trên lịch sử tự động thu thập.
+                    </p>
+                  </div>
+
+                  {prophetMetrics && prophetMetrics.rmse !== null && (
+                    <div className="grid grid-cols-2 md:grid-cols-3 gap-4 pt-2">
+                      <div className="rounded-lg border bg-muted/20 p-3">
+                        <div className="text-xs text-muted-foreground mb-1">Sai số RMSE</div>
+                        <div className="text-lg font-bold text-foreground">{prophetMetrics.rmse}</div>
+                      </div>
+                      <div className="rounded-lg border bg-muted/20 p-3">
+                        <div className="text-xs text-muted-foreground mb-1">Sai số MAE</div>
+                        <div className="text-lg font-bold text-foreground">{prophetMetrics.mae}</div>
+                      </div>
+                      <div className="col-span-2 md:col-span-1 rounded-lg border bg-muted/20 p-3 flex flex-col justify-center">
+                        <div className="text-xs text-muted-foreground">Phương pháp Test:</div>
+                        <div className="text-sm font-medium">{prophetMetrics.eval_method}</div>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </CardContent>
@@ -805,11 +938,20 @@ const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
         <TabsContent value="diversity" className="space-y-6">
           <Card>
             <CardHeader>
-              <CardTitle>Mức độ đa dạng từ khóa</CardTitle>
-              <CardDescription>Đánh giá sự lây lan và bùng phát của nhiều loại bệnh cùng lúc. Số lượng loại bệnh càng cao, mức độ đa dạng càng lớn.</CardDescription>
+              <CardTitle>Toàn cảnh thông tin và phân bố  </CardTitle>
+              <CardDescription>Theo dõi luồng tin tức tập trung vào các dịch bệnh nào theo thời gian. Hình càng lớn, mức độ quan tâm của truyền thông trong ngày đó càng cao.</CardDescription>
             </CardHeader>
             <CardContent>
-              <div className="h-[400px] mt-4">
+              <div className="mt-4">
+                {keywordBubbleData.length === 0 ? (
+                  <div className="flex h-[420px] items-center justify-center rounded-lg border bg-muted/30 text-sm text-muted-foreground">
+                    Chua co du lieu bubble chart trong khoang thoi gian nay.
+                  </div>
+                ) : (
+                  <KeywordBubbleChart data={keywordBubbleData} onBubbleClick={handleBubbleClick} />
+                )}
+              </div>
+              <div className="hidden">
                 <ResponsiveContainer width="100%" height="100%">
                   <ComposedChart data={keywordZScoreSpikes.length > 0 ? keywordZScoreSpikes : keywordTimeseries.map(item => ({ date: item.date, cases: item.keyword_count, rolling_mean: item.keyword_count, z_score: 0, is_spike: false }))} margin={{ top: 20, right: 30, left: 0, bottom: 0 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
@@ -843,7 +985,7 @@ const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
                   <CardHeader className="py-4">
                     <CardTitle className="text-destructive flex items-center gap-2 text-base">
                       <AlertTriangle className="h-4 w-4" />
-                      Điểm Đa Dạng Bất Thường
+                      Insight
                     </CardTitle>
                   </CardHeader>
                   <CardContent className="space-y-3 pb-4">
@@ -871,6 +1013,39 @@ const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
           </Card>
         </TabsContent>
       </Tabs>
+
+      <Dialog open={bubbleDialogOpen} onOpenChange={setBubbleDialogOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>
+              {selectedBubble ? `${selectedBubble.keyword} - ${new Date(selectedBubble.date).toLocaleDateString("vi-VN")}` : "Bai bao lien quan"}
+            </DialogTitle>
+            <DialogDescription>
+              Danh sach bai bao lien quan den bubble da chon.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="max-h-[60vh] space-y-3 overflow-y-auto pr-1">
+            {bubbleArticles.length === 0 ? (
+              <div className="rounded-lg border bg-muted/30 p-6 text-center text-sm text-muted-foreground">
+                Khong co bai bao phu hop.
+              </div>
+            ) : bubbleArticles.map((article) => (
+              <a
+                key={article.id}
+                href={article.link}
+                target="_blank"
+                rel="noreferrer"
+                className="block rounded-lg border p-3 hover:bg-secondary/50"
+              >
+                <div className="font-medium text-foreground">{article.title}</div>
+                <div className="mt-1 text-xs text-muted-foreground">
+                  {article.source || "Khong ro nguon"} - {new Date(article.published_date).toLocaleDateString("vi-VN")}
+                </div>
+              </a>
+            ))}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };

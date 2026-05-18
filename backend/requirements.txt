@@ -23,3 +23,4 @@ python-docx
 httpx
 PyJWT
 bcrypt
+prophet

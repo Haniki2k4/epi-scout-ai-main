@@ -1,17 +1,28 @@
 from sqlalchemy.orm import Session, joinedload
+from sqlalchemy import func
 from . import models, schemas
 from datetime import datetime
 
 # --- Articles ---
 
-def get_articles(db: Session, skip: int = 0, limit: int = 100):
-    return db.query(models.ArticleIdentity)\
-        .options(joinedload(models.ArticleIdentity.cases))\
+def _article_query(db: Session, keyword: str | None = None, date: str | None = None):
+    query = db.query(models.ArticleIdentity).options(joinedload(models.ArticleIdentity.cases))
+    if keyword:
+        query = query.join(models.ArticleDetails, models.ArticleIdentity.details).filter(
+            models.ArticleDetails.keywords_matched.ilike(f"%{keyword}%")
+        )
+    if date:
+        query = query.filter(func.date_format(models.ArticleIdentity.published_date, "%Y-%m-%d") == date)
+    return query
+
+
+def get_articles(db: Session, skip: int = 0, limit: int = 100, keyword: str | None = None, date: str | None = None):
+    return _article_query(db, keyword=keyword, date=date)\
         .order_by(models.ArticleIdentity.published_date.desc())\
         .offset(skip).limit(limit).all()
 
-def count_articles(db: Session):
-    return db.query(models.ArticleIdentity).count()
+def count_articles(db: Session, keyword: str | None = None, date: str | None = None):
+    return _article_query(db, keyword=keyword, date=date).count()
 
 def get_article_by_link(db: Session, link: str):
     return db.query(models.ArticleIdentity).filter(models.ArticleIdentity.link == link).first()
@@ -37,7 +48,9 @@ def create_article(db: Session, article: schemas.ArticleCreate):
         source=article.source,
         keywords_matched=article.keywords_matched,
         tags=article.tags,
-        is_whitelisted=article.is_whitelisted
+        is_whitelisted=article.is_whitelisted,
+        outbreak_relevance_score=article.outbreak_relevance_score,
+        is_suspected_false_positive=article.is_suspected_false_positive,
     )
     db.add(db_details)
     db.commit()
@@ -295,10 +308,14 @@ def seed_default_rss_sources(db: Session):
     if db.query(models.RssSource).count() > 0:
         return  # Đã có dữ liệu, không cần seed lại
     for item in _DEFAULT_RSS_SOURCES:
+        url = item["url"].lower()
+        default_type = "INTERNATIONAL" if "nytimes" in url or "foxnews" in url or "cidrap" in url or "who" in url else "DOMESTIC"
+        
         db_src = models.RssSource(
             url=item["url"],
             label=item.get("label"),
             category=item.get("category"),
+            source_type=item.get("source_type", default_type),
             is_active=True,
         )
         db.add(db_src)
@@ -309,6 +326,7 @@ def create_rss_source(db: Session, source: schemas.RssSourceCreate):
         url=source.url,
         label=source.label,
         category=source.category,
+        source_type=source.source_type,
         is_active=source.is_active,
     )
     db.add(db_src)
@@ -336,3 +354,14 @@ def toggle_rss_source_active(db: Session, source_id: int, is_active: bool):
     db.commit()
     db.refresh(source)
     return source
+
+def update_rss_source(db: Session, source_id: int, update_data: schemas.RssSourceUpdate):
+    db_source = db.query(models.RssSource).filter(models.RssSource.id == source_id).first()
+    if not db_source:
+        return None
+    update_dict = update_data.model_dump(exclude_unset=True)
+    for key, value in update_dict.items():
+        setattr(db_source, key, value)
+    db.commit()
+    db.refresh(db_source)
+    return db_source

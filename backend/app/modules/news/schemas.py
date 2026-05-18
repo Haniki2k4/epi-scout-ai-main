@@ -12,6 +12,8 @@ class ArticleBase(BaseModel):
     keywords_matched: Optional[str] = None
     tags: Optional[str] = None
     is_whitelisted: bool = False
+    outbreak_relevance_score: float = 0.0
+    is_suspected_false_positive: bool = False
     event_id: Optional[int] = None
     event_match_score: Optional[float] = None
     dedupe_reason: Optional[str] = None
@@ -99,6 +101,7 @@ class RssSourceCreate(BaseModel):
     url: str
     label: Optional[str] = None
     category: Optional[str] = None
+    source_type: Optional[str] = "DOMESTIC"
     is_active: bool = True
 
 class RssSourceDTO(RssSourceCreate):
@@ -108,3 +111,10 @@ class RssSourceDTO(RssSourceCreate):
 
 class RssSourceToggleRequest(BaseModel):
     is_active: bool
+
+class RssSourceUpdate(BaseModel):
+    url: Optional[str] = None
+    label: Optional[str] = None
+    category: Optional[str] = None
+    source_type: Optional[str] = None
+    is_active: Optional[bool] = None

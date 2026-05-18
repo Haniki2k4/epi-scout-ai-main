@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { AlertCircle, CheckCircle2, Loader2, X } from "lucide-react";
+import { CheckCircle2, Loader2, X } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { useToast } from "@/components/ui/use-toast";
 
@@ -13,34 +13,47 @@ interface ScanStatus {
 
 export const ScanStatusBanner = () => {
   const [status, setStatus] = useState<ScanStatus | null>(null);
-  const [visible, setVisible] = useState(true);
+  const [visible, setVisible] = useState(false);
   const [wasScanning, setWasScanning] = useState(false);
   const { toast } = useToast();
 
   useEffect(() => {
-    // Polling every 60 seconds
+    // Polling every 30 seconds
     const fetchStatus = async () => {
       try {
         const token = localStorage.getItem("token");
         const headers = token ? { Authorization: `Bearer ${token}` } : {};
         const res = await fetch("/api/scan-status", { headers });
         if (res.ok) {
-          const data = await res.json();
+          const data: ScanStatus = await res.json();
           setStatus(data);
 
           if (data.is_scanning) {
             setWasScanning(true);
             setVisible(true); // Always show when scanning
-          } else if (wasScanning && !data.is_scanning) {
-            // Scan just finished
-            setWasScanning(false);
-            toast({
-              title: "Quét hoàn tất",
-              description: `Đã lưu ${data.last_run_saved_count} bài viết mới.`,
-              duration: 5000,
-            });
-            // Auto hide success banner after 5s
-            setTimeout(() => setVisible(false), 5000);
+          } else {
+            // If it just stopped scanning in this session
+            if (wasScanning) {
+              setWasScanning(false);
+              setVisible(true);
+              toast({
+                title: "Quét hoàn tất",
+                description: `Đã lưu ${data.last_run_saved_count} bài viết mới.`,
+                duration: 5000,
+              });
+              // Auto hide success banner after 60s
+              setTimeout(() => setVisible(false), 60000);
+            } else if (data.last_run_at) {
+              // Show if last run was very recent (within 1 hour) and not manually dismissed
+              const runTime = new Date(data.last_run_at).getTime();
+              const now = new Date().getTime();
+              if (now - runTime < 60 * 60 * 1000) {
+                const dismissedTime = sessionStorage.getItem("dismissed_scan_time");
+                if (dismissedTime !== data.last_run_at) {
+                  setVisible(true);
+                }
+              }
+            }
           }
         }
       } catch (error) {
@@ -48,48 +61,48 @@ export const ScanStatusBanner = () => {
       }
     };
 
-    fetchStatus();
-    const interval = setInterval(fetchStatus, 60000); // 1 min
+    fetchStatus(); // Check immediately on mount (after login)
+    const interval = setInterval(fetchStatus, 30000); // 30 seconds
 
     return () => clearInterval(interval);
   }, [wasScanning, toast]);
+
+  const handleDismiss = () => {
+    setVisible(false);
+    if (status?.last_run_at) {
+      sessionStorage.setItem("dismissed_scan_time", status.last_run_at);
+    }
+  };
 
   if (!visible || !status) return null;
 
   if (status.is_scanning) {
     return (
-      <div className="fixed top-0 left-0 right-0 z-50 animate-in slide-in-from-top-2">
-        <Alert className="rounded-none border-t-0 border-l-0 border-r-0 border-b-primary/20 bg-primary/5 text-primary">
-          <Loader2 className="h-4 w-4 animate-spin text-primary" />
-          <AlertTitle className="text-sm font-semibold flex items-center gap-2">
-            Hệ thống đang quét tin tức...
-          </AlertTitle>
-          <AlertDescription className="text-xs">
-            Đang tìm kiếm và phân tích các sự kiện dịch tễ mới. Quá trình này có thể mất vài phút.
-          </AlertDescription>
-        </Alert>
+      <div className="mx-auto w-fit mt-3 animate-in slide-in-from-top-2 fade-in duration-300 relative z-50">
+        <div className="flex items-center justify-center gap-2.5 px-4 py-2 bg-orange-500/90 hover:bg-orange-500 backdrop-blur-sm text-white rounded-full shadow-md border border-orange-400/30 transition-all">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          <span className="text-sm font-medium">Hệ thống đang quét tin tức...</span>
+        </div>
       </div>
     );
   }
 
-  // Show result after scanning finishes (until closed or auto-hidden)
-  if (wasScanning === false && status.last_run_at && visible) {
+  if (!status.is_scanning && status.last_run_at && visible) {
     return (
-      <div className="fixed top-0 left-0 right-0 z-50 animate-in slide-in-from-top-2">
-        <Alert className="rounded-none border-t-0 border-l-0 border-r-0 border-b-green-500/20 bg-green-500/5 text-green-700">
-          <CheckCircle2 className="h-4 w-4 text-green-600" />
-          <AlertTitle className="text-sm font-semibold">
-            Hoàn thành quét tin tức
-          </AlertTitle>
-          <AlertDescription className="text-xs flex justify-between items-center">
-            <span>
-              Cập nhật lúc {new Date(status.last_run_at).toLocaleTimeString()} - Lưu {status.last_run_saved_count} bài viết mới.
-            </span>
-            <button onClick={() => setVisible(false)} className="hover:bg-green-500/20 p-1 rounded">
-              <X className="h-4 w-4" />
-            </button>
-          </AlertDescription>
-        </Alert>
+      <div className="mx-auto w-fit mt-3 animate-in slide-in-from-top-2 fade-in duration-300 relative z-50">
+        <div className="flex items-center justify-center gap-2.5 px-4 py-2 bg-emerald-500/90 hover:bg-emerald-500 backdrop-blur-sm text-white rounded-full shadow-md border border-emerald-400/30 transition-all">
+          <CheckCircle2 className="h-4 w-4" />
+          <span className="text-sm font-medium">
+            Quét hoàn tất ({new Date(status.last_run_at).toLocaleTimeString()}) - Lưu {status.last_run_saved_count} bài mới.
+          </span>
+          <button 
+            onClick={handleDismiss} 
+            className="p-1 -mr-1 ml-1 hover:bg-black/10 rounded-full transition-colors focus:outline-none"
+            title="Đóng"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
       </div>
     );
   }

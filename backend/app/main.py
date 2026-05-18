@@ -14,6 +14,9 @@ from .modules.auth import router_alerts as alerts_router
 from .modules.admin import router_users as admin_users_router
 from .modules.admin import router_scheduler as admin_scheduler_router
 from .modules.report import router as report_router
+from .modules.report import router_ai_summary
+from .modules.admin import router_llm_status
+from .modules.evaluation import router as evaluation_router
 from . import scheduler as app_scheduler
 
 app = FastAPI(description="Hệ thống quét và tự động phân tích tin tức dịch tễ.")
@@ -65,7 +68,10 @@ app.include_router(auth_router.router)
 app.include_router(alerts_router.router)
 app.include_router(admin_users_router.router)
 app.include_router(admin_scheduler_router.router)
+app.include_router(router_llm_status.router)
 app.include_router(report_router.router)
+app.include_router(router_ai_summary.router)
+app.include_router(evaluation_router.router)
 
 # CORS configuration
 # Đọc từ env CORS_ORIGINS (dạng comma-separated), fallback về localhost khi dev
@@ -133,11 +139,13 @@ def get_scan_status(
 def read_articles(
     skip: int = 0, 
     limit: int = 100, 
+    keyword: str | None = None,
+    date: str | None = None,
     db: Session = Depends(get_db)
 ):
-    logger.info("Read articles requested | skip={} limit={}", skip, limit)
-    articles = crud.get_articles(db, skip=skip, limit=limit)
-    total = crud.count_articles(db)
+    logger.info("Read articles requested | skip={} limit={} keyword={} date={}", skip, limit, keyword, date)
+    articles = crud.get_articles(db, skip=skip, limit=limit, keyword=keyword, date=date)
+    total = crud.count_articles(db, keyword=keyword, date=date)
     logger.info("Read articles completed | count={} total={}", len(articles), total)
     return {
         "items": articles,
@@ -145,6 +153,16 @@ def read_articles(
         "skip": skip,
         "limit": limit
     }
+
+@app.get("/api/articles/new-count")
+def get_new_articles_count(hours: int = 24, db: Session = Depends(get_db)):
+    """Đếm số bài báo mới được thu thập trong N giờ gần nhất (public, không cần auth)."""
+    from datetime import timedelta
+    since = datetime.utcnow() - timedelta(hours=hours)
+    count = db.query(models.ArticleIdentity).filter(
+        models.ArticleIdentity.published_date >= since
+    ).count()
+    return {"count": count, "hours": hours}
 
 @app.post("/api/articles/save", response_model=schemas.ArticleDTO)
 def save_article(
@@ -159,16 +177,19 @@ def save_article(
         raise HTTPException(status_code=400, detail="Article already saved")
     matched_keywords = article.keywords_matched or ""
     if matched_keywords:
-        inferred_event, event_match_score, dedupe_reason = crawler.resolve_event_for_article(
+        cases = crawler.extract_case_count(
+            f"{article.title} {article.summary or ''}",
+            [kw.strip() for kw in matched_keywords.split(",") if kw.strip()],
+        )
+        inferred_event, event_match_score, dedupe_reason, _ = crawler.resolve_event_for_article(
             db=db,
             title=article.title,
+            summary=article.summary or "",
             matched_keywords=matched_keywords,
             pub_date=article.published_date or datetime.utcnow(),
             location="Việt Nam",
-            case_count=crawler.extract_case_count(
-                f"{article.title} {article.summary or ''}",
-                [kw.strip() for kw in matched_keywords.split(",") if kw.strip()],
-            ),
+            cumulative_cases=cases,
+            new_cases=0,
             severity=None,
         )
         article.event_id = inferred_event.id if inferred_event else None
@@ -323,6 +344,13 @@ def get_keyword_zscore(window: int = 14, days: int = 60, db: Session = Depends(g
     logger.info("Keyword Z-score spikes requested | window={} days={}", window, days)
     result = stats.get_keyword_zscore_spikes(db, window=window, days=days)
     logger.info("Keyword Z-score spikes completed | items={}", len(result))
+    return result
+
+@app.get("/api/stats/keyword-bubble")
+def get_keyword_bubble(days: int = 30, window: int = 14, db: Session = Depends(get_db)):
+    logger.info("Keyword bubble requested | days={} window={}", days, window)
+    result = stats.get_keyword_bubble_data(db, days=days, window=window)
+    logger.info("Keyword bubble completed | items={}", len(result))
     return result
 
 @app.get("/api/stats/forecast")
@@ -510,4 +538,18 @@ def toggle_rss_source_api(
     if not updated:
         raise HTTPException(status_code=404, detail="RSS Source not found")
     logger.info("Toggle RSS source completed | source_id={} is_active={}", source_id, updated.is_active)
+    return updated
+
+@app.put("/api/rss-sources/{source_id}", response_model=schemas.RssSourceDTO)
+def update_rss_source_api(
+    source_id: int,
+    body: schemas.RssSourceUpdate,
+    db: Session = Depends(get_db),
+    current_admin=Depends(security.require_admin_role)
+):
+    logger.info("Update RSS source | source_id={}", source_id)
+    updated = crud.update_rss_source(db, source_id, body)
+    if not updated:
+        raise HTTPException(status_code=404, detail="RSS Source not found")
+    logger.info("Update RSS source completed | source_id={}", source_id)
     return updated

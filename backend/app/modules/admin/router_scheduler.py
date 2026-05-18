@@ -117,15 +117,20 @@ async def trigger_manual_scan(
     logger.info("Manual scan triggered | start={} end={}", start_date, end_date)
 
     try:
-        result = crawler.scan_news(
-            db=db,
-            start_date=start_date,
-            end_date=end_date,
-            keywords_to_scan=None,  # Dùng toàn bộ keywords is_active=True
-        )
-        config.last_run_at = now
-        config.last_run_saved_count = result.saved_trusted_count
-        db.commit()
+        import asyncio
+        def _do_manual_scan():
+            res = crawler.scan_news(
+                db=db,
+                start_date=start_date,
+                end_date=end_date,
+                keywords_to_scan=None,  # Dùng toàn bộ keywords is_active=True
+            )
+            config.last_run_at = now
+            config.last_run_saved_count = res.saved_trusted_count
+            db.commit()
+            return res
+
+        result = await asyncio.to_thread(_do_manual_scan)
 
         logger.info("Manual scan completed | saved={}", result.saved_trusted_count)
         return {
