@@ -127,6 +127,12 @@ async def trigger_manual_scan(
             )
             config.last_run_at = now
             config.last_run_saved_count = res.saved_trusted_count
+            config.last_scan_total_checked = res.total_checked
+            config.last_scan_noise_count = res.noise_count
+            config.last_scan_irrelevant_count = res.irrelevant_count
+            config.last_scan_unsure_count = res.unsure_count
+            config.last_scan_duration_seconds = round(res.execution_time or 0)
+            config.last_scan_started_at = res.started_at
             db.commit()
             return res
 

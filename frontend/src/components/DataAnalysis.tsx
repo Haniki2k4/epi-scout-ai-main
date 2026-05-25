@@ -5,7 +5,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, Scatter } from "recharts";
+import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, Scatter, ReferenceLine } from "recharts";
 import { TrendingUp, Download, FileText, BarChart3, Database, Sparkles, ShieldAlert, Send, CalendarClock, RadioTower, MapPin, AlertTriangle, Table2, Lock } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Article, NewsEvent, ZScoreSpike, ProphetForecast } from "@/types";
@@ -84,6 +84,8 @@ const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
     return localStorage.getItem(STORAGE_KEY);
   });
   const [isLoadingInitialDisease, setIsLoadingInitialDisease] = useState(false);
+  const [loadingZscore, setLoadingZscore] = useState(false);
+  const [loadingForecast, setLoadingForecast] = useState(false);
 
   // State báo cáo
   const [exportingWord, setExportingWord] = useState(false);
@@ -151,10 +153,17 @@ const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
       const cachedZscore = getFromCache<ZScoreSpike[]>(zscoreCacheKey);
       const cachedForecast = getFromCache<ProphetForecast[]>(forecastCacheKey);
 
-      if (cachedZscore) {
+      if (!cachedZscore) {
+        setZscoreSpikes([]);
+        setLoadingZscore(true);
+      } else {
         setZscoreSpikes(cachedZscore);
       }
-      if (cachedForecast) {
+      if (!cachedForecast) {
+        setProphetForecast([]);
+        setProphetMetrics(null);
+        setLoadingForecast(true);
+      } else {
         setProphetForecast(cachedForecast);
       }
 
@@ -170,13 +179,15 @@ const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
             date: d.date,
             cases: d.count,
             rolling_mean: d.ma,
-            rolling_std: 0,
+            rolling_std: d.std ?? 0,
             z_score: d.zscore,
-            is_spike: d.spike_level === 'danger' || d.spike_level === 'alert'
+            is_spike: d.spike_level === 'danger' || d.spike_level === 'alert',
+            threshold: d.std > 0 ? d.ma + 2 * d.std : d.count,
           }));
           setZscoreSpikes(mappedZscore);
           setToCache(zscoreCacheKey, mappedZscore);
         }
+        setLoadingZscore(false);
         if (prophetRes.ok && !cachedForecast) {
           const pData = await prophetRes.json();
           const mappedForecast: ProphetForecast[] = [];
@@ -214,8 +225,11 @@ const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
             setProphetMetrics(null);
           }
         }
+        setLoadingForecast(false);
       } catch (e) {
         console.error("Failed to fetch forecast data", e);
+        setLoadingZscore(false);
+        setLoadingForecast(false);
       }
     };
     fetchForecastData();
@@ -261,9 +275,10 @@ const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
             date: d.date,
             cases: d.count,
             rolling_mean: d.ma,
-            rolling_std: 0,
+            rolling_std: d.std ?? 0,
             z_score: d.zscore,
-            is_spike: d.spike_level === 'danger' || d.spike_level === 'alert'
+            is_spike: d.spike_level === 'danger' || d.spike_level === 'alert',
+            threshold: d.std > 0 ? d.ma + 2 * d.std : d.count,
           })));
         }
         const bubbleRes = await fetch("/api/stats/keyword-bubble?days=30&window=14");
@@ -395,10 +410,13 @@ const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
     setBubbleDialogOpen(true);
     setBubbleArticles([]);
     try {
-      const res = await fetch(`/api/articles?keyword=${encodeURIComponent(point.keyword)}&date=${encodeURIComponent(point.date)}&limit=20`);
+      const res = await fetch(`/api/articles?keyword=${encodeURIComponent(point.keyword)}&date=${encodeURIComponent(point.date)}&limit=20&include_label=true`);
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || "Khong the tai bai bao lien quan");
-      setBubbleArticles(data.items || []);
+      const filtered = (data.items || []).filter(
+        (a: Article) => a.human_label !== "noise" && a.human_label !== "irrelevant"
+      );
+      setBubbleArticles(filtered);
     } catch (error) {
       toast({
         title: "Loi",
@@ -692,11 +710,19 @@ const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
               />
             </CardHeader>
             <CardContent>
-              <div className="h-[400px] mt-4">
+              <div className="h-[400px] mt-4 relative">
+                {loadingZscore && (
+                  <div className="absolute inset-0 z-10 flex items-center justify-center bg-card/60 backdrop-blur-sm rounded-lg">
+                    <div className="flex flex-col items-center gap-2">
+                      <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
+                      <span className="text-sm text-muted-foreground">Đang tính toán...</span>
+                    </div>
+                  </div>
+                )}
                 <ResponsiveContainer width="100%" height="100%">
-                  <ComposedChart data={zscoreSpikes} margin={{ top: 20, right: 30, left: 0, bottom: 0 }}>
+                  <ComposedChart data={zscoreSpikes.map(s => ({ ...s, spike_value: s.is_spike ? s.cases : null }))} margin={{ top: 20, right: 30, left: 0, bottom: 0 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
-                    <XAxis dataKey="date" stroke="hsl(var(--muted-foreground))" tick={{ fontSize: 12 }} />
+                    <XAxis dataKey="date" stroke="hsl(var(--muted-foreground))" tick={{ fontSize: 12 }} minTickGap={30} />
                     <YAxis stroke="hsl(var(--muted-foreground))" tick={{ fontSize: 12 }} />
                     <Tooltip
                       contentStyle={{ backgroundColor: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: "8px" }}
@@ -705,18 +731,10 @@ const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
                     <Legend />
                     <Bar dataKey="cases" name="Số bài báo nhắc đến" fill="hsl(var(--chart-1))" radius={[4, 4, 0, 0]} maxBarSize={40} />
                     <Line type="monotone" dataKey="rolling_mean" name="Trung bình trượt (14 ngày)" stroke="hsl(var(--chart-2))" strokeWidth={2} dot={false} />
-                    {zscoreSpikes.filter(d => d.is_spike).map((entry, index) => (
-                      <Line
-                        key={`spike-${index}`}
-                        dataKey="cases"
-                        data={[entry]}
-                        name="Cảnh báo đột biến"
-                        stroke="transparent"
-                        dot={{ r: 6, fill: "hsl(var(--destructive))", strokeWidth: 2, stroke: "hsl(var(--background))" }}
-                        activeDot={false}
-                        legendType="circle"
-                      />
-                    ))}
+                    <Line type="monotone" dataKey="spike_value" name="Cảnh báo đột biến" stroke="transparent" connectNulls={false}
+                      dot={{ r: 6, fill: "hsl(var(--destructive))", strokeWidth: 2, stroke: "hsl(var(--background))" }}
+                      activeDot={false} legendType="circle" />
+                    <Line type="monotone" dataKey="threshold" name="Ngưỡng bất thường (MA+2σ)" stroke="hsl(var(--destructive))" strokeWidth={1.5} strokeDasharray="6 3" dot={false} />
                   </ComposedChart>
                 </ResponsiveContainer>
               </div>
@@ -733,14 +751,14 @@ const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
               </CardHeader>
               <CardContent>
                 <div className="space-y-4">
-                  {zscoreSpikes.filter(s => s.is_spike).slice(-3).reverse().map((spike, i) => (
+                  {zscoreSpikes.filter(s => s.is_spike).reverse().map((spike, i) => (
                     <div key={i} className="flex justify-between items-center p-3 rounded-lg bg-destructive/10 border border-destructive/20">
                       <div>
                         <div className="font-medium text-destructive">{spike.date}</div>
                         <div className="text-sm text-muted-foreground">Z-Score: <span className="font-semibold">{spike.z_score.toFixed(2)}</span></div>
                       </div>
                       <div className="text-right">
-                        <div className="font-bold text-foreground">{spike.cases} ca</div>
+                        <div className="font-bold text-foreground">{spike.cases} bài báo</div>
                         <div className="text-xs text-muted-foreground">+{(spike.cases - spike.rolling_mean).toFixed(1)} so với TB</div>
                       </div>
                     </div>
@@ -792,7 +810,15 @@ const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
               />
             </CardHeader>
             <CardContent>
-              <div className="h-[460px] mt-4">
+              <div className="h-[460px] mt-4 relative">
+                {loadingForecast && (
+                  <div className="absolute inset-0 z-10 flex items-center justify-center bg-card/60 backdrop-blur-sm rounded-lg">
+                    <div className="flex flex-col items-center gap-2">
+                      <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
+                      <span className="text-sm text-muted-foreground">Đang tính toán...</span>
+                    </div>
+                  </div>
+                )}
                 <ResponsiveContainer width="100%" height="100%">
                   <ComposedChart
                     data={prophetForecast}
@@ -813,6 +839,7 @@ const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
                       tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }}
                       label={{ value: "ds", position: "insideBottom", offset: -15, fill: "hsl(var(--muted-foreground))", fontSize: 12 }}
                       tickLine={false}
+                      minTickGap={30}
                       interval="preserveStartEnd"
                     />
 
@@ -953,9 +980,12 @@ const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
               </div>
               <div className="hidden">
                 <ResponsiveContainer width="100%" height="100%">
-                  <ComposedChart data={keywordZScoreSpikes.length > 0 ? keywordZScoreSpikes : keywordTimeseries.map(item => ({ date: item.date, cases: item.keyword_count, rolling_mean: item.keyword_count, z_score: 0, is_spike: false }))} margin={{ top: 20, right: 30, left: 0, bottom: 0 }}>
+                  <ComposedChart data={keywordZScoreSpikes.length > 0
+                    ? keywordZScoreSpikes.map(s => ({ ...s, spike_value: s.is_spike ? s.cases : null }))
+                    : keywordTimeseries.map(item => ({ date: item.date, cases: item.keyword_count, rolling_mean: item.keyword_count, z_score: 0, is_spike: false, spike_value: null, threshold: item.keyword_count }))
+                  } margin={{ top: 20, right: 30, left: 0, bottom: 0 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
-                    <XAxis dataKey="date" stroke="hsl(var(--muted-foreground))" tick={{ fontSize: 12 }} />
+                    <XAxis dataKey="date" stroke="hsl(var(--muted-foreground))" tick={{ fontSize: 12 }} minTickGap={30} />
                     <YAxis stroke="hsl(var(--muted-foreground))" tick={{ fontSize: 12 }} />
                     <Tooltip
                       contentStyle={{ backgroundColor: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: "8px" }}
@@ -964,18 +994,10 @@ const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
                     <Legend />
                     <Bar dataKey="cases" name="Số loại bệnh" fill="hsl(var(--chart-3))" radius={[4, 4, 0, 0]} maxBarSize={40} />
                     <Line type="monotone" dataKey="rolling_mean" name="Trung bình trượt (14 ngày)" stroke="hsl(var(--chart-4))" strokeWidth={2} dot={false} />
-                    {keywordZScoreSpikes.length > 0 && keywordZScoreSpikes.filter(d => d.is_spike).map((entry, index) => (
-                      <Line
-                        key={`spike-div-${index}`}
-                        dataKey="cases"
-                        data={[entry]}
-                        name="Cảnh báo đột biến"
-                        stroke="transparent"
-                        dot={{ r: 6, fill: "hsl(var(--destructive))", strokeWidth: 2, stroke: "hsl(var(--background))" }}
-                        activeDot={false}
-                        legendType="circle"
-                      />
-                    ))}
+                    <Line type="monotone" dataKey="spike_value" name="Cảnh báo đột biến" stroke="transparent" connectNulls={false}
+                      dot={{ r: 6, fill: "hsl(var(--destructive))", strokeWidth: 2, stroke: "hsl(var(--background))" }}
+                      activeDot={false} legendType="circle" />
+                    <Line type="monotone" dataKey="threshold" name="Ngưỡng bất thường" stroke="hsl(var(--destructive))" strokeWidth={1.5} strokeDasharray="6 3" dot={false} />
                   </ComposedChart>
                 </ResponsiveContainer>
               </div>
@@ -989,7 +1011,7 @@ const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
                     </CardTitle>
                   </CardHeader>
                   <CardContent className="space-y-3 pb-4">
-                    {keywordZScoreSpikes.filter(s => s.is_spike).slice(-3).reverse().map((spike, i) => (
+                    {keywordZScoreSpikes.filter(s => s.is_spike).reverse().map((spike, i) => (
                       <div key={i} className="flex justify-between items-center p-3 rounded-lg bg-destructive/10 border border-destructive/20">
                         <div>
                           <div className="font-medium text-destructive">{spike.date}</div>

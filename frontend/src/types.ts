@@ -20,6 +20,8 @@ export interface Article {
   event_match_score?: number | null;
   dedupe_reason?: string | null;
   cases?: DiseaseCase[];
+  llm_label?: string | null;
+  human_label?: string | null;
 }
 
 export interface RssSource {
@@ -68,6 +70,7 @@ export interface ZScoreSpike {
   rolling_std: number;
   z_score: number;
   is_spike: boolean;
+  threshold?: number;
 }
 
 export interface ProphetForecast {

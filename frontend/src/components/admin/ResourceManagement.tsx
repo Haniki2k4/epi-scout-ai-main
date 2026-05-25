@@ -54,6 +54,7 @@ export default function ResourceManagement() {
 
   // Keyword states
   const [newKeyword, setNewKeyword] = useState("");
+  const [kwSearch, setKwSearch] = useState("");
   const [isEditKwModalOpen, setIsEditKwModalOpen] = useState(false);
   const [editKwItem, setEditKwItem] = useState<KeywordModel | null>(null);
   const [editKwText, setEditKwText] = useState("");
@@ -62,6 +63,7 @@ export default function ResourceManagement() {
   const [newRssUrl, setNewRssUrl] = useState("");
   const [newRssLabel, setNewRssLabel] = useState("");
   const [newRssCategory, setNewRssCategory] = useState("the-gioi");
+  const [rssSearch, setRssSearch] = useState("");
 
   // Fetch Keywords
   const { data: keywords = [], isLoading: loadKw } = useQuery<KeywordModel[]>({
@@ -238,6 +240,15 @@ export default function ResourceManagement() {
     });
   };
 
+  const filteredKeywords = keywords.filter(kw => kw.text.toLowerCase().includes(kwSearch.toLowerCase()));
+  const kwActiveCount = keywords.filter(k => k.is_active).length;
+
+  const filteredRss = rssSources.filter(src => 
+    src.url.toLowerCase().includes(rssSearch.toLowerCase()) || 
+    (src.label && src.label.toLowerCase().includes(rssSearch.toLowerCase()))
+  );
+  const rssActiveCount = rssSources.filter(r => r.is_active).length;
+
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
       {/* ---------------- KEYWORD BLOCK ---------------- */}
@@ -262,12 +273,24 @@ export default function ResourceManagement() {
             </Button>
           </form>
 
+          <div className="flex items-center justify-between mb-4">
+            <Input
+              placeholder="Tìm kiếm từ khóa..."
+              value={kwSearch}
+              onChange={(e) => setKwSearch(e.target.value)}
+              className="max-w-[200px]"
+            />
+            <Badge variant="secondary">
+              Tổng: {keywords.length} | Bật: {kwActiveCount}
+            </Badge>
+          </div>
+
           <div className="rounded-md border border-border/50 overflow-auto h-[400px]">
             {loadKw ? (
               <div className="flex justify-center p-8"><RefreshCcw className="h-6 w-6 animate-spin text-primary" /></div>
             ) : (
               <Table>
-                <TableHeader className="bg-muted/50 sticky top-0">
+                <TableHeader className="bg-muted/50 sticky top-0 z-10">
                   <TableRow>
                     <TableHead>Trạng thái</TableHead>
                     <TableHead>Từ khóa (Keyword)</TableHead>
@@ -275,7 +298,7 @@ export default function ResourceManagement() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {keywords.map(kw => (
+                  {filteredKeywords.map(kw => (
                     <TableRow key={kw.id} className={!kw.is_active ? "opacity-50" : ""}>
                       <TableCell className="w-[80px]">
                         <Switch
@@ -370,12 +393,24 @@ export default function ResourceManagement() {
             </div>
           </form>
 
+          <div className="flex items-center justify-between mb-4">
+            <Input
+              placeholder="Tìm kiếm RSS..."
+              value={rssSearch}
+              onChange={(e) => setRssSearch(e.target.value)}
+              className="max-w-[200px]"
+            />
+            <Badge variant="secondary">
+              Tổng: {rssSources.length} | Bật: {rssActiveCount}
+            </Badge>
+          </div>
+
           <div className="rounded-md border border-border/50 overflow-auto h-[350px]">
             {loadRss ? (
               <div className="flex justify-center p-8"><RefreshCcw className="h-6 w-6 animate-spin text-primary" /></div>
             ) : (
               <Table>
-                <TableHeader className="bg-muted/50 sticky top-0">
+                <TableHeader className="bg-muted/50 sticky top-0 z-10">
                   <TableRow>
                     <TableHead>Trạng thái</TableHead>
                     <TableHead>Nguồn tin</TableHead>
@@ -383,7 +418,7 @@ export default function ResourceManagement() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {rssSources.map(src => (
+                  {filteredRss.map(src => (
                     <TableRow key={src.id} className={!src.is_active ? "opacity-50" : ""}>
                       <TableCell className="w-[80px]">
                         <Switch

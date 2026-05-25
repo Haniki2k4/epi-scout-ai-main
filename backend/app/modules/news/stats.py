@@ -22,6 +22,7 @@ def disease_mention_counts(db: Session, months: int = 1, days: int = None):
         db.query(models.ArticleDetails.keywords_matched)
         .join(models.ArticleIdentity, models.ArticleIdentity.id == models.ArticleDetails.article_id)
         .filter(models.ArticleIdentity.published_date >= start_date)
+        .filter(models.ArticleIdentity.is_excluded.isnot(True))
         .all()
     )
 
@@ -92,6 +93,7 @@ def get_trend_data(db: Session, days: int = 7):
         )
         .join(models.DiseaseCase, models.DiseaseCase.article_id == models.ArticleIdentity.id)
         .filter(models.ArticleIdentity.event_id.isnot(None))
+        .filter(models.ArticleIdentity.is_excluded.isnot(True))
         .group_by(models.ArticleIdentity.event_id, func.date_format(models.DiseaseCase.report_date, "%Y-%m-%d"))
         .order_by(models.ArticleIdentity.event_id, func.date_format(models.DiseaseCase.report_date, "%Y-%m-%d"))
         .all()
@@ -163,6 +165,7 @@ def get_location_heatmap_data(db: Session, days: int = 30, month: int = None, ye
             func.count(func.distinct(models.DiseaseCase.article_id)).label("mentions"),
             func.sum(models.DiseaseCase.case_count).label("total_cases"),
         )
+        .join(models.ArticleIdentity, models.DiseaseCase.article_id == models.ArticleIdentity.id)
         .filter(
             models.DiseaseCase.report_date >= start_date,
             models.DiseaseCase.report_date <= end_date,
@@ -172,6 +175,7 @@ def get_location_heatmap_data(db: Session, days: int = 30, month: int = None, ye
             models.DiseaseCase.location.notin_(["unknown", "Unknown", "UNKNOWN"]),
             models.DiseaseCase.disease_name.isnot(None),
             models.DiseaseCase.disease_name != "",
+            models.ArticleIdentity.is_excluded != True,
         )
         .group_by(models.DiseaseCase.location, models.DiseaseCase.disease_name)
         .all()
@@ -271,6 +275,7 @@ def get_interest_trends(db: Session, days: int = 30):
         )
         .join(models.ArticleIdentity, models.ArticleIdentity.id == models.ArticleDetails.article_id)
         .filter(models.ArticleIdentity.published_date >= start_date)
+        .filter(models.ArticleIdentity.is_excluded.isnot(True))
         .all()
     )
 
@@ -310,6 +315,7 @@ def get_zscore_spikes(db, disease_name=None, window=14, days=60):
         )
         .join(models.ArticleIdentity, models.ArticleIdentity.id == models.ArticleDetails.article_id)
         .filter(models.ArticleIdentity.published_date >= start_date)
+        .filter(models.ArticleIdentity.is_excluded.isnot(True))
         .all()
     )
     
@@ -345,6 +351,7 @@ def get_zscore_spikes(db, disease_name=None, window=14, days=60):
             'date': d, 
             'count': cnt, 
             'ma': round(ma, 2), 
+            'std': round(std, 2),
             'zscore': round(zscore, 2), 
             'spike_level': spike_level
         })
@@ -370,6 +377,7 @@ def get_prophet_forecast(db, disease_name=None, horizon_days=7):
         )
         .join(models.ArticleIdentity, models.ArticleIdentity.id == models.ArticleDetails.article_id)
         .filter(models.ArticleIdentity.published_date >= start_date)
+        .filter(models.ArticleIdentity.is_excluded.isnot(True))
         .all()
     )
     
@@ -411,8 +419,30 @@ def get_prophet_forecast(db, disease_name=None, horizon_days=7):
              "yhat_upper": max(0, round(float(row["yhat_upper"]), 2))}
             for _, row in future_only.iterrows()
         ]
+
+        # Calculate RMSE/MAE using time-based evaluation:
+        # Train on first 80%, predict last 20%
+        split_idx = max(2, int(len(df) * 0.8))
+        train_df = df.iloc[:split_idx]
+        test_df = df.iloc[split_idx:]
+        if len(test_df) >= 2:
+            eval_model = Prophet(weekly_seasonality=True, yearly_seasonality=False,
+                                 daily_seasonality=False, interval_width=0.80)
+            eval_model.fit(train_df)
+            eval_future = eval_model.make_future_dataframe(periods=len(test_df))
+            eval_forecast = eval_model.predict(eval_future)
+            eval_preds = eval_forecast[["ds", "yhat"]].tail(len(test_df))
+            actuals = test_df["y"].values
+            preds = eval_preds["yhat"].values
+            mae = float(np.mean(np.abs(actuals - preds)))
+            rmse = float(np.sqrt(np.mean((actuals - preds) ** 2)))
+        else:
+            mae = 0
+            rmse = 0
+
         return {"historical": historical, "forecast": forecast,
-                "disease": disease_name, "horizon_days": horizon_days, "metrics": {}}
+                "disease": disease_name, "horizon_days": horizon_days,
+                "metrics": {"mae": round(mae, 2), "rmse": round(rmse, 2), "eval_method": "Train 80% / Test 20%"}}
     except Exception as e:
         return {"historical": historical, "forecast": [], "disease": disease_name,
                 "horizon_days": horizon_days, "error": str(e)}
@@ -430,6 +460,7 @@ def get_keyword_timeseries(db: Session, days: int = 30):
         )
         .join(models.ArticleIdentity, models.ArticleIdentity.id == models.ArticleDetails.article_id)
         .filter(models.ArticleIdentity.published_date >= start_date)
+        .filter(models.ArticleIdentity.is_excluded.isnot(True))
         .all()
     )
     
@@ -480,6 +511,7 @@ def get_keyword_bubble_data(db: Session, days: int = 30, window: int = 14):
         )
         .join(models.ArticleIdentity, models.ArticleIdentity.id == models.ArticleDetails.article_id)
         .filter(models.ArticleIdentity.published_date >= start_date)
+        .filter(models.ArticleIdentity.is_excluded.isnot(True))
         .all()
     )
     

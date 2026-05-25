@@ -8,9 +8,12 @@ import {
   Dialog, DialogContent, DialogDescription, DialogFooter,
   DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
-import { Bell, Plus, Trash2, ChevronRight, Edit2, ToggleLeft, ToggleRight, Newspaper } from "lucide-react";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
+import { Bell, Plus, Trash2, ChevronRight, Edit2, ToggleLeft, ToggleRight, Newspaper, Check, ChevronsUpDown, X } from "lucide-react";
 import { useToast } from "@/components/ui/use-toast";
-import { Article } from "@/types";
+import { Article, Keyword } from "@/types";
+import { cn } from "@/lib/utils";
 import { useAlertFeedCounts } from "@/hooks/useNotificationBadge";
 
 // ---- Types ----
@@ -47,7 +50,7 @@ const API = {
     headers: authHeaders(),
   }).then(r => r.json()),
   getAlertFeed: (id: number, skip = 0, limit = 20) =>
-    fetch(`/api/alerts/${id}/feed?skip=${skip}&limit=${limit}`, {
+    fetch(`/api/alerts/${id}/feed?skip=${skip}&limit=${limit}&include_label=true`, {
       headers: authHeaders(),
     }).then(r => r.json()),
 };
@@ -75,7 +78,9 @@ const AlertsPage = () => {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingAlert, setEditingAlert] = useState<UserAlert | null>(null);
   const [formName, setFormName] = useState("");
-  const [formKeywords, setFormKeywords] = useState(""); // comma-separated
+  const [selectedKeywords, setSelectedKeywords] = useState<string[]>([]);
+  const [availableKeywords, setAvailableKeywords] = useState<Keyword[]>([]);
+  const [keywordComboOpen, setKeywordComboOpen] = useState(false);
   const [formLocation, setFormLocation] = useState("");
   const [saving, setSaving] = useState(false);
 
@@ -96,30 +101,45 @@ const AlertsPage = () => {
     }
   };
 
+  const fetchAvailableKeywords = async () => {
+    try {
+      const res = await fetch("/api/keywords?only_active=true");
+      if (res.ok) {
+        const data = await res.json();
+        setAvailableKeywords(Array.isArray(data) ? data : []);
+      }
+    } catch {
+      console.error("Failed to fetch keywords");
+    }
+  };
+
   const openCreateDialog = () => {
     setEditingAlert(null);
     setFormName("");
-    setFormKeywords("");
+    setSelectedKeywords([]);
     setFormLocation("");
+    fetchAvailableKeywords();
     setDialogOpen(true);
   };
 
   const openEditDialog = (alert: UserAlert) => {
     setEditingAlert(alert);
     setFormName(alert.name);
-    setFormKeywords(alert.keywords.join(", "));
+    setSelectedKeywords(alert.keywords);
     setFormLocation(alert.location_filter || "");
+    fetchAvailableKeywords();
     setDialogOpen(true);
   };
 
-  const handleSaveAlert = async () => {
-    const kwList = formKeywords
-      .split(",")
-      .map(k => k.trim())
-      .filter(k => k.length > 0);
+  const toggleKeyword = (kw: string) => {
+    setSelectedKeywords(prev =>
+      prev.includes(kw) ? prev.filter(k => k !== kw) : [...prev, kw]
+    );
+  };
 
-    if (!formName.trim() || kwList.length === 0) {
-      toast({ title: "Thiếu thông tin", description: "Vui lòng nhập tên và ít nhất 1 từ khóa", variant: "destructive" });
+  const handleSaveAlert = async () => {
+    if (!formName.trim() || selectedKeywords.length === 0) {
+      toast({ title: "Thiếu thông tin", description: "Vui lòng nhập tên và chọn ít nhất 1 từ khóa", variant: "destructive" });
       return;
     }
 
@@ -127,7 +147,7 @@ const AlertsPage = () => {
     try {
       const body = {
         name: formName.trim(),
-        keywords: kwList,
+        keywords: selectedKeywords,
         location_filter: formLocation.trim() || null,
       };
 
@@ -178,6 +198,11 @@ const AlertsPage = () => {
     setFeed(null);
     try {
       const data = await API.getAlertFeed(alert.id);
+      if (data.items) {
+        data.items = data.items.filter(
+          (a: Article) => a.human_label !== "noise" && a.human_label !== "irrelevant"
+        );
+      }
       setFeed(data);
       // Đánh dấu đã xem để ẩn badge
       if (!viewedAlertIds.includes(alert.id)) {
@@ -377,14 +402,61 @@ const AlertsPage = () => {
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="alert-keywords">Từ khóa theo dõi</Label>
-              <Input
-                id="alert-keywords"
-                placeholder="VD: Sởi, sởi bùng phát, sởi Hà Nội"
-                value={formKeywords}
-                onChange={e => setFormKeywords(e.target.value)}
-              />
-              <p className="text-xs text-muted-foreground">Ngăn cách bằng dấu phẩy. Bài báo chứa BẤT KỲ từ khóa nào đều được lọc ra.</p>
+              <Label>Từ khóa theo dõi</Label>
+              <Popover open={keywordComboOpen} onOpenChange={setKeywordComboOpen}>
+                <PopoverTrigger asChild>
+                  <Button
+                    variant="outline"
+                    role="combobox"
+                    aria-expanded={keywordComboOpen}
+                    className="w-full justify-between h-auto min-h-[40px]"
+                  >
+                    <div className="flex flex-wrap gap-1 mr-2">
+                      {selectedKeywords.length === 0 ? (
+                        <span className="text-muted-foreground font-normal">Chọn từ khóa...</span>
+                      ) : (
+                        selectedKeywords.map(kw => (
+                          <Badge
+                            key={kw}
+                            variant="secondary"
+                            className="text-xs gap-1"
+                            onClick={(e) => { e.stopPropagation(); toggleKeyword(kw); }}
+                          >
+                            {kw}
+                            <X className="h-3 w-3 cursor-pointer" />
+                          </Badge>
+                        ))
+                      )}
+                    </div>
+                    <ChevronsUpDown className="ml-auto h-4 w-4 shrink-0 opacity-50" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-full p-0 min-w-[250px]">
+                  <Command>
+                    <CommandInput placeholder="Tìm kiếm từ khóa..." />
+                    <CommandList>
+                      <CommandEmpty>Không tìm thấy từ khóa.</CommandEmpty>
+                      <CommandGroup>
+                        {availableKeywords.map((kw) => (
+                          <CommandItem
+                            key={kw.id || kw.text}
+                            onSelect={() => { toggleKeyword(kw.text); }}
+                          >
+                            <Check
+                              className={cn(
+                                "mr-2 h-4 w-4",
+                                selectedKeywords.includes(kw.text) ? "opacity-100" : "opacity-0"
+                              )}
+                            />
+                            {kw.text}
+                          </CommandItem>
+                        ))}
+                      </CommandGroup>
+                    </CommandList>
+                  </Command>
+                </PopoverContent>
+              </Popover>
+              <p className="text-xs text-muted-foreground">Chọn từ khóa hệ thống. Bài báo chứa BẤT KỲ từ khóa nào đều được lọc ra.</p>
             </div>
 
             <div className="space-y-2">

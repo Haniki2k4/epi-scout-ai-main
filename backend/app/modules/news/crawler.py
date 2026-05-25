@@ -77,6 +77,7 @@ def get_source_url(source_url: str) -> str:
 import requests
 from ...core.logger import get_logger
 from sentence_transformers import SentenceTransformer, util
+from ...utils.vietnam_provinces import parse_location_list, extract_locations_from_text
 
 logger = get_logger("backend.news.crawler")
 
@@ -89,8 +90,8 @@ _embedding_model = None
 def get_embedding_model() -> SentenceTransformer:
     global _embedding_model
     if _embedding_model is None:
-        logger.info("Initializing SentenceTransformer (MiniLM-L12-v2)...")
-        _embedding_model = SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
+        logger.info("Initializing SentenceTransformer (bge-m3)...")
+        _embedding_model = SentenceTransformer("BAAI/bge-m3")
     return _embedding_model
 
 def fetch_sapo(url: str) -> str | None:
@@ -113,6 +114,10 @@ def fetch_sapo(url: str) -> str | None:
             ".article_footer", ".article-footer", ".related-news", ".related_news",
             ".article_tag", ".article-tag", "#comment", "#ads", ".ads",
             "div[id*='adsweb']", "div[class*='related']",
+            "[class*='article-related']", "[class*='article_related']",
+            "[class*='related-new']", "[class*='related_news']",
+            "[class*='related-news']", "[class*='related_post']",
+            "[class*='relatedpost']", "[class*='relat-']",
             ".box_comment_vne", ".box-tinlienquanv2", ".box-item-vne",
             "article.story", ".story"
         ]
@@ -165,6 +170,7 @@ HARD_EXCLUDE_TITLE_TERMS = [
     "hồi sinh", "hội thảo", "hội nghị", "lao như", "giành giật",
     "clip", "nổ súng", "lao sang", "lao ra", "lao thẳng", "lao về phía",
     "lao tới", "kết thúc ", "nâng cao", "lao khỏi", "video", "lao qua",
+    "mô tả", "miêu tả", "buôn lậu", "gây sốt", "nhập lậu", "vàng lậu",
 ]
 
 # Context terms that raise the epidemiological signal score
@@ -234,37 +240,37 @@ _FEW_SHOT_BLOCK = """
 ### Ví dụ 1 — relevant (ổ dịch cụ thể, có số liệu mới)
 Tiêu đề: Hà Nội, TP.HCM ghi nhận thêm 23 ca sốt xuất huyết trong một tuần, cảnh báo bùng phát
 Tóm tắt: CDC xác nhận phát sinh 23 ca mắc mới bệnh sốt xuất huyết tại hai thành phố.
-→ {"label":"relevant","matched_keywords":["sốt xuất huyết"],"location":"Hà Nội, TP.HCM","diseases":[{"disease_name":"sốt xuất huyết","cumulative_cases":0,"new_cases":23,"event_start_date":null,"event_end_date":null}],"severity":"medium","reason":"Ổ dịch cụ thể, nói rõ số ca phát sinh mới tại nhiều tỉnh."}
+→ {"label":"relevant","normalized_title":"Dịch sốt xuất huyết tại Hà Nội và TP.HCM","matched_keywords":["sốt xuất huyết"],"location":"Hà Nội, TP.HCM","diseases":[{"disease_name":"sốt xuất huyết","cumulative_cases":0,"new_cases":23,"event_start_date":null,"event_end_date":null}],"severity":"medium","reason":"Ổ dịch cụ thể, nói rõ số ca phát sinh mới tại nhiều tỉnh."}
 
 ### Ví dụ 2 — relevant (bài đề cập NHIỀU BỆNH cùng lúc — TÁCH RIÊNG từng bệnh)
 Tiêu đề: Phát hiện ổ dịch thuỷ đậu tại một điểm trường tiểu học ở Đắk Lắk
 Tóm tắt: Đến nay, tại ổ dịch này đã ghi nhận 26 trường hợp mắc bệnh thủy đậu (23 học sinh, 3 giáo viên), 1 trường hợp mắc bệnh tay chân miệng.
-→ {"label":"relevant","matched_keywords":["thủy đậu","tay chân miệng"],"location":"Đắk Lắk","diseases":[{"disease_name":"thủy đậu","cumulative_cases":26,"new_cases":0,"event_start_date":null,"event_end_date":null},{"disease_name":"tay chân miệng","cumulative_cases":0,"new_cases":1,"event_start_date":null,"event_end_date":null}],"severity":"medium","reason":"Ổ dịch trường học, nhiều loại bệnh cùng được ghi nhận."}
+→ {"label":"relevant","normalized_title":"Dịch thủy đậu và tay chân miệng tại trường học ở Đắk Lắk","matched_keywords":["thủy đậu","tay chân miệng"],"location":"Đắk Lắk","diseases":[{"disease_name":"thủy đậu","cumulative_cases":26,"new_cases":0,"event_start_date":null,"event_end_date":null},{"disease_name":"tay chân miệng","cumulative_cases":0,"new_cases":1,"event_start_date":null,"event_end_date":null}],"severity":"medium","reason":"Ổ dịch trường học, nhiều loại bệnh cùng được ghi nhận."}
 
 ### Ví dụ 3 — noise (tư vấn điều trị cá nhân — có đề cập bệnh nhưng không có sự kiện dịch tễ)
 Tiêu đề: 5 sai lầm thường gặp khi điều trị sốt xuất huyết tại nhà
 Tóm tắt: Nhiều người tự ý uống thuốc hạ sốt gây nguy hiểm, chuyên gia chỉ ra 5 lỗi phổ biến.
-→ {"label":"noise","matched_keywords":[],"location":"unknown","diseases":[],"severity":null,"reason":"Bài tư vấn điều trị cá nhân, tên bệnh chỉ là ngữ cảnh, không có ổ dịch."}
+→ {"label":"noise","normalized_title":"","matched_keywords":[],"location":"unknown","diseases":[],"severity":null,"reason":"Bài tư vấn điều trị cá nhân, tên bệnh chỉ là ngữ cảnh, không có ổ dịch."}
 
 ### Ví dụ 4 — noise (bài dịch vụ / dinh dưỡng — dùng tên bệnh để so sánh hoặc tiếp thị)
 Tiêu đề: Bị sốt xuất huyết nên ăn gì để mau khỏi?
 Tóm tắt: Chuyên gia dinh dưỡng gợi ý thực đơn cho bệnh nhân sốt xuất huyết đang hồi phục tại nhà.
-→ {"label":"noise","matched_keywords":[],"location":"unknown","diseases":[],"severity":null,"reason":"Bài dịch vụ/dinh dưỡng, tên bệnh chỉ là bối cảnh tư vấn."}
+→ {"label":"noise","normalized_title":"","matched_keywords":[],"location":"unknown","diseases":[],"severity":null,"reason":"Bài dịch vụ/dinh dưỡng, tên bệnh chỉ là bối cảnh tư vấn."}
 
 ### Ví dụ 5 — noise (thảo luận / so sánh — đề cập bệnh như ví dụ minh họa)
 Tiêu đề: Vì sao sốt xuất huyết nguy hiểm hơn COVID-19 ở trẻ em?
 Tóm tắt: Bài viết phân tích, so sánh mức độ nguy hiểm của hai bệnh, không báo cáo ca bệnh cụ thể.
-→ {"label":"noise","matched_keywords":[],"location":"unknown","diseases":[],"severity":null,"reason":"Bài thảo luận/so sánh, đề cập bệnh để minh họa, không có sự kiện dịch tễ."}
+→ {"label":"noise","normalized_title":"","matched_keywords":[],"location":"unknown","diseases":[],"severity":null,"reason":"Bài thảo luận/so sánh, đề cập bệnh để minh họa, không có sự kiện dịch tễ."}
 
 ### Ví dụ 6 — irrelevant (bài hoàn toàn không liên quan — tổng kết lịch sử xa)
 Tiêu đề: Nhìn lại đại dịch COVID-19: 3 năm Việt Nam ứng phó như thế nào?
 Tóm tắt: Bài viết tổng kết quá trình chống dịch COVID 2020–2023, các bài học cho tương lai.
-→ {"label":"irrelevant","matched_keywords":[],"location":"unknown","diseases":[],"severity":null,"reason":"Tổng kết lịch sử xa, không có sự kiện đang diễn ra."}
+→ {"label":"irrelevant","normalized_title":"","matched_keywords":[],"location":"unknown","diseases":[],"severity":null,"reason":"Tổng kết lịch sử xa, không có sự kiện đang diễn ra."}
 
 ### Ví dụ 7 — unsure (thông tin mơ hồ, chưa xác nhận chính thức)
 Tiêu đề: Xuất hiện bệnh lạ tại miền Trung khiến nhiều người lo ngại
 Tóm tắt: Một số người dân phản ánh triệu chứng bất thường, ngành y tế địa phương đang xác minh.
-→ {"label":"unsure","matched_keywords":["bệnh lạ"],"location":"miền Trung","diseases":[{"disease_name":"bệnh lạ","cumulative_cases":0,"new_cases":0,"event_start_date":null,"event_end_date":null}],"severity":null,"reason":"Chưa có xác nhận chính thức, cần theo dõi thêm."}
+→ {"label":"unsure","normalized_title":"","matched_keywords":["bệnh lạ"],"location":"miền Trung","diseases":[{"disease_name":"bệnh lạ","cumulative_cases":0,"new_cases":0,"event_start_date":null,"event_end_date":null}],"severity":null,"reason":"Chưa có xác nhận chính thức, cần theo dõi thêm."}
 """.strip()
 
 _CRITERIA_BLOCK = """
@@ -289,7 +295,7 @@ _CRITERIA_BLOCK = """
 - Không có keyword dịch bệnh nào trong bài.
 - **QUY TẮC BỆNH CHÍNH:** Nếu bệnh chính của bài (ví dụ: Melioidosis) KHÔNG trong danh sách keyword → irrelevant, dù có nhắc biến chứng trùng keyword.
 
-**unsure** — thông tin quá mơ hồ, chưa có xác nhận chính thức
+**unsure** — thông tin quá mơ hồ, chưa có xác nhận chính thức, cần xem xét thêm
 
 ## QUY TẮC XÁC ĐỊNH BỆNH (CỰC KỲ QUAN TRỌNG)
 
@@ -316,13 +322,13 @@ _SCHEMA_BLOCK = """
 ## Output schema (JSON hợp lệ — không thêm bất kỳ text nào ngoài JSON)
 {
   "label": "relevant" | "noise" | "irrelevant" | "unsure",
+  "normalized_title": "<Sinh một tiêu đề CHUẨN HÓA ngắn gọn (tối đa 15 từ) cho sự kiện dịch tễ này. VD: 'Dịch Ebola bùng phát tại CHDC Congo' — dùng để gom các bài báo cùng sự kiện. Nếu không phải relevant, ghi ''>",
   "matched_keywords": [<chỉ chọn từ danh sách keyword bên dưới, mảng rỗng nếu irrelevant>],
   "location": "<Tỉnh/thành phố ghi cách nhau bằng dấu phẩy. Nếu không có địa điểm mắc bệnh, ghi 'unknown'>",
   "diseases": [
     {
       "disease_name": "<tên bệnh, PHẢI nằm trong danh sách keyword bên dưới>",
       "cumulative_cases": <số nguyên, 0 nếu không đề cập>,
-      "new_cases": <số nguyên, số ca ghi nhận mới, 0 nếu không đề cập>,
       "new_cases": <số nguyên, số ca ghi nhận mới, 0 nếu không đề cập>,
       "event_start_date": "<YYYY-MM-DD tương ứng với thời gian bắt đầu sự kiện thực tế được nhắc đến, null nếu không rõ>",
       "event_end_date": "<YYYY-MM-DD tương ứng với thời gian kết thúc sự kiện, null nếu không rõ>"
@@ -429,9 +435,11 @@ def _strip_structural_noise(soup) -> None:
         r"|bai[-_]viet[-_]lien[-_]quan|cung[-_]chu[-_]de|tin[-_]khac"
         r"|nav|menu|ads|banner|advert|promo|signup|subscribe|newsletter"
         r"|tag[-_]cloud|author[-_]bio|related[-_]post|most[-_]read"
+        r"|related[-_]new|related[-_]news"
         r"|box[-_]category|box[-_]tag|box[-_]related|zone[-_]article"
-        r"|article[-_]related|cate[-_]new|other[-_]news|more[-_]news|story"
-        r"|zone zone--dont-miss|zone zone--more)",
+        r"|article[-_]related|article[-_]story|cate[-_]new|other[-_]news|more[-_]news"
+        r"|story|article[._]story|related-news"
+        r"|zone zone--dont-miss|zone zone--more",
         re.IGNORECASE,
     )
     for tag in soup.find_all(True):
@@ -697,13 +705,17 @@ def get_labeled_dataset_few_shot_block() -> str:
 
 
 def text_contains_term(text: str, term: str) -> bool:
-    normalized_term = re.escape(term.lower().strip())
-    if not normalized_term:
-        return False
-    # Allow flexible whitespace between tokens for multi-word terms
-    normalized_term = normalized_term.replace(r"\ ", r"\s+")
-    pattern = rf"(?<!\w){normalized_term}(?!\w)"
-    return re.search(pattern, text) is not None
+    try:
+        normalized_term = re.escape(term.lower().strip())
+        if not normalized_term:
+            return False
+        # Allow flexible whitespace between tokens for multi-word terms
+        normalized_term = normalized_term.replace(r"\ ", r"\s+")
+        pattern = rf"(?<!\w){normalized_term}(?!\w)"
+        return re.search(pattern, text) is not None
+    except Exception as e:
+        logger.error("Regex error on term='{}' pattern='{}' error={}", term, pattern if 'pattern' in locals() else 'N/A', e)
+        raise e
 
 
 def score_keyword_context(text: str, keyword: str) -> int:
@@ -947,6 +959,7 @@ def format_dedupe_reason(breakdown: dict[str, float], matched: bool) -> str:
 def resolve_event_for_article(
     db: Session,
     title: str,
+    normalized_title: str,
     summary: str,
     matched_keywords: str,
     pub_date: datetime,
@@ -961,18 +974,11 @@ def resolve_event_for_article(
         return None, None, None, 0
 
     normalized_location = normalize_text(location or "") or None
-    
-    # -------------------------------------------------------------
-    # PHÁC THẢO TÍCH HỢP QDRANT VECTOR SEARCH
-    # Bước 1: Sinh vector embedding cho title
-    # text_embedding = generate_embedding_for_text(title)
-    #
-    # Bước 2: Truy vấn Qdrant tìm Event có Similarity score > 0.85 
-    #         và cùng primary_keyword, trong khoảng thời gian mở rộng.
-    # similar_events = qdrant_client.search(collection_name="events", query_vector=text_embedding)
-    # 
-    # Bước 3: Cập nhật best_match từ Vector thay vì vòng lặp tính điểm
-    # -------------------------------------------------------------
+
+    # Dùng normalized_title để so sánh embedding (giúp gom event tốt hơn)
+    compare_title = (normalized_title or "").strip()
+    if not compare_title:
+        compare_title = title
 
     start_date = pub_date - timedelta(days=3)
     end_date = pub_date + timedelta(days=3)
@@ -998,7 +1004,7 @@ def resolve_event_for_article(
     search_cases = max(cumulative_cases, new_cases)
     for event in recent_events:
         score, breakdown = compute_event_similarity_score(
-            title=title,
+            title=compare_title,
             summary=summary,
             pub_date=pub_date,
             location=normalized_location,
@@ -1014,7 +1020,6 @@ def resolve_event_for_article(
         updated_event_cases = best_match.case_count or 0
         plot_cases = 0
         
-        # Chỉ rải lên đồ thị "số ca mới" hoặc "số ca chênh lệch dương"
         if new_cases > 0:
             updated_event_cases += new_cases
             plot_cases = new_cases
@@ -1032,7 +1037,7 @@ def resolve_event_for_article(
         updated_event = crud.update_news_event(
             db,
             best_match,
-            canonical_title=title,
+            canonical_title=compare_title,
             case_count=updated_event_cases,
             severity=severity,
         )
@@ -1048,13 +1053,12 @@ def resolve_event_for_article(
             title,
         )
 
-    # Ưu tiên số ca mới để thả vào đồ thị (chống dội boom cumulative_cases)
     plot_cases = new_cases if new_cases > 0 else cumulative_cases
     initial_event_cases = max(cumulative_cases, new_cases)
     
     created_event = crud.create_news_event(
         db,
-        canonical_title=title,
+        canonical_title=compare_title,
         disease_name=primary_keyword,
         location=normalized_location,
         event_date=pub_date,
@@ -1062,14 +1066,6 @@ def resolve_event_for_article(
         severity=severity,
         fingerprint=build_event_fingerprint(primary_keyword, normalized_location, pub_date),
     )
-    
-    # -------------------------------------------------------------
-    # PHÁC THẢO: Nếu là Event mới, lưu véc tơ vào Qdrant để tương lai tìm kiếm.
-    # qdrant_client.upsert(
-    #    collection_name="events", 
-    #    points=[PointStruct(id=created_event.id, vector=text_embedding, payload={...})]
-    # )
-    # -------------------------------------------------------------
     
     return created_event, None, format_dedupe_reason(best_breakdown or {}, False), plot_cases
 
@@ -1175,8 +1171,11 @@ def get_llm_preflight_status(force_refresh: bool = False) -> dict[str, str | boo
         return status
 
     try:
+        is_openrouter = "openrouter.ai" in LLM_RECHECK_BASE_URL.lower()
+        url = f"{LLM_RECHECK_BASE_URL}/models" if is_openrouter else f"{LLM_RECHECK_BASE_URL}/models/{LLM_RECHECK_MODEL}"
+        
         response = requests.get(
-            f"{LLM_RECHECK_BASE_URL}/models/{LLM_RECHECK_MODEL}",
+            url,
             headers={"Authorization": f"Bearer {LLM_RECHECK_API_KEY}"},
             timeout=LLM_RECHECK_TIMEOUT_SECONDS,
         )
@@ -1187,8 +1186,21 @@ def get_llm_preflight_status(force_refresh: bool = False) -> dict[str, str | boo
         return status
 
     if response.status_code == 200:
-        status["ok"] = True
-        status["message"] = "LLM preflight OK"
+        if is_openrouter:
+            try:
+                data = response.json().get("data", [])
+                available_models = [m.get("id") for m in data if m.get("id")]
+                if LLM_RECHECK_MODEL in available_models:
+                    status["ok"] = True
+                    status["message"] = "LLM preflight OK"
+                else:
+                    status["message"] = f"LLM preflight failed: model '{LLM_RECHECK_MODEL}' not found on OpenRouter"
+            except Exception:
+                status["ok"] = True
+                status["message"] = "LLM preflight OK"
+        else:
+            status["ok"] = True
+            status["message"] = "LLM preflight OK"
     elif response.status_code in {401, 403}:
         status["message"] = "LLM preflight failed: API key rejected or unauthorized"
     elif response.status_code == 404:
@@ -1574,7 +1586,7 @@ def llm_recheck_article(
 
     # --- label ---
     label = str(parsed.get("label", "unsure")).strip().lower()
-    if label not in {"relevant", "irrelevant", "unsure"}:
+    if label not in {"relevant", "irrelevant", "unsure", "noise"}:
         label = "unsure"
 
     reason = str(parsed.get("reason", "")).strip()
@@ -1593,7 +1605,10 @@ def llm_recheck_article(
         normalized_keywords = candidate_keywords
 
     # --- extra metadata ---
+    raw_normalized = parsed.get("normalized_title")
+    normalized_title = str(raw_normalized).strip()[:150] if raw_normalized else ""
     meta: dict = {
+        "normalized_title": normalized_title,
         "location": _normalize_llm_location(parsed.get("location")),
         "cumulative_cases": _normalize_llm_case_count(parsed.get("cumulative_cases")),
         "new_cases": _normalize_llm_case_count(parsed.get("new_cases")),
@@ -1761,6 +1776,10 @@ def scan_news(
         saved_count = 0
         seen_links: set[str] = set()
         disease_counts: dict[str, int] = {}  # {"sốt xuất huyết": 3, ...}
+        total_checked = 0
+        noise_count = 0
+        irrelevant_count = 0
+        unsure_count = 0
 
         # Pattern phát hiện tiêu đề bài video (loại trừ hoàn toàn)
         VIDEO_TITLE_PATTERN = re.compile(
@@ -1832,6 +1851,8 @@ def scan_news(
                         entry.get("summary", "") or entry.get("description", "")
                     )
 
+                    total_checked += 1
+
                     # ---- Stage 1: regex keyword filter (wide net) ----
                     matched_kw_str = matches_keywords(title, summary, keywords)
                     if not matched_kw_str:
@@ -1852,6 +1873,14 @@ def scan_news(
                     llm_label, llm_keywords, llm_reason, llm_meta = llm_recheck_article(
                         title, effective_summary, candidate_keywords, suggestions
                     )
+
+                    # Count LLM labels for scan stats
+                    if llm_label == "irrelevant":
+                        irrelevant_count += 1
+                    elif llm_label == "noise":
+                        noise_count += 1
+                    elif llm_label == "unsure":
+                        unsure_count += 1
 
                     if llm_label == "irrelevant":
                         logger.info(
@@ -1897,8 +1926,13 @@ def scan_news(
                     )
 
                     # Cập nhật keywords_matched cho bài nhiều bệnh
+                    # Chỉ lấy bệnh có số ca > 0 để tránh match ngữ cảnh rộng
                     if llm_label == "relevant" and diseases_list:
-                        disease_names_from_llm = [d["disease_name"] for d in diseases_list if d.get("disease_name")]
+                        disease_names_from_llm = [
+                            d["disease_name"] for d in diseases_list
+                            if d.get("disease_name")
+                            and (d.get("cumulative_cases", 0) > 0 or d.get("new_cases", 0) > 0)
+                        ]
                         if disease_names_from_llm:
                             matched_kw_str = ", ".join(disease_names_from_llm)
                         elif llm_keywords:
@@ -1909,16 +1943,20 @@ def scan_news(
                     cumulative_cases = primary_disease.get("cumulative_cases", 0)
                     new_cases = primary_disease.get("new_cases", 0)
 
-                    # ---- Location: LLM first, multiple location parsing ----
+                    # ---- Location: LLM first, normalize via province gazetteer ----
                     raw_location = llm_meta.get("location")
-                    if not raw_location or str(raw_location).strip().lower() in ["", "null", "none", "không rõ", "việt nam"]:
+                    if not raw_location or str(raw_location).strip().lower() in ["", "null", "none"]:
                         raw_location = "unknown"
-                    
-                    location_list = [loc.strip() for loc in str(raw_location).split(",") if loc.strip()]
-                    if not location_list:
-                        location_list = ["unknown"]
-                    
-                    # Biểu thị cho file NewsEvent (gộp chuỗi)
+
+                    location_list = parse_location_list(raw_location)
+
+                    # Fallback: scan article body for province names if LLM gave nothing
+                    if location_list == ["unknown"]:
+                        body_text = f"{title} {effective_summary}"
+                        body_matches = extract_locations_from_text(body_text)
+                        if body_matches != ["unknown"]:
+                            location_list = body_matches
+
                     location_merged = ", ".join(location_list)
 
                     source_domain = get_domain(link)
@@ -1928,6 +1966,7 @@ def scan_news(
                         logger.debug("Article skipped | reason=non_whitelisted_domain domain={}", source_domain)
                         continue
 
+                    llm_normalized_title = llm_meta.get("normalized_title", "") or ""
                     article_dto = schemas.ArticleCreate(
                         title=title,
                         link=link,
@@ -1935,6 +1974,7 @@ def scan_news(
                         source=source_domain,
                         published_date=pub_date,
                         keywords_matched=matched_kw_str,
+                        llm_normalized_title=llm_normalized_title,
                         is_whitelisted=True,
                         outbreak_relevance_score=calculate_outbreak_relevance_score(
                             title,
@@ -1954,6 +1994,7 @@ def scan_news(
                     event, event_match_score, dedupe_reason, event_current_total = resolve_event_for_article(
                         db=db,
                         title=title,
+                        normalized_title=llm_normalized_title,
                         summary=effective_summary,
                         matched_keywords=matched_kw_str,
                         pub_date=pub_date,
@@ -1968,6 +2009,15 @@ def scan_news(
                     # Lưu số ca tổng vào tags để hiển thị trên UI (dùng tags làm carrier field)
                     article_dto.tags = f"cases:{total_cases_all_diseases}" if total_cases_all_diseases > 0 else None
                     saved_article = crud.create_article(db, article_dto)
+
+                    # Lưu llm_label vào ArticleEvaluation để hiển thị trên UI
+                    from ..evaluation.models import ArticleEvaluation as EvalModel
+                    existing_eval = db.query(EvalModel).filter(EvalModel.article_id == saved_article.id).first()
+                    if existing_eval:
+                        existing_eval.llm_label = llm_label
+                    else:
+                        db.add(EvalModel(article_id=saved_article.id, llm_label=llm_label))
+                    db.commit()
 
                     # -------------------------------------------------------------------
                     # Iterate từng bệnh trong mảng diseases, tạo DiseaseCase riêng cho mỗi bệnh
@@ -2037,7 +2087,7 @@ def scan_news(
                         disease_counts[d_name_key] = disease_counts.get(d_name_key, 0) + 1
 
             except Exception as exc:
-                logger.error("Error parsing feed | feed_url={} error={}", feed_url, exc)
+                logger.exception("Error parsing feed | feed_url={}", feed_url)
                 continue
 
         execution_time = (datetime.now() - start_time).total_seconds()
@@ -2052,6 +2102,11 @@ def scan_news(
             saved_trusted_count=saved_count,
             execution_time=execution_time,
             disease_counts=disease_counts,
+            total_checked=total_checked,
+            noise_count=noise_count,
+            irrelevant_count=irrelevant_count,
+            unsure_count=unsure_count,
+            started_at=start_time,
         )
         return result
     finally:

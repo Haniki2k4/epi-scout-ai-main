@@ -31,9 +31,124 @@ def send_report_email(
     custom_recipients: Optional[list[str]] = None,
 ) -> dict:
     """
-    Gửi báo cáo qua Mailtrap API.
-    Tự động chọn endpoint Sending hoặc Sandbox dựa trên cấu hình.
+    Gửi báo cáo qua Mailtrap API hoặc Mailtrap SMTP.
+    Tự động chọn giao thức SMTP (Cách 2) nếu có cấu hình trong env,
+    ngược lại sử dụng cấu hình DB và Mailtrap HTTP API.
     """
+    import os
+    smtp_host = os.getenv("MAILTRAP_SMTP_HOST")
+    smtp_user = os.getenv("MAILTRAP_SMTP_USER")
+    smtp_pass = os.getenv("MAILTRAP_SMTP_PASSWORD")
+
+    # Ưu tiên sử dụng SMTP (Cách 2) nếu có cấu hình môi trường
+    if smtp_host and smtp_user and smtp_pass:
+        smtp_port = os.getenv("MAILTRAP_SMTP_PORT", "2525")
+        sender_email = os.getenv("MAILTRAP_SENDER_EMAIL", "no-reply@episcout.ai")
+        logger.info("Using Mailtrap SMTP | host={} port={}", smtp_host, smtp_port)
+
+        # Lấy danh sách người nhận
+        if custom_recipients:
+            recipients = custom_recipients
+        else:
+            from ..auth.models import User
+            users = db.query(User).filter(
+                User.is_active == True,
+                User.email.isnot(None),
+                User.report_schedule_type != "none",
+            ).all()
+            recipients = [u.email for u in users if u.email]
+
+        recipients = [r.strip() for r in recipients if r.strip()]
+        if not recipients:
+            return {"success": False, "message": "Chưa có danh sách email người nhận", "recipient_count": 0}
+
+        report_date = report_date or datetime.utcnow()
+        date_str = report_date.strftime("%d/%m/%Y %H:%M")
+        subject = f"[Epi Scout AI] Báo cáo Giám sát Dịch bệnh - {report_date.strftime('%d/%m/%Y')}"
+
+        html_body = f"""
+        <html>
+        <body style="font-family: Arial, sans-serif; font-size: 14px; color: #212121;">
+            <div style="background-color: #1565C0; color: white; padding: 16px 24px;">
+                <h2 style="margin: 0;">Epi Scout AI</h2>
+                <p style="margin: 4px 0 0;">Hệ thống Giám sát Dịch bệnh Dựa vào Sự kiện</p>
+            </div>
+            <div style="padding: 24px;">
+                <h3 style="color: #1565C0;">Báo cáo Dịch tễ Tự động</h3>
+                <p>Kính gửi Quý cán bộ,</p>
+                <p>
+                    Hệ thống Epi Scout AI gửi đến Quý cán bộ báo cáo giám sát dịch bệnh tổng hợp
+                    tính đến <strong>{date_str}</strong>.
+                </p>
+                <p>File đính kèm bao gồm:</p>
+                <ul>
+                    {"<li><strong>Báo cáo Word (.docx)</strong>: Tóm tắt tình hình dịch bệnh và các sự kiện nổi bật</li>" if docx_bytes else ""}
+                    {"<li><strong>Bảng biểu Excel (.xlsx)</strong>: Biểu mẫu ghi nhận dấu hiệu cảnh báo theo Phụ lục I QĐ 2018/QĐ-BYT</li>" if excel_bytes else ""}
+                </ul>
+                <p style="color: #C62828;">
+                    <em>Lưu ý: Thông tin trong báo cáo được thu thập tự động từ các nguồn truyền thông.
+                    Cán bộ y tế cần xem xét và xác minh trước khi sử dụng chính thức.</em>
+                </p>
+                <hr style="border-color: #E0E0E0;">
+                <p style="color: #757575; font-size: 12px;">
+                    Email này được gửi tự động từ hệ thống Epi Scout AI.<br>
+                    Mọi phản hồi xin gửi về bộ phận quản trị hệ thống.
+                </p>
+            </div>
+        </body>
+        </html>
+        """
+
+        import smtplib
+        from email.mime.multipart import MIMEMultipart
+        from email.mime.text import MIMEText
+        from email.mime.base import MIMEBase
+        from email import encoders
+
+        msg = MIMEMultipart()
+        msg['Subject'] = subject
+        msg['From'] = f"Epi Scout AI <{sender_email}>"
+        msg['To'] = ", ".join(recipients)
+
+        msg.attach(MIMEText(html_body, 'html'))
+
+        if docx_bytes:
+            part = MIMEBase('application', 'vnd.openxmlformats-officedocument.wordprocessingml.document')
+            part.set_payload(docx_bytes)
+            encoders.encode_base64(part)
+            part.add_header(
+                'Content-Disposition',
+                f'attachment; filename="BaoCao_DichBenh_{report_date.strftime("%Y%m%d")}.docx"'
+            )
+            msg.attach(part)
+
+        if excel_bytes:
+            part = MIMEBase('application', 'vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+            part.set_payload(excel_bytes)
+            encoders.encode_base64(part)
+            part.add_header(
+                'Content-Disposition',
+                f'attachment; filename="BieuMau_EBS_QD2018_{report_date.strftime("%Y%m%d")}.xlsx"'
+            )
+            msg.attach(part)
+
+        try:
+            port = int(smtp_port)
+            with smtplib.SMTP(smtp_host, port) as server:
+                server.starttls()
+                server.login(smtp_user, smtp_pass)
+                server.sendmail(sender_email, recipients, msg.as_string())
+
+            logger.info("Report email sent via Mailtrap SMTP | recipients={}", len(recipients))
+            return {
+                "success": True,
+                "message": f"Đã gửi thành công qua SMTP đến {len(recipients)} người nhận",
+                "recipient_count": len(recipients),
+            }
+        except Exception as e:
+            logger.error("SMTP send failed | error={}", str(e))
+            return {"success": False, "message": f"Lỗi gửi email qua SMTP: {str(e)}", "recipient_count": 0}
+
     config = _get_email_config(db)
 
     if not config or not config.mailtrap_api_token:

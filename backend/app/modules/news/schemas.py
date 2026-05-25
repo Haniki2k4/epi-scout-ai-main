@@ -11,6 +11,7 @@ class ArticleBase(BaseModel):
     published_date: Optional[datetime] = None
     keywords_matched: Optional[str] = None
     tags: Optional[str] = None
+    llm_normalized_title: Optional[str] = None
     is_whitelisted: bool = False
     outbreak_relevance_score: float = 0.0
     is_suspected_false_positive: bool = False
@@ -25,6 +26,8 @@ class ArticleCreate(ArticleBase):
 class ArticleDTO(ArticleBase):
     id: int
     cases: List["DiseaseCaseDTO"] = []
+    llm_label: Optional[str] = None
+    human_label: Optional[str] = None
     class Config:
         from_attributes = True
 
@@ -63,6 +66,11 @@ class ScanResult(BaseModel):
     saved_trusted_count: int
     execution_time: Optional[float] = None
     disease_counts: Optional[dict] = None  # {"sốt xuất huyết": 3, "tay chân miệng": 1}
+    total_checked: int = 0                 # Tổng số bài đã xử lý
+    noise_count: int = 0                   # Số bài LLM gắn nhãn noise
+    irrelevant_count: int = 0              # Số bài LLM gắn nhãn irrelevant
+    unsure_count: int = 0                  # Số bài LLM gắn nhãn unsure
+    started_at: Optional[datetime] = None  # Thời điểm bắt đầu quét
 
 
 class NewsEventBase(BaseModel):
