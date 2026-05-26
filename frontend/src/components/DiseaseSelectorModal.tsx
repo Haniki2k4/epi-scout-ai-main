@@ -131,9 +131,15 @@ export function DiseaseSelectorModal({
     }
   };
 
+  const selLower = selectedDiseases.map((d) => d.toLowerCase());
+
   const handleToggle = (name: string) => {
-    if (selectedDiseases.includes(name)) {
-      onChange(selectedDiseases.filter((d) => d !== name));
+    const nameLower = name.toLowerCase();
+    const idx = selLower.indexOf(nameLower);
+    if (idx !== -1) {
+      const next = [...selectedDiseases];
+      next.splice(idx, 1);
+      onChange(next);
     } else {
       if (maxSelect === 1) {
         onChange([name]);
@@ -190,6 +196,10 @@ export function DiseaseSelectorModal({
             />
           </div>
 
+          <div className="text-xs text-muted-foreground text-right px-1">
+            Đã chọn: <strong>{selectedDiseases.length}</strong> / {maxSelect}
+          </div>
+
           <ScrollArea className="h-[300px] rounded-md border p-2">
             {loading ? (
               <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
@@ -202,7 +212,7 @@ export function DiseaseSelectorModal({
             ) : (
               <div className="space-y-1">
                 {sortedDiseases.map((d) => {
-                  const isSelected = selectedDiseases.includes(d.disease_name);
+                  const isSelected = selLower.includes(d.disease_name.toLowerCase());
                   const isSpike = spikes[d.disease_name];
 
                   return (

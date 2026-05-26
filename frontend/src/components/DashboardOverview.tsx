@@ -168,7 +168,16 @@ const DashboardOverview = () => {
           const data = await res.json();
           if (data && Array.isArray(data.diseases)) {
             setInterestResult(data);
-            setSelectedInterestDiseases(prev => prev.length ? prev : data.diseases.slice(0, 5));
+            setSelectedInterestDiseases(prev => {
+              if (prev.length) return prev;
+              const seen = new Set<string>();
+              return data.diseases.filter((d: string) => {
+                const key = d.toLowerCase();
+                if (seen.has(key)) return false;
+                seen.add(key);
+                return true;
+              }).slice(0, 5);
+            });
           }
         }
       } catch { }
@@ -184,7 +193,16 @@ const DashboardOverview = () => {
           const data = await res.json();
           if (data && Array.isArray(data.diseases)) {
             setStackedResult(data);
-            setSelectedStackedDiseases(prev => prev.length ? prev : data.diseases.slice(0, 5));
+            setSelectedStackedDiseases(prev => {
+              if (prev.length) return prev;
+              const seen = new Set<string>();
+              return data.diseases.filter((d: string) => {
+                const key = d.toLowerCase();
+                if (seen.has(key)) return false;
+                seen.add(key);
+                return true;
+              }).slice(0, 5);
+            });
           }
         }
       } catch { }

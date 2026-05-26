@@ -13,6 +13,7 @@ type SummaryItem = {
 
 type DailySummary = {
   period: string;
+  headline?: string;
   summaries: SummaryItem[];
   recommendations: string[];
   has_alert: boolean;
@@ -116,6 +117,9 @@ export function AISummaryCard() {
           <div className="rounded-lg border bg-muted/30 p-4 text-sm text-muted-foreground">{summary.message}</div>
         ) : summary ? (
           <>
+            {summary.headline && (
+              <p className="text-sm font-medium text-foreground">{summary.headline}</p>
+            )}
             <div className="space-y-3">
               {(summary.summaries || []).map((item, index) => (
                 <div key={index} className="rounded-lg border p-3">

@@ -57,6 +57,8 @@ def init_database() -> None:
     crawler.log_llm_preflight_status(force_refresh=True)
     # Khởi động APScheduler
     app_scheduler.start_scheduler()
+    # Tự động tạo AI summary khi server start
+    app_scheduler.trigger_ai_summary()
 
 
 @app.on_event("shutdown")

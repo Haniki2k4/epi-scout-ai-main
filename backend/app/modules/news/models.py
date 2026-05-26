@@ -157,12 +157,4 @@ class SchedulerConfig(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
-class EmailConfig(Base):
-    """Cấu hình gửi email qua Mailtrap API - chỉ có 1 bản ghi (id=1)"""
-    __tablename__ = "email_config"
 
-    id = Column(Integer, primary_key=True, default=1)
-    mailtrap_api_token = Column(String(255), nullable=True)  # Mailtrap API Token
-    mailtrap_inbox_id = Column(String(50), nullable=True)    # Mailtrap Inbox ID (cho Sandbox)
-    sender_email = Column(String(255), nullable=True)         # Địa chỉ gửi đi
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

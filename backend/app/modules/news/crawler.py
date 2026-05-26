@@ -439,7 +439,7 @@ def _strip_structural_noise(soup) -> None:
         r"|box[-_]category|box[-_]tag|box[-_]related|zone[-_]article"
         r"|article[-_]related|article[-_]story|cate[-_]new|other[-_]news|more[-_]news"
         r"|story|article[._]story|related-news"
-        r"|zone zone--dont-miss|zone zone--more",
+        r"|zone zone--dont-miss|zone zone--more)",
         re.IGNORECASE,
     )
     for tag in soup.find_all(True):

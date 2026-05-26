@@ -27,13 +27,14 @@ def _period_label(start: datetime, end: datetime) -> str:
 def _empty_summary(start: datetime, end: datetime) -> dict:
     return {
         "period": _period_label(start, end),
+        "headline": "Không phát hiện tín hiệu bất thường trong 24h qua",
         "summaries": [],
         "recommendations": [],
         "has_alert": False,
         "message": (
-            f"Kết quả giám sát 1 ngày qua (từ {start.strftime('%d/%m/%Y 00:00:00')} "
-            f"đến {end.strftime('%d/%m/%Y 23:59:59')}): "
-            "Không phát hiện dấu hiệu cảnh báo nào liên quan."
+            f"24h qua (từ {start.strftime('%d/%m/%Y 00:00')} "
+            f"đến {end.strftime('%d/%m/%Y 23:59')}): "
+            "Không phát hiện dấu hiệu cảnh báo nào."
         ),
     }
 
@@ -107,12 +108,10 @@ def _fallback_generate_summary(context_data: dict) -> dict:
     summaries = []
     for event in context_data["events"][:3]:
         evidence_count = int(event.get("article_count") or 0)
-        prefix = "[Cần theo dõi thêm] " if evidence_count <= 1 else ""
+        label = "[Cần theo dõi thêm]" if evidence_count <= 1 else ""
+        location = event.get("location") or "khu vực chưa rõ"
         summaries.append({
-            "text": (
-                f"{prefix}Hệ thống ghi nhận tín hiệu {event.get('disease') or 'dịch tễ'} "
-                f"tại {event.get('location') or 'địa bàn chưa rõ'} [Nguồn: {evidence_count} bài báo]"
-            ),
+            "text": f"{label} {event.get('disease') or 'dịch tễ'} tại {location} ({evidence_count} nguồn)".strip(),
             "evidence_count": evidence_count,
             "confidence": "high" if evidence_count >= 3 else ("medium" if evidence_count == 2 else "low"),
         })
@@ -122,21 +121,27 @@ def _fallback_generate_summary(context_data: dict) -> dict:
             disease = article.get("disease") or "tín hiệu dịch tễ"
             disease_counts[disease] = disease_counts.get(disease, 0) + 1
         for disease, count in sorted(disease_counts.items(), key=lambda item: item[1], reverse=True)[:3]:
-            prefix = "[Cần theo dõi thêm] " if count <= 1 else ""
             summaries.append({
-                "text": f"{prefix}Hệ thống ghi nhận {count} bài báo liên quan đến {disease} [Nguồn: {count} bài báo]",
+                "text": f"{disease}: {count} bài báo trong 24h qua",
                 "evidence_count": count,
                 "confidence": "medium" if count >= 2 else "low",
             })
+
+    total_articles = len(context_data["articles"])
+    headline = f"Có {len(summaries)} tín hiệu cần quan tâm trong 24h qua ({total_articles} bài báo)"
+    if len(context_data["zscore_spikes"]) > 0:
+        headline += ", có dấu hiệu bất thường theo thống kê"
+
     return {
         "period": _period_label(start, end),
+        "headline": headline,
         "summaries": summaries[:3],
         "recommendations": [
-            "Tiếp tục đối chiếu nguồn tin chính thống trước khi kết luận outbreak.",
-            "Theo dõi các tín hiệu có evidence_count thấp trong 24 giờ tiếp theo.",
-            "Ưu tiên xác minh các sự kiện có mức độ severity high hoặc medium.",
+            "Xác minh thông tin từ nguồn chính thống trước khi kết luận.",
+            "Theo dõi các tín hiệu có ít nguồn trong 24h tới.",
+            "Kiểm tra dữ liệu chi tiết trong báo cáo đính kèm.",
         ],
-        "has_alert": bool(summaries),
+        "has_alert": bool(summaries) or len(context_data["zscore_spikes"]) > 0,
     }
 
 
@@ -150,11 +155,15 @@ def generate_daily_summary(context_data: dict) -> dict:
         if key not in {"period_start", "period_end"}
     }
     system_prompt = (
-        "Bạn là trợ lý giám sát và cảnh báo sớm thông tin dịch tễ học về bệnh truyền nhiễm. "
-        "Chỉ sử dụng dữ liệu trong context. Không tạo số liệu, địa điểm, tên bệnh mới. "
-        "Dùng ngôn ngữ trung lập bằng tiếng Việt có dấu. Mỗi tóm tắt phải có [Nguồn: X bài báo]. "
-        "Nếu evidence_count <= 1, thêm [Cần theo dõi thêm]. Trả về JSON hợp lệ với các trường: "
-        "period, summaries (list), recommendations (list), has_alert (bool)."
+        "Bạn là trợ lý tóm tắt tin tức dịch tễ học. "
+        "Viết NGẮN GỌN, mỗi item tối đa 1 câu. "
+        "Chỉ dùng dữ liệu trong context, không thêm số liệu hay địa điểm mới. "
+        "Dùng tiếng Việt có dấu. "
+        "Trả về JSON với các trường: "
+        "headline (string, 1 câu tổng quan), "
+        "summaries (list, mỗi item có text + evidence_count + confidence high/medium/low), "
+        "recommendations (list, 2-3 khuyến nghị ngắn), "
+        "has_alert (bool)."
     )
     try:
         response = requests.post(
@@ -181,6 +190,7 @@ def generate_daily_summary(context_data: dict) -> dict:
         parsed = json.loads(content)
         if isinstance(parsed, dict):
             parsed.setdefault("period", _period_label(context_data["period_start"], context_data["period_end"]))
+            parsed.setdefault("headline", "")
             return parsed
     except Exception as exc:
         logger.warning("Daily AI summary primary model failed | model={} error={}", SUMMARY_MODEL, str(exc))
@@ -212,6 +222,7 @@ def generate_daily_summary(context_data: dict) -> dict:
                 parsed = json.loads(content)
                 if isinstance(parsed, dict):
                     parsed.setdefault("period", _period_label(context_data["period_start"], context_data["period_end"]))
+                    parsed.setdefault("headline", "")
                     return parsed
             except Exception as f_exc:
                 logger.warning("Fallback AI summary failed | model={} error={}", FALLBACK_MODEL, str(f_exc))

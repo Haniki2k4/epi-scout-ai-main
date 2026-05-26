@@ -243,7 +243,7 @@ def get_stacked_trend_data(db: Session, days: int = 30):
 
     day_map: dict = defaultdict(lambda: {d: 0 for d in top_disease_names})
     for row in raw:
-        day_map[row.date_str][row.disease_name] = int(row.total_cases or 0)
+        day_map[row.date_str][row.disease_name.lower()] = int(row.total_cases or 0)
 
     target_dates = [(start_date + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(days)]
     result = []
