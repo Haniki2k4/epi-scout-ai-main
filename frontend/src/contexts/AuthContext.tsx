@@ -1,5 +1,4 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 
 export interface User {
@@ -13,6 +12,8 @@ export interface User {
 interface AuthContextType {
   user: User | null;
   token: string | null;
+  role: 'guest' | 'user' | 'admin';
+  isGuest: boolean;
   isAuthenticated: boolean;
   isLoading: boolean;
   login: (token: string) => void;
@@ -34,7 +35,8 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       }
 
       try {
-        const response = await fetch('http://localhost:8000/api/auth/me', {
+        const apiBase = import.meta.env.VITE_API_BASE_URL ?? "";
+        const response = await fetch(`${apiBase}/api/auth/me`, {
           headers: {
             Authorization: `Bearer ${token}`,
           },
@@ -66,6 +68,12 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       const token = localStorage.getItem('token');
       // Only attach to API routes
       const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+      const apiBase = import.meta.env.VITE_API_BASE_URL ?? '';
+      // Rewrite relative /api/ calls to absolute URL when apiBase is set
+      let resolvedInput = input;
+      if (apiBase && typeof url === 'string' && url.startsWith('/api/')) {
+        resolvedInput = `${apiBase}${url}`;
+      }
       if (token && url.includes('/api/')) {
         init = init || {};
         init.headers = {
@@ -73,13 +81,18 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
           Authorization: `Bearer ${token}`
         };
       }
-      const response = await originalFetch(input, init);
+      // Add ngrok bypass header for ALL requests
+      init = init || {};
+      init.headers = {
+        ...init.headers,
+        "ngrok-skip-browser-warning": "true"
+      };
+      const response = await originalFetch(resolvedInput, init);
       // Auto logout on 401 Unauthorized (unless it's the login endpoint)
-      if (response.status === 401 && !url.includes('/api/auth/login')) {
+      if (response.status === 401 && token && !url.includes('/api/auth/login')) {
         localStorage.removeItem('token');
         setToken(null);
         setUser(null);
-        window.location.href = '/login';
       }
       return response;
     };
@@ -100,7 +113,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     setToken(null);
     setUser(null);
     toast.success('Đã đăng xuất thành công');
-    window.location.href = '/login'; // Force reload and redirect to avoid stale state
+    window.location.href = '/';
   };
 
   return (
@@ -108,6 +121,8 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       value={{
         user,
         token,
+        role: user?.role ?? 'guest',
+        isGuest: !user,
         isAuthenticated: !!user,
         isLoading,
         login,

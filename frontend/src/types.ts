@@ -13,11 +13,15 @@ export interface Article {
   published_date: string;
   keywords_matched: string;
   is_whitelisted: boolean;
+  outbreak_relevance_score?: number;
+  is_suspected_false_positive?: boolean;
   tags?: string | null;
   event_id?: number | null;
   event_match_score?: number | null;
   dedupe_reason?: string | null;
   cases?: DiseaseCase[];
+  llm_label?: string | null;
+  human_label?: string | null;
 }
 
 export interface RssSource {
@@ -31,7 +35,6 @@ export interface RssSource {
 
 export interface ScanResult {
   saved_trusted_count: number;
-  unknown_articles: Article[];
   execution_time?: number;
 }
 
@@ -67,6 +70,7 @@ export interface ZScoreSpike {
   rolling_std: number;
   z_score: number;
   is_spike: boolean;
+  threshold?: number;
 }
 
 export interface ProphetForecast {

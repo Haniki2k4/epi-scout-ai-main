@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Trash2, Plus, Tag, Rss, RefreshCcw, Link as LinkIcon, RadioReceiver, Power } from "lucide-react";
+import { Trash2, Plus, Tag, Rss, RefreshCcw, Link as LinkIcon, RadioReceiver, Power, Edit } from "lucide-react";
 
 import {
   Table,
@@ -14,7 +14,9 @@ import {
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { Switch } from "@/components/ui/switch";
 import {
   Dialog,
   DialogContent,
@@ -23,12 +25,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Edit } from "lucide-react";
 
 // Types
 interface KeywordModel {
   id: number;
   text: string;
+  is_active: boolean;
 }
 
 interface RssSourceModel {
@@ -39,11 +41,20 @@ interface RssSourceModel {
   is_active: boolean;
 }
 
+function authHeaders(): Record<string, string> {
+  const token = localStorage.getItem("token");
+  return token ? {
+    "Authorization": `Bearer ${token}`,
+    "Content-Type": "application/json"
+  } : { "Content-Type": "application/json" };
+}
+
 export default function ResourceManagement() {
   const queryClient = useQueryClient();
 
   // Keyword states
   const [newKeyword, setNewKeyword] = useState("");
+  const [kwSearch, setKwSearch] = useState("");
   const [isEditKwModalOpen, setIsEditKwModalOpen] = useState(false);
   const [editKwItem, setEditKwItem] = useState<KeywordModel | null>(null);
   const [editKwText, setEditKwText] = useState("");
@@ -52,12 +63,13 @@ export default function ResourceManagement() {
   const [newRssUrl, setNewRssUrl] = useState("");
   const [newRssLabel, setNewRssLabel] = useState("");
   const [newRssCategory, setNewRssCategory] = useState("the-gioi");
+  const [rssSearch, setRssSearch] = useState("");
 
   // Fetch Keywords
   const { data: keywords = [], isLoading: loadKw } = useQuery<KeywordModel[]>({
     queryKey: ["admin_keywords"],
     queryFn: async () => {
-      const res = await fetch("/api/keywords?limit=1000");
+      const res = await fetch("/api/keywords?limit=1000&only_active=false", { headers: authHeaders() });
       if (!res.ok) throw new Error("Failed to fetch keywords");
       return res.json();
     },
@@ -67,7 +79,7 @@ export default function ResourceManagement() {
   const { data: rssSources = [], isLoading: loadRss } = useQuery<RssSourceModel[]>({
     queryKey: ["admin_rss"],
     queryFn: async () => {
-      const res = await fetch("/api/rss-sources");
+      const res = await fetch("/api/rss-sources", { headers: authHeaders() });
       if (!res.ok) throw new Error("Failed to fetch RSS sources");
       return res.json();
     },
@@ -78,7 +90,7 @@ export default function ResourceManagement() {
     mutationFn: async (text: string) => {
       const res = await fetch("/api/keywords", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders(),
         body: JSON.stringify({ text }),
       });
       if (!res.ok) {
@@ -97,8 +109,12 @@ export default function ResourceManagement() {
 
   const deleteKwMutation = useMutation({
     mutationFn: async (id: number) => {
-      const res = await fetch(`/api/keywords/${id}`, { method: "DELETE" });
-      if (!res.ok) throw new Error("Xóa thất bại");
+      const res = await fetch(`/api/keywords/${id}`, {
+        method: "DELETE",
+        headers: authHeaders()
+      });
+      if (!res.ok) throw new Error("Xóa từ khóa thất bại");
+      return res.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["admin_keywords"] });
@@ -111,42 +127,69 @@ export default function ResourceManagement() {
     mutationFn: async ({ id, text }: { id: number; text: string }) => {
       const res = await fetch(`/api/keywords/${id}`, {
         method: "PUT",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders(),
         body: JSON.stringify({ text }),
       });
-      if (!res.ok) {
-        const error = await res.json();
-        throw new Error(error.detail || "Cập nhật từ khóa thất bại");
-      }
+      if (!res.ok) throw new Error("Cập nhật thất bại");
       return res.json();
     },
     onSuccess: () => {
+      setIsEditKwModalOpen(false);
       queryClient.invalidateQueries({ queryKey: ["admin_keywords"] });
       toast.success("Đã cập nhật từ khóa");
-      setIsEditKwModalOpen(false);
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const toggleKwMutation = useMutation({
+    mutationFn: async ({ id, is_active }: { id: number; is_active: boolean }) => {
+      const res = await fetch(`/api/keywords/${id}/toggle`, {
+        method: "PATCH",
+        headers: authHeaders(),
+        body: JSON.stringify({ is_active }),
+      });
+      if (!res.ok) throw new Error("Cập nhật thất bại");
+      return res.json();
+    },
+    onSuccess: (_, { is_active }) => {
+      queryClient.invalidateQueries({ queryKey: ["admin_keywords"] });
+      toast.success(is_active ? "Đã bật từ khóa" : "Đã tắt từ khóa");
     },
     onError: (e) => toast.error(e.message),
   });
 
   // ============ RSS MUTATIONS ============
   const createRssMutation = useMutation({
-    mutationFn: async (data: { url: string, label: string, category: string }) => {
+    mutationFn: async (data: Partial<RssSourceModel>) => {
       const res = await fetch("/api/rss-sources", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders(),
         body: JSON.stringify(data),
       });
-      if (!res.ok) {
-        const error = await res.json();
-        throw new Error(error.detail || "Không thể thêm RSS");
-      }
+      if (!res.ok) throw new Error("Không thể thêm nguồn RSS");
       return res.json();
     },
     onSuccess: () => {
       setNewRssUrl("");
       setNewRssLabel("");
       queryClient.invalidateQueries({ queryKey: ["admin_rss"] });
-      toast.success("Thêm RSS Source thành công");
+      toast.success("Thêm nguồn RSS thành công");
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const deleteRssMutation = useMutation({
+    mutationFn: async (id: number) => {
+      const res = await fetch(`/api/rss-sources/${id}`, {
+        method: "DELETE",
+        headers: authHeaders()
+      });
+      if (!res.ok) throw new Error("Xóa nguồn RSS thất bại");
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin_rss"] });
+      toast.success("Đã xóa nguồn RSS");
     },
     onError: (e) => toast.error(e.message),
   });
@@ -155,7 +198,7 @@ export default function ResourceManagement() {
     mutationFn: async ({ id, is_active }: { id: number; is_active: boolean }) => {
       const res = await fetch(`/api/rss-sources/${id}/toggle`, {
         method: "PATCH",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders(),
         body: JSON.stringify({ is_active }),
       });
       if (!res.ok) throw new Error("Cập nhật thất bại");
@@ -197,6 +240,15 @@ export default function ResourceManagement() {
     });
   };
 
+  const filteredKeywords = keywords.filter(kw => kw.text.toLowerCase().includes(kwSearch.toLowerCase()));
+  const kwActiveCount = keywords.filter(k => k.is_active).length;
+
+  const filteredRss = rssSources.filter(src => 
+    src.url.toLowerCase().includes(rssSearch.toLowerCase()) || 
+    (src.label && src.label.toLowerCase().includes(rssSearch.toLowerCase()))
+  );
+  const rssActiveCount = rssSources.filter(r => r.is_active).length;
+
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
       {/* ---------------- KEYWORD BLOCK ---------------- */}
@@ -206,7 +258,7 @@ export default function ResourceManagement() {
             <Tag className="h-5 w-5 text-primary" />
             <CardTitle>Từ Khóa Giám Sát</CardTitle>
           </div>
-          <CardDescription>Các từ khóa hệ thống dùng để chấm điểm bản tin dịch bệnh.</CardDescription>
+          <CardDescription>Các từ khóa hệ thống dùng để quét tin tức. Tắt để tạm dừng quét từ khóa đó.</CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleAddKeyword} className="flex gap-2 mb-4">
@@ -221,22 +273,42 @@ export default function ResourceManagement() {
             </Button>
           </form>
 
+          <div className="flex items-center justify-between mb-4">
+            <Input
+              placeholder="Tìm kiếm từ khóa..."
+              value={kwSearch}
+              onChange={(e) => setKwSearch(e.target.value)}
+              className="max-w-[200px]"
+            />
+            <Badge variant="secondary">
+              Tổng: {keywords.length} | Bật: {kwActiveCount}
+            </Badge>
+          </div>
+
           <div className="rounded-md border border-border/50 overflow-auto h-[400px]">
             {loadKw ? (
               <div className="flex justify-center p-8"><RefreshCcw className="h-6 w-6 animate-spin text-primary" /></div>
             ) : (
               <Table>
-                <TableHeader className="bg-muted/50 sticky top-0">
+                <TableHeader className="bg-muted/50 sticky top-0 z-10">
                   <TableRow>
+                    <TableHead>Trạng thái</TableHead>
                     <TableHead>Từ khóa (Keyword)</TableHead>
-                    <TableHead className="w-[80px] text-right">Xóa</TableHead>
+                    <TableHead className="w-[100px] text-right">Thao tác</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {keywords.map(kw => (
-                    <TableRow key={kw.id}>
+                  {filteredKeywords.map(kw => (
+                    <TableRow key={kw.id} className={!kw.is_active ? "opacity-50" : ""}>
+                      <TableCell className="w-[80px]">
+                        <Switch
+                          checked={kw.is_active}
+                          onCheckedChange={(val) => toggleKwMutation.mutate({ id: kw.id, is_active: val })}
+                          disabled={toggleKwMutation.isPending}
+                        />
+                      </TableCell>
                       <TableCell className="font-medium align-middle">
-                        <Badge variant="outline" className="text-sm bg-background">
+                        <Badge variant={kw.is_active ? "outline" : "secondary"} className="text-sm bg-background">
                           {kw.text}
                         </Badge>
                       </TableCell>
@@ -254,7 +326,8 @@ export default function ResourceManagement() {
                             variant="ghost"
                             size="sm"
                             onClick={() => deleteKwMutation.mutate(kw.id)}
-                            className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                            className="hover:text-destructive hover:bg-destructive/10"
+                            disabled={deleteKwMutation.isPending}
                           >
                             <Trash2 className="h-4 w-4" />
                           </Button>
@@ -262,9 +335,6 @@ export default function ResourceManagement() {
                       </TableCell>
                     </TableRow>
                   ))}
-                  {keywords.length === 0 && (
-                    <TableRow><TableCell colSpan={2} className="text-center py-4 text-muted-foreground">Chưa có từ khóa</TableCell></TableRow>
-                  )}
                 </TableBody>
               </Table>
             )}
@@ -272,104 +342,115 @@ export default function ResourceManagement() {
         </CardContent>
       </Card>
 
-      {/* ---------------- RSS BLOCK ---------------- */}
+      {/* ---------------- RSS SOURCE BLOCK ---------------- */}
       <Card className="shadow-sm border-border/50">
         <CardHeader>
           <div className="flex items-center gap-2">
-            <Rss className="h-5 w-5 text-orange-500" />
-            <CardTitle>Nguồn RSS Báo Chí</CardTitle>
+            <Rss className="h-5 w-5 text-primary" />
+            <CardTitle>Nguồn RSS Whitelist</CardTitle>
           </div>
-          <CardDescription>Cấu hình các luồng RSS để Bot tự động thu thập bài báo.</CardDescription>
+          <CardDescription>Các nguồn tin được tin tưởng để lấy dữ liệu tự động.</CardDescription>
         </CardHeader>
         <CardContent>
-          <form onSubmit={handleAddRss} className="mb-4 bg-muted/40 p-4 rounded-lg border border-border/50 space-y-3">
-            <div className="space-y-2">
-              <label className="text-xs font-medium">Đường dẫn RSS (URL) *</label>
-              <div className="relative">
-                <LinkIcon className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
+          <form onSubmit={handleAddRss} className="space-y-3 mb-6 p-4 rounded-lg border bg-muted/20">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <Label className="text-xs">URL RSS</Label>
                 <Input
-                  className="pl-9 bg-background"
-                  placeholder="https://vnexpress.net/rss/the-gioi.rss"
+                  placeholder="https://vnexpress.net/rss/suc-khoe.rss"
                   value={newRssUrl}
                   onChange={(e) => setNewRssUrl(e.target.value)}
-                  disabled={createRssMutation.isPending}
-                  required
+                  className="bg-background"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">Tên nhãn (Label)</Label>
+                <Input
+                  placeholder="VnExpress Sức Khỏe"
+                  value={newRssLabel}
+                  onChange={(e) => setNewRssLabel(e.target.value)}
+                  className="bg-background"
                 />
               </div>
             </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-2">
-                <label className="text-xs font-medium">Nhãn hiển thị (Tự chọn)</label>
-                <div className="relative">
-                  <RadioReceiver className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
-                  <Input
-                    className="pl-9 bg-background"
-                    placeholder="VnExpress Thể giới"
-                    value={newRssLabel}
-                    onChange={(e) => setNewRssLabel(e.target.value)}
-                    disabled={createRssMutation.isPending}
-                  />
-                </div>
-              </div>
-              <div className="space-y-2">
-                <label className="text-xs font-medium">Phân loại</label>
+            <div className="flex items-end gap-3">
+              <div className="flex-1 space-y-1">
+                <Label className="text-xs">Phân loại (Category)</Label>
                 <select
-                  className="flex h-10 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background disabled:opacity-50"
                   value={newRssCategory}
                   onChange={(e) => setNewRssCategory(e.target.value)}
+                  className="w-full h-10 px-3 rounded-md border border-input bg-background text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
                 >
-                  <option value="the-gioi">Thế Giới</option>
-                  <option value="suc-khoe">Sức Khỏe / Y Tế</option>
-                  <option value="trong-nuoc">Trong Nước</option>
-                  <option value="global">Toàn Cầu (Global)</option>
+                  <option value="thoi-su">Thời sự</option>
+                  <option value="suc-khoe">Sức khỏe</option>
+                  <option value="the-gioi">Thế giới</option>
+                  <option value="global">Quốc tế (English)</option>
                 </select>
               </div>
+              <Button type="submit" disabled={createRssMutation.isPending} className="whitespace-nowrap">
+                {createRssMutation.isPending ? <RefreshCcw className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4 mr-1" />} Thêm nguồn
+              </Button>
             </div>
-            <Button type="submit" disabled={createRssMutation.isPending} className="w-full">
-              {createRssMutation.isPending ? <RefreshCcw className="h-4 w-4 animate-spin mr-2" /> : <Plus className="h-4 w-4 mr-2" />}
-              Thêm Nguồn RSS
-            </Button>
           </form>
 
-          <div className="rounded-md border border-border/50 overflow-auto h-[255px]">
+          <div className="flex items-center justify-between mb-4">
+            <Input
+              placeholder="Tìm kiếm RSS..."
+              value={rssSearch}
+              onChange={(e) => setRssSearch(e.target.value)}
+              className="max-w-[200px]"
+            />
+            <Badge variant="secondary">
+              Tổng: {rssSources.length} | Bật: {rssActiveCount}
+            </Badge>
+          </div>
+
+          <div className="rounded-md border border-border/50 overflow-auto h-[350px]">
             {loadRss ? (
               <div className="flex justify-center p-8"><RefreshCcw className="h-6 w-6 animate-spin text-primary" /></div>
             ) : (
               <Table>
-                <TableHeader className="bg-muted/50 sticky top-0">
+                <TableHeader className="bg-muted/50 sticky top-0 z-10">
                   <TableRow>
-                    <TableHead>Tên Nguồn / Phân Loại</TableHead>
-                    <TableHead className="w-[100px] text-right">Trạng thái</TableHead>
+                    <TableHead>Trạng thái</TableHead>
+                    <TableHead>Nguồn tin</TableHead>
+                    <TableHead className="w-[80px] text-right">Xóa</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {rssSources.map(rss => (
-                    <TableRow key={rss.id}>
-                      <TableCell className="align-middle">
-                        <div className="font-semibold text-sm">{rss.label || "N/A"}</div>
-                        <div className="text-xs text-muted-foreground truncate max-w-[200px] xl:max-w-[300px]" title={rss.url}>{rss.url}</div>
-                        <Badge className="mt-1 text-[10px]" variant="secondary">{rss.category}</Badge>
-                      </TableCell>
-                      <TableCell className="text-right align-middle">
-                        <button
-                          type="button"
-                          onClick={() => toggleRssMutation.mutate({ id: rss.id, is_active: !rss.is_active })}
+                  {filteredRss.map(src => (
+                    <TableRow key={src.id} className={!src.is_active ? "opacity-50" : ""}>
+                      <TableCell className="w-[80px]">
+                        <Switch
+                          checked={src.is_active}
+                          onCheckedChange={(val) => toggleRssMutation.mutate({ id: src.id, is_active: val })}
                           disabled={toggleRssMutation.isPending}
-                          title={rss.is_active ? "Nhấn để tắt nguồn này" : "Nhấn để bật nguồn này"}
-                          className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-semibold border transition-colors ${rss.is_active
-                              ? "bg-green-100 text-green-700 border-green-200 hover:bg-red-100 hover:text-red-600 hover:border-red-200"
-                              : "bg-muted text-muted-foreground border-border hover:bg-green-100 hover:text-green-700 hover:border-green-200"
-                            }`}
+                        />
+                      </TableCell>
+                      <TableCell className="align-middle">
+                        <div className="flex flex-col">
+                          <span className="font-medium text-sm">{src.label || "Nguồn không tên"}</span>
+                          <span className="text-[10px] text-muted-foreground flex items-center gap-1">
+                            <LinkIcon className="h-3 w-3" /> {src.url.substring(0, 40)}...
+                          </span>
+                          <Badge variant="secondary" className="w-fit text-[10px] h-4 mt-1 px-1">
+                            {src.category}
+                          </Badge>
+                        </div>
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => deleteRssMutation.mutate(src.id)}
+                          className="hover:text-destructive hover:bg-destructive/10"
+                          disabled={deleteRssMutation.isPending}
                         >
-                          <Power className="h-3 w-3" />
-                          {rss.is_active ? "Bật" : "Tắt"}
-                        </button>
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
                       </TableCell>
                     </TableRow>
                   ))}
-                  {rssSources.length === 0 && (
-                    <TableRow><TableCell colSpan={2} className="text-center py-4 text-muted-foreground">Chưa có nguồn RSS</TableCell></TableRow>
-                  )}
                 </TableBody>
               </Table>
             )}
@@ -379,35 +460,29 @@ export default function ResourceManagement() {
 
       {/* Edit Keyword Modal */}
       <Dialog open={isEditKwModalOpen} onOpenChange={setIsEditKwModalOpen}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent className="sm:max-w-[425px]">
+          <DialogHeader>
+            <DialogTitle>Sửa từ khóa</DialogTitle>
+            <DialogDescription>
+              Thay đổi nội dung từ khóa giám sát.
+            </DialogDescription>
+          </DialogHeader>
           <form onSubmit={handleEditKwSubmit}>
-            <DialogHeader>
-              <DialogTitle>Sửa từ khóa</DialogTitle>
-              <DialogDescription>
-                Thay đổi nội dung từ khóa tự định nghĩa.
-              </DialogDescription>
-            </DialogHeader>
-            <div className="space-y-4 py-4">
-              <div className="space-y-2">
-                <label className="text-sm font-medium">Từ khóa mới</label>
-                <div className="relative">
-                  <Tag className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
-                  <Input
-                    className="pl-9"
-                    value={editKwText}
-                    onChange={(e) => setEditKwText(e.target.value)}
-                    required
-                  />
-                </div>
+            <div className="grid gap-4 py-4">
+              <div className="grid grid-cols-4 items-center gap-4">
+                <Label htmlFor="edit-kw-text" className="text-right">Nội dung</Label>
+                <Input
+                  id="edit-kw-text"
+                  value={editKwText}
+                  onChange={(e) => setEditKwText(e.target.value)}
+                  className="col-span-3"
+                />
               </div>
             </div>
             <DialogFooter>
-              <Button type="button" variant="outline" onClick={() => setIsEditKwModalOpen(false)}>
-                Hủy
-              </Button>
               <Button type="submit" disabled={updateKwMutation.isPending}>
-                {updateKwMutation.isPending && <RefreshCcw className="mr-2 h-4 w-4 animate-spin" />}
-                Lưu Thay Đổi
+                {updateKwMutation.isPending && <RefreshCcw className="h-4 w-4 animate-spin mr-2" />}
+                Lưu thay đổi
               </Button>
             </DialogFooter>
           </form>

@@ -8,7 +8,7 @@ import NotFound from "./pages/NotFound";
 import LoginPage from "./pages/LoginPage";
 import AdminInterface from "./pages/AdminInterface";
 import { AuthProvider } from "./contexts/AuthContext";
-import { ProtectedRoute, PublicRoute, AdminRoute } from "./components/auth/AuthGuard";
+import { PublicRoute, AdminRoute } from "./components/auth/AuthGuard";
 
 const queryClient = new QueryClient();
 
@@ -24,9 +24,7 @@ const App = () => (
               <Route path="/login" element={<LoginPage />} />
             </Route>
 
-            <Route element={<ProtectedRoute />}>
-              <Route path="/" element={<Index />} />
-            </Route>
+            <Route path="/" element={<Index />} />
 
             <Route element={<AdminRoute />}>
               <Route path="/admin/*" element={<AdminInterface />} />

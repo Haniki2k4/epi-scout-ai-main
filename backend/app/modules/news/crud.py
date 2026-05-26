@@ -1,14 +1,48 @@
 from sqlalchemy.orm import Session, joinedload
+from sqlalchemy import func, exists, and_, or_, select
 from . import models, schemas
 from datetime import datetime
 
 # --- Articles ---
 
-def get_articles(db: Session, skip: int = 0, limit: int = 100):
-    return db.query(models.ArticleIdentity)\
-        .options(joinedload(models.ArticleIdentity.cases))\
-        .order_by(models.ArticleIdentity.published_date.desc())\
+def _article_query(db: Session, keyword: str | None = None, date: str | None = None, include_excluded: bool = False):
+    query = db.query(models.ArticleIdentity).options(joinedload(models.ArticleIdentity.cases))
+    if not include_excluded:
+        query = query.filter(
+            models.ArticleIdentity.is_excluded.isnot(True)
+        )
+    if keyword:
+        query = query.join(models.ArticleDetails, models.ArticleIdentity.details).filter(
+            models.ArticleDetails.keywords_matched.ilike(f"%{keyword}%")
+        )
+        # Match by DiseaseCase.disease_name when available, fall back to keywords_matched only
+        # Avoids broad-context false positives (eg. "Ebola" articles under "virus" filter)
+        has_matching_case = exists(
+            select(models.DiseaseCase.id).where(
+                and_(
+                    models.DiseaseCase.article_id == models.ArticleIdentity.id,
+                    models.DiseaseCase.disease_name.ilike(f"%{keyword}%"),
+                )
+            )
+        )
+        has_any_case = exists(
+            select(models.DiseaseCase.id).where(
+                models.DiseaseCase.article_id == models.ArticleIdentity.id
+            )
+        )
+        query = query.filter(or_(has_matching_case, ~has_any_case))
+    if date:
+        query = query.filter(func.date_format(models.ArticleIdentity.published_date, "%Y-%m-%d") == date)
+    return query
+
+
+def get_articles(db: Session, skip: int = 0, limit: int = 100, keyword: str | None = None, date: str | None = None, include_excluded: bool = False):
+    return _article_query(db, keyword=keyword, date=date, include_excluded=include_excluded)\
+        .order_by(models.ArticleIdentity.published_date.desc(), models.ArticleIdentity.id.desc())\
         .offset(skip).limit(limit).all()
+
+def count_articles(db: Session, keyword: str | None = None, date: str | None = None, include_excluded: bool = False):
+    return _article_query(db, keyword=keyword, date=date, include_excluded=include_excluded).count()
 
 def get_article_by_link(db: Session, link: str):
     return db.query(models.ArticleIdentity).filter(models.ArticleIdentity.link == link).first()
@@ -34,7 +68,10 @@ def create_article(db: Session, article: schemas.ArticleCreate):
         source=article.source,
         keywords_matched=article.keywords_matched,
         tags=article.tags,
-        is_whitelisted=article.is_whitelisted
+        llm_normalized_title=article.llm_normalized_title,
+        is_whitelisted=article.is_whitelisted,
+        outbreak_relevance_score=article.outbreak_relevance_score,
+        is_suspected_false_positive=article.is_suspected_false_positive,
     )
     db.add(db_details)
     db.commit()
@@ -59,8 +96,30 @@ def get_recent_events(
     return query.order_by(models.NewsEvent.event_date.desc()).all()
 
 
+def compute_event_severity(event) -> str:
+    score = 0
+    if event.case_count >= 100:
+        score += 5
+    elif event.case_count >= 50:
+        score += 4
+    elif event.case_count >= 10:
+        score += 3
+    elif event.case_count >= 1:
+        score += 1
+    if event.event_date:
+        days_old = (datetime.utcnow() - event.event_date).days
+        if days_old <= 7:
+            score += 1
+    if score >= 6:
+        return "critical"
+    if score >= 4:
+        return "high"
+    if score >= 2:
+        return "medium"
+    return "low"
+
 def get_events(db: Session, skip: int = 0, limit: int = 100):
-    return db.query(models.NewsEvent).order_by(models.NewsEvent.event_date.desc()).offset(skip).limit(limit).all()
+    return db.query(models.NewsEvent).order_by(models.NewsEvent.event_date.desc(), models.NewsEvent.id.desc()).offset(skip).limit(limit).all()
 
 def delete_article(db: Session, article_id: int) -> bool:
     article = db.query(models.ArticleIdentity).filter(models.ArticleIdentity.id == article_id).first()
@@ -165,8 +224,21 @@ def update_disease_case(db: Session, case_id: int, new_count: int, article_id: i
 # --- Keywords ---
 
 def get_keywords(db: Session, skip: int = 0, limit: int = 100):
-    # Sort by ID descending to show newest first (Recent)
+    """Lấy tất cả keywords (admin quản lý, bắt kể is_active)."""
     return db.query(models.Keyword).order_by(models.Keyword.id.desc()).offset(skip).limit(limit).all()
+
+def get_active_keywords(db: Session):
+    """Lấy keyword is_active=True — dùng cho auto-scan và manual scan (keywords_to_scan=None)."""
+    return db.query(models.Keyword).filter(models.Keyword.is_active == True).order_by(models.Keyword.id.desc()).all()
+
+def toggle_keyword_active(db: Session, keyword_id: int, is_active: bool) -> models.Keyword | None:
+    """Admin bật/tắt keyword khỏi auto-scan."""
+    db_keyword = db.query(models.Keyword).filter(models.Keyword.id == keyword_id).first()
+    if db_keyword:
+        db_keyword.is_active = is_active
+        db.commit()
+        db.refresh(db_keyword)
+    return db_keyword
 
 def create_keyword(db: Session, keyword: schemas.KeywordCreate):
     db_keyword = models.Keyword(text=keyword.text)
@@ -214,7 +286,6 @@ def seed_default_keywords(db: Session):
 
 _DEFAULT_RSS_SOURCES = [
     {"url": "http://cand.com.vn/rss/suc-khoe-c-5", "label": "Công An Nhân Dân", "category": "suc-khoe"},
-    {"url": "http://www.who.int/feeds/entity/csr/disease/avian_influenza/en/rss.xml", "label": "WHO Avian Flu", "category": "global"},
     {"url": "https://congan.com.vn/rss/tin-chinh", "label": "Công An TP.HCM", "category": "thoi-su"},
     {"url": "https://dantri.com.vn/rss/suc-khoe.rss", "label": "Dân Trí - Sức Khỏe", "category": "suc-khoe"},
     {"url": "https://dantri.com.vn/rss/the-gioi.rss", "label": "Dân Trí - Thế Giới", "category": "the-gioi"},
@@ -229,7 +300,6 @@ _DEFAULT_RSS_SOURCES = [
     {"url": "https://phaply.net.vn/rss/tin-moi.rss", "label": "Pháp Lý", "category": "thoi-su"},
     {"url": "https://plo.vn/rss/home.rss", "label": "Pháp Luật TP.HCM", "category": "thoi-su"},
     {"url": "https://plo.vn/rss/suc-khoe-17.rss", "label": "PLO - Sức Khỏe", "category": "suc-khoe"},
-    {"url": "https://rss.nytimes.com/services/xml/rss/nyt/Health.xml", "label": "NYTimes Health", "category": "global"},
     {"url": "https://suckhoedoisong.vn/rss", "label": "Sức Khỏe Đời Sống", "category": "suc-khoe"},
     {"url": "https://suckhoedoisong.vn/rss/suc-khoe.rss", "label": "SKĐS - Sức Khỏe", "category": "suc-khoe"},
     {"url": "https://suckhoedoisong.vn/suc-khoe-tv.rss", "label": "SKĐS TV", "category": "suc-khoe"},
@@ -254,15 +324,20 @@ _DEFAULT_RSS_SOURCES = [
     {"url": "https://vov.gov.vn/Rss/RssCategoryExport?chuyendeId=27", "label": "VOV Gov - Y Tế", "category": "suc-khoe"},
     {"url": "https://vov.vn/rss/suc-khoe.rss", "label": "VOV - Sức Khỏe", "category": "suc-khoe"},
     {"url": "https://vov.vn/rss/the-gioi.rss", "label": "VOV - Thế Giới", "category": "the-gioi"},
+    {"url": "https://www.sggp.org.vn/rss/ytesuckhoe-212.rss", "label": "SGGP - Y Tế Sức Khỏe", "category": "suc-khoe"},
+    {"url": "https://rss.nytimes.com/services/xml/rss/nyt/HomePage.xml", "label": "NYTimes HomePage", "category": "global"},
+    {"url": "https://rss.nytimes.com/services/xml/rss/nyt/World.xml", "label": "NYTimes World", "category": "global"},
+    {"url": "https://rss.nytimes.com/services/xml/rss/nyt/Health.xml", "label": "NYTimes Health", "category": "global"},
+    {"url": "https://moxie.foxnews.com/google-publisher/health.xml", "label": "FoxNews Health", "category": "global"},
+    {"url": "https://moxie.foxnews.com/google-publisher/latest.xml", "label": "FoxNews Latest", "category": "global"},
+    {"url": "https://moxie.foxnews.com/google-publisher/science.xml", "label": "FoxNews Science", "category": "global"},
+    {"url": "https://www.cidrap.umn.edu/news/49/rss", "label": "CIDRAP News 49", "category": "global"},
+    {"url": "https://www.cidrap.umn.edu/news/232663/rss", "label": "CIDRAP News 232663", "category": "global"},
+    {"url": "https://www.cidrap.umn.edu/news/all/rss", "label": "CIDRAP All News", "category": "global"},
+    {"url": "https://moxie.foxnews.com/google-publisher/videos.xml", "label": "FoxNews Videos", "category": "global"},
+    {"url": "https://www.who.int/rss-feeds/news-english.xml", "label": "WHO News", "category": "global"},
     {"url": "https://www.afro.who.int/rss/emergencies.xml", "label": "WHO AFRO Emergencies", "category": "global"},
     {"url": "https://www.afro.who.int/rss/featured-news.xml", "label": "WHO AFRO News", "category": "global"},
-    {"url": "https://www.ecdc.europa.eu/en/taxonomy/term/1307/feed", "label": "ECDC Threats", "category": "global"},
-    {"url": "https://www.ecdc.europa.eu/en/taxonomy/term/1505/feed", "label": "ECDC Influenza", "category": "global"},
-    {"url": "https://www.ecdc.europa.eu/en/taxonomy/term/2942/feed", "label": "ECDC COVID-19", "category": "global"},
-    {"url": "https://www.google.com/alerts/feeds/00283484586046880188/13659782394507164085", "label": "Google Alert - Dịch Bệnh VN", "category": "google-alert"},
-    {"url": "https://www.google.com/alerts/feeds/00283484586046880188/2768685979145450209", "label": "Google Alert - Outbreak", "category": "google-alert"},
-    {"url": "https://www.sggp.org.vn/rss/ytesuckhoe-212.rss", "label": "SGGP - Y Tế Sức Khỏe", "category": "suc-khoe"},
-    {"url": "https://www.who.int/rss-feeds/news-english.xml", "label": "WHO News", "category": "global"},
 ]
 
 def get_active_rss_sources(db: Session):
@@ -276,10 +351,14 @@ def seed_default_rss_sources(db: Session):
     if db.query(models.RssSource).count() > 0:
         return  # Đã có dữ liệu, không cần seed lại
     for item in _DEFAULT_RSS_SOURCES:
+        url = item["url"].lower()
+        default_type = "INTERNATIONAL" if "nytimes" in url or "foxnews" in url or "cidrap" in url or "who" in url else "DOMESTIC"
+        
         db_src = models.RssSource(
             url=item["url"],
             label=item.get("label"),
             category=item.get("category"),
+            source_type=item.get("source_type", default_type),
             is_active=True,
         )
         db.add(db_src)
@@ -290,6 +369,7 @@ def create_rss_source(db: Session, source: schemas.RssSourceCreate):
         url=source.url,
         label=source.label,
         category=source.category,
+        source_type=source.source_type,
         is_active=source.is_active,
     )
     db.add(db_src)
@@ -317,3 +397,14 @@ def toggle_rss_source_active(db: Session, source_id: int, is_active: bool):
     db.commit()
     db.refresh(source)
     return source
+
+def update_rss_source(db: Session, source_id: int, update_data: schemas.RssSourceUpdate):
+    db_source = db.query(models.RssSource).filter(models.RssSource.id == source_id).first()
+    if not db_source:
+        return None
+    update_dict = update_data.model_dump(exclude_unset=True)
+    for key, value in update_dict.items():
+        setattr(db_source, key, value)
+    db.commit()
+    db.refresh(db_source)
+    return db_source
