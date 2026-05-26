@@ -4,7 +4,7 @@ import { MapboxOverlay } from '@deck.gl/mapbox';
 import type { Layer } from '@deck.gl/core';
 import 'maplibre-gl/dist/maplibre-gl.css';
 
-const BASEMAP_PRIMARY = 'https://tiles.openfreemap.org/styles/bright';
+const BASEMAP_PRIMARY = 'https://tiles.openfreemap.org/styles/liberty';
 const BASEMAP_FALLBACK = 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json';
 const DEFAULT_CENTER: [number, number] = [107.5, 15.5];
 const DEFAULT_ZOOM = 5;

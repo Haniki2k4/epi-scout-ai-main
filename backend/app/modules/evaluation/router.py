@@ -187,7 +187,7 @@ def get_articles_for_evaluation(
         query = query.join(models.ArticleEvaluation).filter(models.ArticleEvaluation.human_label == filter_label)
 
     total = query.count()
-    total_verified = db.query(models.ArticleEvaluation).filter(
+    total_verified = db.query(models.ArticleEvaluation).join(ArticleIdentity).filter(
         models.ArticleEvaluation.human_label.isnot(None)
     ).count()
 
@@ -197,7 +197,7 @@ def get_articles_for_evaluation(
             joinedload(ArticleIdentity.details),
             joinedload(ArticleIdentity.cases),
         )
-        .order_by(ArticleIdentity.published_date.desc())
+        .order_by(ArticleIdentity.published_date.desc(), ArticleIdentity.id.desc())
         .offset(skip)
         .limit(limit)
         .all()
@@ -448,20 +448,20 @@ def sync_dataset_to_file(db: Session = Depends(get_db), current_admin=Depends(se
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Lỗi ghi file: {str(exc)}")
 
-@router.delete("/delete-irrelevant")
-def delete_irrelevant_articles(db: Session = Depends(get_db), current_admin=Depends(security.require_admin_role)):
+@router.post("/exclude-irrelevant")
+def exclude_irrelevant_articles(db: Session = Depends(get_db), current_admin=Depends(security.require_admin_role)):
+    """Đánh dấu các bài báo noise/irrelevant là is_excluded để ẩn khỏi hiển thị công khai."""
     evals = db.query(models.ArticleEvaluation).filter(
         models.ArticleEvaluation.human_label.in_(["noise", "irrelevant"])
     ).all()
     
     article_ids = [e.article_id for e in evals]
     if not article_ids:
-        return {"message": "Không có bài báo nào cần xóa", "deleted_count": 0}
+        return {"message": "Không có bài báo nào cần ẩn", "excluded_count": 0}
         
-    # Remove from NewsEvents if linked
-    articles = db.query(ArticleIdentity).filter(ArticleIdentity.id.in_(article_ids)).all()
-    for a in articles:
-        db.delete(a)
+    db.query(ArticleIdentity).filter(ArticleIdentity.id.in_(article_ids)).update(
+        {ArticleIdentity.is_excluded: True}, synchronize_session=False
+    )
     
     db.commit()
-    return {"message": f"Đã xóa {len(articles)} bài báo không relevant.", "deleted_count": len(articles)}
+    return {"message": f"Đã ẩn {len(article_ids)} bài báo không relevant.", "excluded_count": len(article_ids)}

@@ -17,6 +17,13 @@ import { Article, Keyword, NewsEvent, NewsEventDetail } from "@/types";
 
 const SCAN_STATE_KEY = "epi_scout_scan_state";
 
+const severityConfig: Record<string, { color: string; label: string }> = {
+  critical: { color: "bg-red-100 text-red-700 border-red-200 dark:bg-red-950 dark:text-red-300 dark:border-red-800", label: "Nguy kịch" },
+  high: { color: "bg-orange-100 text-orange-700 border-orange-200 dark:bg-orange-950 dark:text-orange-300 dark:border-orange-800", label: "Cao" },
+  medium: { color: "bg-yellow-100 text-yellow-700 border-yellow-200 dark:bg-yellow-950 dark:text-yellow-300 dark:border-yellow-800", label: "Trung bình" },
+  low: { color: "bg-slate-100 text-slate-600 border-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:border-slate-700", label: "Thấp" },
+};
+
 const KeywordMonitoring = () => {
   const { toast } = useToast();
   const [activeKeywords, setActiveKeywords] = useState<Keyword[]>([]);
@@ -81,7 +88,7 @@ const KeywordMonitoring = () => {
 
   const fetchArticles = async () => {
     try {
-      const res = await fetch(`/api/articles?skip=0&limit=10000`);
+      const res = await fetch(`/api/articles?skip=0&limit=10000&include_label=true`);
       if (res.ok) {
         const data = await res.json();
         setArticles(data.items);
@@ -234,6 +241,10 @@ const KeywordMonitoring = () => {
       }
       return true;
     })
+    .filter((article) => {
+      const hl = article.human_label;
+      return hl !== "noise" && hl !== "irrelevant";
+    })
     .sort((a, b) => {
       const dateA = new Date(a.published_date).getTime();
       const dateB = new Date(b.published_date).getTime();
@@ -306,6 +317,11 @@ const KeywordMonitoring = () => {
               {selectedEvent?.disease_name}
               {selectedEvent?.location ? ` • ${selectedEvent.location}` : ""}
               {selectedEvent?.event_date ? ` • ${new Date(selectedEvent.event_date).toLocaleString()}` : ""}
+              {selectedEvent?.severity && (
+                <Badge className={`ml-2 text-[10px] px-1.5 py-0.5 border ${severityConfig[selectedEvent.severity]?.color || severityConfig.low.color}`}>
+                  {severityConfig[selectedEvent.severity]?.label || selectedEvent.severity}
+                </Badge>
+              )}
             </DialogDescription>
           </DialogHeader>
           {selectedEvent && (
@@ -667,6 +683,11 @@ const KeywordMonitoring = () => {
                   <div className="space-y-2">
                     <div className="font-medium">{event.canonical_title}</div>
                     <div className="flex flex-wrap gap-2 text-sm text-muted-foreground">
+                      {event.severity && (
+                        <Badge className={`text-[10px] px-1.5 py-0.5 border ${severityConfig[event.severity]?.color || severityConfig.low.color}`}>
+                          {severityConfig[event.severity]?.label || event.severity}
+                        </Badge>
+                      )}
                       <span>{event.disease_name}</span>
                       {event.location && <span>• {event.location}</span>}
                       <span>• {new Date(event.event_date).toLocaleDateString()}</span>

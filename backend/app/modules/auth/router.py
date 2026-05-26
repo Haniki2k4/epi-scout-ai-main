@@ -124,8 +124,9 @@ async def send_report_now(
         raise HTTPException(status_code=400, detail="Bạn chưa cấu hình địa chỉ email")
 
     from ...scheduler import send_personal_email_job
-    try:
-        await send_personal_email_job(user.id)
-        return {"success": True, "message": "Báo cáo đang được gửi đến email của bạn."}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+
+    result = await send_personal_email_job(user.id)
+    if result and not result.get("success"):
+        raise HTTPException(status_code=422, detail=result["message"])
+
+    return {"success": True, "message": "Báo cáo đang được gửi đến email của bạn."}

@@ -78,7 +78,7 @@ export const ScanStatusBanner = () => {
 
   if (status.is_scanning) {
     return (
-      <div className="mx-auto w-fit mt-3 animate-in slide-in-from-top-2 fade-in duration-300 relative z-50">
+      <div className="fixed top-[75px] left-1/2 -translate-x-1/2 animate-in slide-in-from-top-2 fade-in duration-300 z-[60]">
         <div className="flex items-center justify-center gap-2.5 px-4 py-2 bg-orange-500/90 hover:bg-orange-500 backdrop-blur-sm text-white rounded-full shadow-md border border-orange-400/30 transition-all">
           <Loader2 className="h-4 w-4 animate-spin" />
           <span className="text-sm font-medium">Hệ thống đang quét tin tức...</span>
@@ -89,7 +89,7 @@ export const ScanStatusBanner = () => {
 
   if (!status.is_scanning && status.last_run_at && visible) {
     return (
-      <div className="mx-auto w-fit mt-3 animate-in slide-in-from-top-2 fade-in duration-300 relative z-50">
+      <div className="fixed top-[75px] left-1/2 -translate-x-1/2 animate-in slide-in-from-top-2 fade-in duration-300 z-[60]">
         <div className="flex items-center justify-center gap-2.5 px-4 py-2 bg-emerald-500/90 hover:bg-emerald-500 backdrop-blur-sm text-white rounded-full shadow-md border border-emerald-400/30 transition-all">
           <CheckCircle2 className="h-4 w-4" />
           <span className="text-sm font-medium">

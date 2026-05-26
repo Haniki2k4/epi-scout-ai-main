@@ -1,28 +1,48 @@
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import func
+from sqlalchemy import func, exists, and_, or_, select
 from . import models, schemas
 from datetime import datetime
 
 # --- Articles ---
 
-def _article_query(db: Session, keyword: str | None = None, date: str | None = None):
+def _article_query(db: Session, keyword: str | None = None, date: str | None = None, include_excluded: bool = False):
     query = db.query(models.ArticleIdentity).options(joinedload(models.ArticleIdentity.cases))
+    if not include_excluded:
+        query = query.filter(
+            models.ArticleIdentity.is_excluded.isnot(True)
+        )
     if keyword:
         query = query.join(models.ArticleDetails, models.ArticleIdentity.details).filter(
             models.ArticleDetails.keywords_matched.ilike(f"%{keyword}%")
         )
+        # Match by DiseaseCase.disease_name when available, fall back to keywords_matched only
+        # Avoids broad-context false positives (eg. "Ebola" articles under "virus" filter)
+        has_matching_case = exists(
+            select(models.DiseaseCase.id).where(
+                and_(
+                    models.DiseaseCase.article_id == models.ArticleIdentity.id,
+                    models.DiseaseCase.disease_name.ilike(f"%{keyword}%"),
+                )
+            )
+        )
+        has_any_case = exists(
+            select(models.DiseaseCase.id).where(
+                models.DiseaseCase.article_id == models.ArticleIdentity.id
+            )
+        )
+        query = query.filter(or_(has_matching_case, ~has_any_case))
     if date:
         query = query.filter(func.date_format(models.ArticleIdentity.published_date, "%Y-%m-%d") == date)
     return query
 
 
-def get_articles(db: Session, skip: int = 0, limit: int = 100, keyword: str | None = None, date: str | None = None):
-    return _article_query(db, keyword=keyword, date=date)\
-        .order_by(models.ArticleIdentity.published_date.desc())\
+def get_articles(db: Session, skip: int = 0, limit: int = 100, keyword: str | None = None, date: str | None = None, include_excluded: bool = False):
+    return _article_query(db, keyword=keyword, date=date, include_excluded=include_excluded)\
+        .order_by(models.ArticleIdentity.published_date.desc(), models.ArticleIdentity.id.desc())\
         .offset(skip).limit(limit).all()
 
-def count_articles(db: Session, keyword: str | None = None, date: str | None = None):
-    return _article_query(db, keyword=keyword, date=date).count()
+def count_articles(db: Session, keyword: str | None = None, date: str | None = None, include_excluded: bool = False):
+    return _article_query(db, keyword=keyword, date=date, include_excluded=include_excluded).count()
 
 def get_article_by_link(db: Session, link: str):
     return db.query(models.ArticleIdentity).filter(models.ArticleIdentity.link == link).first()
@@ -48,6 +68,7 @@ def create_article(db: Session, article: schemas.ArticleCreate):
         source=article.source,
         keywords_matched=article.keywords_matched,
         tags=article.tags,
+        llm_normalized_title=article.llm_normalized_title,
         is_whitelisted=article.is_whitelisted,
         outbreak_relevance_score=article.outbreak_relevance_score,
         is_suspected_false_positive=article.is_suspected_false_positive,
@@ -75,8 +96,30 @@ def get_recent_events(
     return query.order_by(models.NewsEvent.event_date.desc()).all()
 
 
+def compute_event_severity(event) -> str:
+    score = 0
+    if event.case_count >= 100:
+        score += 5
+    elif event.case_count >= 50:
+        score += 4
+    elif event.case_count >= 10:
+        score += 3
+    elif event.case_count >= 1:
+        score += 1
+    if event.event_date:
+        days_old = (datetime.utcnow() - event.event_date).days
+        if days_old <= 7:
+            score += 1
+    if score >= 6:
+        return "critical"
+    if score >= 4:
+        return "high"
+    if score >= 2:
+        return "medium"
+    return "low"
+
 def get_events(db: Session, skip: int = 0, limit: int = 100):
-    return db.query(models.NewsEvent).order_by(models.NewsEvent.event_date.desc()).offset(skip).limit(limit).all()
+    return db.query(models.NewsEvent).order_by(models.NewsEvent.event_date.desc(), models.NewsEvent.id.desc()).offset(skip).limit(limit).all()
 
 def delete_article(db: Session, article_id: int) -> bool:
     article = db.query(models.ArticleIdentity).filter(models.ArticleIdentity.id == article_id).first()

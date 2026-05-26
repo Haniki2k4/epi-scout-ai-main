@@ -1,7 +1,7 @@
 from sqlalchemy.orm import Session
-from datetime import datetime
+from datetime import datetime, timedelta
 from . import models, schemas
-from ..news.models import ArticleIdentity
+from ..news.models import ArticleIdentity, SchedulerConfig
 
 def get_evaluations(db: Session, skip: int = 0, limit: int = 100):
     return db.query(models.ArticleEvaluation).offset(skip).limit(limit).all()
@@ -45,11 +45,12 @@ def update_human_label(db: Session, article_id: int, human_label: str | None, us
     return eval_record
 
 def get_metrics(db: Session):
-    evals = db.query(models.ArticleEvaluation).filter(models.ArticleEvaluation.is_verified == True).all()
+    evals = db.query(models.ArticleEvaluation).join(ArticleIdentity).filter(models.ArticleEvaluation.is_verified == True).all()
     if not evals:
         return {
-            "accuracy": 0, "precision": 0, "total_verified": 0, "agreement_rate": 0,
-            "cohens_kappa": 0, "confusion_matrix": {}, "disease_accuracy": 0
+            "accuracy": 0, "precision": 0, "recall": 0, "f1_score": 0,
+            "total_verified": 0, "agreement_rate": 0, "confusion_matrix": {},
+            "disease_accuracy": 0, "latest_session": None
         }
 
     # Labels available: relevant, noise, irrelevant, unsure
@@ -57,8 +58,6 @@ def get_metrics(db: Session):
 
     # Build confusion matrix
     confusion = {l1: {l2: 0 for l2 in labels} for l1 in labels}
-    label_counts_llm = {l: 0 for l in labels}
-    label_counts_human = {l: 0 for l in labels}
 
     # Disease name accuracy calculation
     disease_correct = 0
@@ -67,6 +66,7 @@ def get_metrics(db: Session):
     correct = 0
     true_positives = 0
     false_positives = 0
+    false_negatives = 0
     total = len(evals)
 
     for e in evals:
@@ -76,13 +76,13 @@ def get_metrics(db: Session):
 
         if e.llm_label in labels and e.human_label in labels:
             confusion[e.llm_label][e.human_label] += 1
-            label_counts_llm[e.llm_label] += 1
-            label_counts_human[e.human_label] += 1
 
         if e.llm_label == "relevant" and e.human_label == "relevant":
             true_positives += 1
         elif e.llm_label == "relevant" and e.human_label != "relevant":
             false_positives += 1
+        elif e.llm_label != "relevant" and e.human_label == "relevant":
+            false_negatives += 1
 
         # Disease name accuracy
         if e.keyword_is_correct is not None:
@@ -99,29 +99,56 @@ def get_metrics(db: Session):
 
     accuracy = correct / total
     precision = true_positives / (true_positives + false_positives) if (true_positives + false_positives) > 0 else 0
-
-    # Calculate Cohen's Kappa
-    # κ = (Po - Pe) / (1 - Pe)
-    # Po = observed agreement (accuracy)
-    # Pe = expected agreement by chance
-    po = accuracy
-    pe = 0
-    for label in labels:
-        expected_llm = label_counts_llm[label] / total
-        expected_human = label_counts_human[label] / total
-        pe += expected_llm * expected_human
-
-    cohens_kappa = (po - pe) / (1 - pe) if (1 - pe) > 0 else 0
+    recall = true_positives / (true_positives + false_negatives) if (true_positives + false_negatives) > 0 else 0
+    f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
 
     # Disease accuracy
     disease_accuracy = (disease_correct / disease_total * 100) if disease_total > 0 else 0
 
+    # Latest scan session from SchedulerConfig (phiên quét gần nhất, không phải phiên gán nhãn)
+    latest_session = None
+    latest_scan = db.query(SchedulerConfig).filter(SchedulerConfig.id == 1).first()
+    if latest_scan and latest_scan.last_run_at:
+        # Tính tỷ lệ label đúng/sai cho bài báo trong phiên quét đó
+        scan_day_start = latest_scan.last_run_at.replace(hour=0, minute=0, second=0, microsecond=0)
+        scan_day_end = scan_day_start + timedelta(days=1)
+        session_articles = db.query(ArticleIdentity).filter(
+            ArticleIdentity.published_date >= scan_day_start,
+            ArticleIdentity.published_date < scan_day_end,
+        ).all()
+        session_article_ids = [a.id for a in session_articles]
+        session_evals = db.query(models.ArticleEvaluation).filter(
+            models.ArticleEvaluation.article_id.in_(session_article_ids),
+            models.ArticleEvaluation.human_label.isnot(None),
+        ).all()
+        session_correct = sum(1 for e in session_evals if e.llm_label == e.human_label)
+        session_total = len(session_evals)
+
+        scan_duration = latest_scan.last_scan_duration_seconds or 0
+        total_checked = latest_scan.last_scan_total_checked or 0
+        avg_time = round(scan_duration / total_checked, 2) if total_checked > 0 else 0
+
+        latest_session = {
+            "date": latest_scan.last_run_at.strftime("%Y-%m-%d %H:%M"),
+            "total": latest_scan.last_run_saved_count or 0,
+            "correct": session_correct,
+            "verified_count": session_total,
+            "total_checked": latest_scan.last_scan_total_checked or 0,
+            "noise_count": latest_scan.last_scan_noise_count or 0,
+            "irrelevant_count": latest_scan.last_scan_irrelevant_count or 0,
+            "unsure_count": latest_scan.last_scan_unsure_count or 0,
+            "duration_seconds": scan_duration,
+            "avg_time_per_article": avg_time,
+        }
+
     return {
         "accuracy": round(accuracy * 100, 2),
         "precision": round(precision * 100, 2),
+        "recall": round(recall * 100, 2),
+        "f1_score": round(f1 * 100, 2),
         "total_verified": total,
         "agreement_rate": round(accuracy * 100, 2),
-        "cohens_kappa": round(cohens_kappa, 4),
         "confusion_matrix": confusion,
-        "disease_accuracy": round(disease_accuracy, 2)
+        "disease_accuracy": round(disease_accuracy, 2),
+        "latest_session": latest_session
     }

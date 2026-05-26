@@ -54,6 +54,18 @@ for (let i = 0; i < 6; i++) {
   LOCATION_FILTER_OPTIONS.push({ label: `Tháng ${m}/${y}`, days: 30, month: m, year: y });
 }
 
+const DASHBOARD_KW_KEY = "epi-scout-dashboard-keywords";
+
+function loadSavedKeywords(): { stacked: string[]; interest: string[] } {
+  try {
+    const raw = localStorage.getItem(DASHBOARD_KW_KEY);
+    if (!raw) return { stacked: [], interest: [] };
+    return JSON.parse(raw);
+  } catch {
+    return { stacked: [], interest: [] };
+  }
+}
+
 const DISEASE_COLORS = [
   "#3b82f6", "#f97316", "#22c55e", "#a855f7", "#ec4899",
   "#eab308", "#06b6d4", "#ef4444", "#84cc16", "#64748b",
@@ -91,8 +103,15 @@ const DashboardOverview = () => {
   const [stackedResult, setStackedResult] = useState<StackedResult | null>(null);
   const [stackedDays, setStackedDays] = useState(30);
   const [interestDays, setInterestDays] = useState(30);
-  const [selectedStackedDiseases, setSelectedStackedDiseases] = useState<string[]>([]);
-  const [selectedInterestDiseases, setSelectedInterestDiseases] = useState<string[]>([]);
+  const [selectedStackedDiseases, setSelectedStackedDiseases] = useState<string[]>(() => loadSavedKeywords().stacked);
+  const [selectedInterestDiseases, setSelectedInterestDiseases] = useState<string[]>(() => loadSavedKeywords().interest);
+
+  useEffect(() => {
+    localStorage.setItem(DASHBOARD_KW_KEY, JSON.stringify({
+      stacked: selectedStackedDiseases,
+      interest: selectedInterestDiseases,
+    }));
+  }, [selectedStackedDiseases, selectedInterestDiseases]);
 
   // ── Fetches ─────────────────────────────────────────────────────────────────
 
@@ -149,7 +168,16 @@ const DashboardOverview = () => {
           const data = await res.json();
           if (data && Array.isArray(data.diseases)) {
             setInterestResult(data);
-            setSelectedInterestDiseases(data.diseases.slice(0, 5));
+            setSelectedInterestDiseases(prev => {
+              if (prev.length) return prev;
+              const seen = new Set<string>();
+              return data.diseases.filter((d: string) => {
+                const key = d.toLowerCase();
+                if (seen.has(key)) return false;
+                seen.add(key);
+                return true;
+              }).slice(0, 5);
+            });
           }
         }
       } catch { }
@@ -165,7 +193,16 @@ const DashboardOverview = () => {
           const data = await res.json();
           if (data && Array.isArray(data.diseases)) {
             setStackedResult(data);
-            setSelectedStackedDiseases(data.diseases.slice(0, 5));
+            setSelectedStackedDiseases(prev => {
+              if (prev.length) return prev;
+              const seen = new Set<string>();
+              return data.diseases.filter((d: string) => {
+                const key = d.toLowerCase();
+                if (seen.has(key)) return false;
+                seen.add(key);
+                return true;
+              }).slice(0, 5);
+            });
           }
         }
       } catch { }

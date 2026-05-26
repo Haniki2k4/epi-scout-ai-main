@@ -16,9 +16,10 @@ import {
   FileUp,
   RefreshCcw,
   Upload,
-  Trash2,
+
   Database,
   X,
+
 } from "lucide-react";
 import { useToast } from "@/components/ui/use-toast";
 import {
@@ -58,11 +59,24 @@ interface Article {
 interface Metrics {
   accuracy: number;
   precision: number;
+  recall: number;
+  f1_score: number;
   total_verified: number;
   agreement_rate: number;
-  cohens_kappa: number;
   confusion_matrix: Record<string, Record<string, number>>;
   disease_accuracy: number;
+  latest_session?: {
+    date: string;
+    total: number;
+    correct: number;
+    verified_count: number;
+    total_checked: number;
+    noise_count: number;
+    irrelevant_count: number;
+    unsure_count: number;
+    duration_seconds: number;
+    avg_time_per_article: number;
+  } | null;
 }
 
 interface ImportSummary {
@@ -93,7 +107,7 @@ interface ImportResult {
 export default function EvaluationManagement() {
   const { toast } = useToast();
   const [articles, setArticles] = useState<Article[]>([]);
-  const [metrics, setMetrics] = useState<Metrics>({ accuracy: 0, precision: 0, total_verified: 0, agreement_rate: 0 });
+  const [metrics, setMetrics] = useState<Metrics>({ accuracy: 0, precision: 0, recall: 0, f1_score: 0, total_verified: 0, agreement_rate: 0, confusion_matrix: {}, disease_accuracy: 0 });
   const [totalArticles, setTotalArticles] = useState(0);
   const [totalVerified, setTotalVerified] = useState(0);
   const [loading, setLoading] = useState(false);
@@ -104,7 +118,6 @@ export default function EvaluationManagement() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [page, setPage] = useState(1);
   const [syncing, setSyncing] = useState(false);
-  const [deleting, setDeleting] = useState(false);
   const [filterLabel, setFilterLabel] = useState<string | null>(null);
   const [savingKeywordId, setSavingKeywordId] = useState<number | null>(null);
   const [savedKeywordId, setSavedKeywordId] = useState<number | null>(null);
@@ -231,12 +244,13 @@ export default function EvaluationManagement() {
         method: "POST",
         headers: { Authorization: `Bearer ${token}` }
       });
-      const data = await res.json();
-      if (res.ok) {
-        toast({ title: "Đồng bộ thành công", description: data.message });
-      } else {
-        throw new Error(data.detail || "Đồng bộ thất bại");
+      if (!res.ok) {
+        let detail = "Đồng bộ thất bại";
+        try { const payload = await res.json(); if (payload?.detail) detail = payload.detail; } catch { /* ignore */ }
+        throw new Error(detail);
       }
+      const data = await res.json();
+      toast({ title: "Đồng bộ thành công", description: data.message });
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : "Đồng bộ thất bại";
       toast({ title: "Lỗi", description: msg, variant: "destructive" });
@@ -244,35 +258,6 @@ export default function EvaluationManagement() {
       setSyncing(false);
     }
   };
-
-  const handleDeleteIrrelevant = async () => {
-    if (!window.confirm("Bạn có chắc chắn muốn xóa tất cả các bài báo không relevant (Noise/Irrelevant) trên hệ thống? Hành động này không thể hoàn tác.")) {
-      return;
-    }
-    setDeleting(true);
-    try {
-      const token = localStorage.getItem("token");
-      const res = await fetch("/api/evaluation/delete-irrelevant", {
-        method: "DELETE",
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      const data = await res.json();
-      if (res.ok) {
-        toast({ title: "Xóa thành công", description: data.message });
-        setPage(1);
-        fetchData();
-      } else {
-        throw new Error(data.detail || "Xóa thất bại");
-      }
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : "Xóa thất bại";
-      toast({ title: "Lỗi", description: msg, variant: "destructive" });
-    } finally {
-      setDeleting(false);
-    }
-  };
-
-  const pendingDeleteCount = articles.filter(a => a.human_label === 'noise' || a.human_label === 'irrelevant').length;
 
   const handleExportExcel = async () => {
     try {
@@ -347,8 +332,17 @@ export default function EvaluationManagement() {
       });
 
       if (!response.ok) {
-        const errorPayload = await response.json().catch(() => null) as { detail?: string } | null;
-        throw new Error(errorPayload?.detail || "Không thể nhập file Excel.");
+        let errorDetail = "Không thể nhập file Excel.";
+        try {
+          const payload = await response.json();
+          if (payload?.detail) errorDetail = payload.detail;
+        } catch {
+          try {
+            const text = await response.text();
+            if (text) errorDetail = text.substring(0, 300);
+          } catch { /* ignore */ }
+        }
+        throw new Error(errorDetail);
       }
 
       const result = await response.json() as ImportResult;
@@ -511,7 +505,7 @@ export default function EvaluationManagement() {
       </div>
 
       {/* Metrics Cards */}
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-6">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Độ chính xác (Accuracy)</CardTitle>
@@ -532,11 +526,20 @@ export default function EvaluationManagement() {
         </Card>
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Cohen's Kappa</CardTitle>
+            <CardTitle className="text-sm font-medium">F1 Score</CardTitle>
             <AlertCircle className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{metrics.cohens_kappa ?? 0}</div>
+            <div className="text-2xl font-bold">{metrics.f1_score ?? 0}%</div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Recall</CardTitle>
+            <AlertCircle className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">{metrics.recall ?? 0}%</div>
           </CardContent>
         </Card>
         <Card>
@@ -559,14 +562,116 @@ export default function EvaluationManagement() {
         </Card>
       </div>
 
-      {/* False Positive Analysis */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Phân tích Hiệu suất Lọc</CardTitle>
-          <CardDescription>
-            Chi tiết đánh giá thủ công trên các bài báo được LLM giữ lại (phân loại là Relevant)
-          </CardDescription>
-        </CardHeader>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Latest Scan Session - Detailed Stats */}
+        <Card className="border-blue-200 dark:border-blue-800 shadow-sm">
+          <CardHeader className="bg-blue-50/50 dark:bg-blue-900/20 pb-4 border-b">
+            <CardTitle className="text-lg flex items-center gap-2">
+              <RefreshCcw className="h-5 w-5 text-blue-600 dark:text-blue-400" />
+              Phiên quét gần nhất
+            </CardTitle>
+            <CardDescription>
+              Thông tin chi tiết phiên crawl tin tức gần đây nhất
+              {metrics.latest_session?.date ? ` (${metrics.latest_session.date})` : ""}
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="pt-6">
+            {metrics.latest_session ? (
+              <div className="space-y-4">
+                {/* Tổng quan */}
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="rounded-lg border p-3 bg-blue-50/30 dark:bg-blue-900/10">
+                    <div className="text-xs text-blue-700 dark:text-blue-400 font-medium mb-1">Tổng bài đã quét</div>
+                    <div className="text-2xl font-bold text-blue-700 dark:text-blue-400">
+                      {metrics.latest_session.total_checked || 0}
+                    </div>
+                  </div>
+                  <div className="rounded-lg border p-3 bg-indigo-50/30 dark:bg-indigo-900/10">
+                    <div className="text-xs text-indigo-700 dark:text-indigo-400 font-medium mb-1">Bài được lưu</div>
+                    <div className="text-2xl font-bold text-indigo-700 dark:text-indigo-400">
+                      {metrics.latest_session.total || 0}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Phân bổ LLM label */}
+                <div>
+                  <div className="text-xs font-medium text-muted-foreground mb-2">Phân bổ nhãn LLM:</div>
+                  <div className="grid grid-cols-3 gap-3">
+                    <div className="rounded border p-2.5 bg-orange-50/30 dark:bg-orange-900/10 text-center">
+                      <div className="text-xs text-orange-700 dark:text-orange-400 font-medium">Noise</div>
+                      <div className="text-lg font-bold text-orange-700 dark:text-orange-400">{metrics.latest_session.noise_count}</div>
+                    </div>
+                    <div className="rounded border p-2.5 bg-red-50/30 dark:bg-red-900/10 text-center">
+                      <div className="text-xs text-red-700 dark:text-red-400 font-medium">Irrelevant</div>
+                      <div className="text-lg font-bold text-red-700 dark:text-red-400">{metrics.latest_session.irrelevant_count}</div>
+                    </div>
+                    <div className="rounded border p-2.5 bg-yellow-50/30 dark:bg-yellow-900/10 text-center">
+                      <div className="text-xs text-yellow-700 dark:text-yellow-400 font-medium">Unsure</div>
+                      <div className="text-lg font-bold text-yellow-700 dark:text-yellow-400">{metrics.latest_session.unsure_count}</div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Thời gian */}
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="rounded border p-3">
+                    <div className="text-xs text-muted-foreground mb-1">Thời gian quét</div>
+                    <div className="font-semibold">
+                      {metrics.latest_session.duration_seconds >= 60
+                        ? `${(metrics.latest_session.duration_seconds / 60).toFixed(1)} phút`
+                        : `${metrics.latest_session.duration_seconds} giây`}
+                    </div>
+                  </div>
+                  <div className="rounded border p-3">
+                    <div className="text-xs text-muted-foreground mb-1">TB mỗi bài</div>
+                    <div className="font-semibold">{metrics.latest_session.avg_time_per_article} giây</div>
+                  </div>
+                </div>
+
+                {/* Đánh giá thủ công */}
+                {metrics.latest_session.verified_count > 0 ? (
+                  <div className="border-t pt-4">
+                    <div className="text-xs font-medium text-muted-foreground mb-2">Đánh giá thủ công trong phiên:</div>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="rounded-lg border p-3 bg-green-50/30 dark:bg-green-900/10">
+                        <div className="text-xs text-green-700 dark:text-green-400 font-medium mb-1">Label đúng</div>
+                        <div className="text-2xl font-bold text-green-700 dark:text-green-400">
+                          {metrics.latest_session.correct}
+                        </div>
+                        <div className="text-xs text-muted-foreground mt-1">
+                          {`${(metrics.latest_session.correct / metrics.latest_session.verified_count * 100).toFixed(1)}%`}
+                        </div>
+                      </div>
+                      <div className="rounded-lg border p-3 bg-red-50/30 dark:bg-red-900/10">
+                        <div className="text-xs text-red-700 dark:text-red-400 font-medium mb-1">Label sai</div>
+                        <div className="text-2xl font-bold text-red-700 dark:text-red-400">
+                          {metrics.latest_session.verified_count - metrics.latest_session.correct}
+                        </div>
+                        <div className="text-xs text-muted-foreground mt-1">
+                          {`${((metrics.latest_session.verified_count - metrics.latest_session.correct) / metrics.latest_session.verified_count * 100).toFixed(1)}%`}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            ) : (
+              <div className="text-center text-muted-foreground py-8 text-sm">
+                Chưa có phiên quét nào
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* False Positive Analysis */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-lg">Phân tích Hiệu suất Lọc Tổng thể</CardTitle>
+            <CardDescription>
+              Chi tiết đánh giá thủ công trên tất cả bài báo được phân loại là Relevant
+            </CardDescription>
+          </CardHeader>
         <CardContent>
           {metrics.confusion_matrix && metrics.confusion_matrix["relevant"] ? (
             <div className="space-y-6">
@@ -640,6 +745,7 @@ export default function EvaluationManagement() {
           )}
         </CardContent>
       </Card>
+      </div>
 
       {/* Table */}
       <Card>
@@ -648,15 +754,6 @@ export default function EvaluationManagement() {
             <CardTitle>Danh sách bài báo</CardTitle>
             <CardDescription>Trang {page} - Đang hiển thị {articles.length} bài báo</CardDescription>
           </div>
-          {pendingDeleteCount > 0 && (
-            <div className="flex items-center gap-3 bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400 px-4 py-2 rounded-lg border border-red-200 dark:border-red-900">
-              <span className="text-sm font-medium">Có {pendingDeleteCount} bài báo chờ xóa trên trang này.</span>
-              <Button size="sm" variant="destructive" className="gap-1.5 h-8" onClick={handleDeleteIrrelevant} disabled={deleting}>
-                {deleting ? <RefreshCcw className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
-                Xác nhận xóa
-              </Button>
-            </div>
-          )}
         </CardHeader>
         <CardContent>
           <div className="rounded-md border">
@@ -859,7 +956,7 @@ export default function EvaluationManagement() {
             <div className="text-sm text-muted-foreground">
               Hiển thị {(page - 1) * limit + 1} - {Math.min(page * limit, totalArticles)} trong {totalArticles} bài báo
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1">
               <Button
                 variant="outline"
                 size="sm"
@@ -868,7 +965,29 @@ export default function EvaluationManagement() {
               >
                 Trang trước
               </Button>
-              <div className="text-sm font-medium px-2">Trang {page}</div>
+              {Array.from({ length: Math.ceil(totalArticles / limit) }, (_, i) => i + 1)
+                .filter(p => p === 1 || p === Math.ceil(totalArticles / limit) || Math.abs(p - page) <= 2)
+                .reduce<(number | string)[]>((acc, p, idx, arr) => {
+                  if (idx > 0 && p - (arr[idx - 1] as number) > 1) acc.push("...");
+                  acc.push(p);
+                  return acc;
+                }, [])
+                .map((p, i) =>
+                  p === "..." ? (
+                    <span key={`ellipsis-${i}`} className="px-1 text-muted-foreground">...</span>
+                  ) : (
+                    <Button
+                      key={`page-${p}`}
+                      variant={page === p ? "default" : "outline"}
+                      size="sm"
+                      className="min-w-[32px] h-8"
+                      onClick={() => setPage(p as number)}
+                      disabled={loading}
+                    >
+                      {p}
+                    </Button>
+                  )
+                )}
               <Button
                 variant="outline"
                 size="sm"

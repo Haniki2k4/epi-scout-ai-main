@@ -83,6 +83,12 @@ async def run_scheduled_scan() -> None:
                 # Cập nhật config sau khi chạy xong
                 config.last_run_at = now
                 config.last_run_saved_count = result.saved_trusted_count
+                config.last_scan_total_checked = result.total_checked
+                config.last_scan_noise_count = result.noise_count
+                config.last_scan_irrelevant_count = result.irrelevant_count
+                config.last_scan_unsure_count = result.unsure_count
+                config.last_scan_duration_seconds = round(result.execution_time or 0)
+                config.last_scan_started_at = result.started_at
                 config.next_run_at = now + timedelta(hours=config.interval_hours)
                 db.commit()
 
@@ -98,15 +104,17 @@ async def run_scheduled_scan() -> None:
     await asyncio.to_thread(_do_scan)
 
 
-async def send_personal_email_job(user_id: int) -> None:
+async def send_personal_email_job(user_id: int) -> dict | None:
     """
     Job gửi email cho một người dùng cụ thể theo cấu hình của họ.
+    Trả về dict kết quả để caller (send-report-now) kiểm tra lỗi.
     """
     with SessionLocal() as db:
         try:
             user = db.query(auth_models.User).filter(auth_models.User.id == user_id).first()
-            if not user or not user.is_active or not user.email or user.report_schedule_type == "none":
-                return
+            if not user or not user.is_active or not user.email:
+                logger.warning("Personal email skipped | user_id={} reason=missing_email_or_inactive", user_id)
+                return None
 
             logger.info("Personal email job started | user_id={}", user_id)
 
@@ -126,17 +134,19 @@ async def send_personal_email_job(user_id: int) -> None:
 
             # 3. Gửi
             result = email_sender.send_report_email(
-                db=db,
                 docx_bytes=docx_bytes,
                 excel_bytes=excel_bytes,
                 report_date=report_data["generated_at"],
                 custom_recipients=[user.email],
+                report_data=report_data,
             )
             
             logger.info("Personal email completed | user_id={} success={}", user_id, result["success"])
+            return result
 
         except Exception as e:
             logger.error("Personal email failed | user_id={} error={}", user_id, str(e))
+            return {"success": False, "message": str(e), "recipient_count": 0}
         finally:
             db.close()
 
@@ -199,6 +209,21 @@ def _reschedule_job(scheduler: AsyncIOScheduler, interval_hours: int, run_now: b
     logger.info("Scheduler job rescheduled | interval_hours={} run_now={}", interval_hours, run_now)
 
 
+def _schedule_daily_ai_summary(scheduler: AsyncIOScheduler) -> None:
+    """Đăng ký job AI summary chạy vào 00:05 mỗi ngày để tự động tổng hợp khi sang ngày mới."""
+    if scheduler.get_job("daily_ai_summary"):
+        return
+    scheduler.add_job(
+        trigger_ai_summary,
+        trigger=CronTrigger(hour=0, minute=5, timezone=VN_TZ),
+        id="daily_ai_summary",
+        name="Daily AI Summary",
+        replace_existing=True,
+        misfire_grace_time=600,
+    )
+    logger.info("Daily AI summary scheduled at 00:05 VN_TZ")
+
+
 def start_scheduler() -> None:
     """Khởi động scheduler khi FastAPI startup."""
     run_now = False
@@ -237,6 +262,9 @@ def start_scheduler() -> None:
             u.report_schedule_day
         )
 
+    # Đăng ký job AI summary chạy vào 00:05 mỗi ngày
+    _schedule_daily_ai_summary(scheduler)
+
     if not scheduler.running:
         scheduler.start()
         logger.info("APScheduler started | interval_hours={} scheduled_emails={}", interval_hours, len(users))
@@ -254,3 +282,48 @@ def update_scheduler_interval(new_interval_hours: int) -> None:
     """Cập nhật chu kỳ chạy job, áp dụng ngay lập tức."""
     scheduler = get_scheduler()
     _reschedule_job(scheduler, new_interval_hours)
+
+
+async def run_ai_summary_job() -> None:
+    """
+    Job generate AI summary trong background, không phụ thuộc HTTP request.
+    """
+    def _do_summary():
+        with SessionLocal() as db:
+            try:
+                from .modules.report.ai_summary import (
+                    build_daily_summary_context,
+                    generate_daily_summary,
+                    _summary_cache,
+                    SUMMARY_CACHE_TTL_SECONDS,
+                )
+                logger.info("AI summary job started")
+                context_data = build_daily_summary_context(db)
+                data = generate_daily_summary(context_data)
+                _summary_cache["data"] = data
+                _summary_cache["expires_at"] = datetime.utcnow() + timedelta(seconds=SUMMARY_CACHE_TTL_SECONDS)
+                logger.info("AI summary job completed")
+            except Exception as e:
+                logger.error("AI summary job failed | error={}", str(e))
+    await asyncio.to_thread(_do_summary)
+
+
+def trigger_ai_summary() -> bool:
+    """
+    Kích hoạt AI summary chạy ngay trong background qua APScheduler.
+    Trả về True nếu job được tạo mới, False nếu đã có job đang chạy/chờ.
+    """
+    from apscheduler.triggers.date import DateTrigger
+    scheduler = get_scheduler()
+    if scheduler.get_job("ai_summary"):
+        logger.info("AI summary job skipped | reason=already_exists")
+        return False
+    scheduler.add_job(
+        run_ai_summary_job,
+        trigger=DateTrigger(run_date=datetime.now(VN_TZ) + timedelta(seconds=1)),
+        id="ai_summary",
+        name="AI Daily Summary",
+        misfire_grace_time=300,
+    )
+    logger.info("AI summary job triggered")
+    return True

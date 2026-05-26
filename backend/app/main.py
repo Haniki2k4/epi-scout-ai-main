@@ -57,6 +57,8 @@ def init_database() -> None:
     crawler.log_llm_preflight_status(force_refresh=True)
     # Khởi động APScheduler
     app_scheduler.start_scheduler()
+    # Tự động tạo AI summary khi server start
+    app_scheduler.trigger_ai_summary()
 
 
 @app.on_event("shutdown")
@@ -141,11 +143,26 @@ def read_articles(
     limit: int = 100, 
     keyword: str | None = None,
     date: str | None = None,
+    include_excluded: bool = False,
+    include_label: bool = False,
     db: Session = Depends(get_db)
 ):
-    logger.info("Read articles requested | skip={} limit={} keyword={} date={}", skip, limit, keyword, date)
-    articles = crud.get_articles(db, skip=skip, limit=limit, keyword=keyword, date=date)
-    total = crud.count_articles(db, keyword=keyword, date=date)
+    logger.info("Read articles requested | skip={} limit={} keyword={} date={} include_excluded={} include_label={}", skip, limit, keyword, date, include_excluded, include_label)
+    articles = crud.get_articles(db, skip=skip, limit=limit, keyword=keyword, date=date, include_excluded=include_excluded)
+    total = crud.count_articles(db, keyword=keyword, date=date, include_excluded=include_excluded)
+
+    # Gắn nhãn evaluation nếu được yêu cầu
+    if include_label:
+        from backend.app.modules.evaluation.models import ArticleEvaluation
+        article_ids = [a.id for a in articles]
+        evals = db.query(ArticleEvaluation).filter(ArticleEvaluation.article_id.in_(article_ids)).all()
+        eval_map = {e.article_id: e for e in evals}
+        for a in articles:
+            e = eval_map.get(a.id)
+            if e:
+                a.llm_label = e.llm_label
+                a.human_label = e.human_label
+
     logger.info("Read articles completed | count={} total={}", len(articles), total)
     return {
         "items": articles,
@@ -473,6 +490,9 @@ def toggle_keyword_active_api(
 def read_events(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
     logger.info("Read events requested | skip={} limit={}", skip, limit)
     events = crud.get_events(db, skip=skip, limit=limit)
+    for ev in events:
+        if not ev.severity:
+            ev.severity = crud.compute_event_severity(ev)
     logger.info("Read events completed | count={}", len(events))
     return events
 
@@ -484,6 +504,8 @@ def read_event_detail(event_id: int, db: Session = Depends(get_db)):
     if not event:
         logger.warning("Read event detail failed | event_id={} reason=not_found", event_id)
         raise HTTPException(status_code=404, detail="Event not found")
+    if not event.severity:
+        event.severity = crud.compute_event_severity(event)
     logger.info("Read event detail completed | event_id={} article_count={}", event_id, len(event.articles))
     return event
 

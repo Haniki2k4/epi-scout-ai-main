@@ -46,6 +46,7 @@ class ArticleIdentity(Base):
     link = Column(String(500), unique=True, index=True) # Link is usually ASCII, but String is fine
     published_date = Column(DateTime, default=datetime.utcnow)
     event_id = Column(Integer, ForeignKey("news_events.id"), nullable=True, index=True)
+    is_excluded = Column(Boolean, default=False, nullable=True)  # Loại bỏ khỏi hiển thị công khai
     event_match_score = Column(Float, nullable=True)
     dedupe_reason = Column(Unicode(255), nullable=True)
 
@@ -94,6 +95,7 @@ class ArticleDetails(Base):
     source = Column(Unicode(255), nullable=True) 
     keywords_matched = Column(Unicode(500), nullable=True)
     tags = Column(Unicode(500), nullable=True) # New column for tags (e.g. "Mới, Cảnh báo")
+    llm_normalized_title = Column(Unicode(200), nullable=True)  # LLM-generated normalized title for event grouping
     is_whitelisted = Column(Boolean, default=False)
     outbreak_relevance_score = Column(Float, default=0.0)
     is_suspected_false_positive = Column(Boolean, default=False)
@@ -143,18 +145,16 @@ class SchedulerConfig(Base):
     id = Column(Integer, primary_key=True, default=1)
     is_enabled = Column(Boolean, default=True)            # Bật/tắt auto-scan
     interval_hours = Column(Integer, default=6)           # Chu kỳ quét (giờ)
-    last_run_at = Column(DateTime, nullable=True)         # Thời điểm quét lần cuối
+    last_run_at = Column(DateTime, nullable=True)         # Thời điểm quét lần cuối (kết thúc)
     next_run_at = Column(DateTime, nullable=True)         # Thời điểm quét tiếp theo
     last_run_saved_count = Column(Integer, default=0)     # Số bài lưu lần cuối
+    last_scan_total_checked = Column(Integer, default=0)  # Tổng số bài đã kiểm tra
+    last_scan_noise_count = Column(Integer, default=0)    # Số bài noise
+    last_scan_irrelevant_count = Column(Integer, default=0) # Số bài irrelevant
+    last_scan_unsure_count = Column(Integer, default=0)   # Số bài unsure
+    last_scan_started_at = Column(DateTime, nullable=True) # Thời điểm bắt đầu quét
+    last_scan_duration_seconds = Column(Integer, default=0) # Tổng thời gian quét (giây)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
-class EmailConfig(Base):
-    """Cấu hình gửi email qua Mailtrap API - chỉ có 1 bản ghi (id=1)"""
-    __tablename__ = "email_config"
 
-    id = Column(Integer, primary_key=True, default=1)
-    mailtrap_api_token = Column(String(255), nullable=True)  # Mailtrap API Token
-    mailtrap_inbox_id = Column(String(50), nullable=True)    # Mailtrap Inbox ID (cho Sandbox)
-    sender_email = Column(String(255), nullable=True)         # Địa chỉ gửi đi
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

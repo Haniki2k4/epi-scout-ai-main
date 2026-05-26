@@ -151,7 +151,7 @@ Người dùng hiện có thể:
 ### 3.1. Luồng backend
 
 1. Người dùng đăng nhập để lấy JWT
-2. Admin quản trị keyword, RSS source, user, scheduler và email config
+2. Admin quản trị keyword, RSS source, user, scheduler
 3. Khi scan chạy:
    - load keyword active
    - load RSS source active
@@ -351,8 +351,6 @@ Các màn hình vận hành chính:
 - `POST /api/report/generate`
 - `POST /api/report/export-excel`
 - `POST /api/report/send-email`
-- `GET /api/report/email-config`
-- `PUT /api/report/email-config`
 
 ### Admin Users
 
@@ -409,7 +407,6 @@ Các bảng vận hành chính:
 - `Keyword`
 - `RssSource`
 - `SchedulerConfig`
-- `EmailConfig`
 - `User`
 - `UserAlert`
 - `UserBookmark`

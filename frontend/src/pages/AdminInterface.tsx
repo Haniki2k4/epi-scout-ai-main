@@ -1,14 +1,13 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useAuth } from "@/contexts/AuthContext";
 import { Link } from "react-router-dom";
-import { Activity, ArrowLeft, Users, Shield, Database, Clock, Mail, CheckCircle } from "lucide-react";
+import { Activity, ArrowLeft, Users, Shield, Database, Clock, CheckCircle } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import UserManagement from "@/components/admin/UserManagement";
 import EvaluationManagement from "@/components/admin/EvaluationManagement";
 import ArticleManagement from "@/components/admin/ArticleManagement";
 import ResourceManagement from "@/components/admin/ResourceManagement";
 import SchedulerConfig from "@/components/admin/SchedulerConfig";
-import EmailConfig from "@/components/admin/EmailConfig";
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
@@ -125,16 +124,13 @@ export default function AdminInterface() {
         {/* Content Tabs */}
         <div className="mt-8">
           <Tabs defaultValue="users" className="w-full">
-            <TabsList className="grid w-full grid-cols-6 max-w-[1000px] mb-6">
+            <TabsList className="grid w-full grid-cols-5 max-w-[850px] mb-6">
               <TabsTrigger value="users">Tài Khoản</TabsTrigger>
               <TabsTrigger value="evaluation" className="gap-1.5"><CheckCircle className="h-3.5 w-3.5" /> Đánh giá LLM</TabsTrigger>
               <TabsTrigger value="articles">Bài Báo</TabsTrigger>
               <TabsTrigger value="resources">Từ Khóa &amp; RSS</TabsTrigger>
               <TabsTrigger value="scheduler" className="gap-1.5">
                 <Clock className="h-3.5 w-3.5" />Lịch Quét
-              </TabsTrigger>
-              <TabsTrigger value="email" className="gap-1.5">
-                <Mail className="h-3.5 w-3.5" />Cấu hình Email
               </TabsTrigger>
             </TabsList>
             <TabsContent value="users" className="mt-0">
@@ -151,9 +147,6 @@ export default function AdminInterface() {
             </TabsContent>
             <TabsContent value="scheduler" className="mt-0">
               <SchedulerConfig />
-            </TabsContent>
-            <TabsContent value="email" className="mt-0">
-              <EmailConfig />
             </TabsContent>
           </Tabs>
         </div>

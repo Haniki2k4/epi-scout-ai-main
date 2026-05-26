@@ -34,12 +34,13 @@ const DataExtraction = () => {
 
   const fetchArticles = async (p: number) => {
     try {
-      // In a real app, we would append ?keyword={keyword} to the API
-      // For now, simple pagination
-      const res = await fetch(`/api/articles?skip=${(p - 1) * limit}&limit=${limit}`);
+      const res = await fetch(`/api/articles?skip=${(p - 1) * limit}&limit=${limit}&include_label=true`);
       if (res.ok) {
         const data = await res.json();
-        setArticles(data);
+        const filtered = (data.items || []).filter(
+          (a: Article) => a.human_label !== "noise" && a.human_label !== "irrelevant"
+        );
+        setArticles(filtered);
       }
     } catch (e) {
       console.error("Fetch error", e);

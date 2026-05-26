@@ -20,7 +20,6 @@ pytz
 APScheduler
 openpyxl
 python-docx
-httpx
 PyJWT
 bcrypt
 prophet

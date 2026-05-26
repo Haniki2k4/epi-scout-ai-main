@@ -30,6 +30,8 @@ interface ArticleModel {
   keywords_matched: string;
   event_match_score: number | null;
   dedupe_reason: string | null;
+  llm_label?: string | null;
+  human_label?: string | null;
   details?: {
     summary?: string;
   };
@@ -42,16 +44,31 @@ interface PaginatedArticles {
   limit: number;
 }
 
+const labelBadge = (label: string | null | undefined) => {
+  if (!label) return null;
+  const colors: Record<string, string> = {
+    relevant: "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400",
+    noise: "bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-400",
+    irrelevant: "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400",
+    unsure: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400",
+  };
+  return (
+    <span className={`px-2 py-0.5 rounded-full text-[10px] font-medium ${colors[label] || "bg-slate-100 text-slate-700"}`}>
+      {label}
+    </span>
+  );
+};
+
 export default function ArticleManagement() {
   const queryClient = useQueryClient();
   const [page, setPage] = useState(1);
   const LIMIT = 8;
 
-  // Fetch Articles
+  // Fetch Articles with labels
   const { data, isLoading } = useQuery<PaginatedArticles>({
     queryKey: ["admin_articles", page],
     queryFn: async () => {
-      const res = await fetch(`/api/articles?skip=${(page - 1) * LIMIT}&limit=${LIMIT}`);
+      const res = await fetch(`/api/articles?skip=${(page - 1) * LIMIT}&limit=${LIMIT}&include_label=true`);
       if (!res.ok) throw new Error("Failed to fetch articles");
       return res.json();
     },
@@ -102,9 +119,10 @@ export default function ArticleManagement() {
             <Table>
               <TableHeader className="bg-muted/50">
                 <TableRow>
-                  <TableHead className="w-[50%]">Tiêu đề / Trích đoạn</TableHead>
+                  <TableHead className="w-[35%]">Tiêu đề / Trích đoạn</TableHead>
                   <TableHead>Nguồn / Thời gian</TableHead>
-                  <TableHead>Từ khóa (Keywords)</TableHead>
+                  <TableHead>Từ khóa</TableHead>
+                  <TableHead>Nhãn</TableHead>
                   <TableHead className="text-right">Thao tác</TableHead>
                 </TableRow>
               </TableHeader>
@@ -140,7 +158,7 @@ export default function ArticleManagement() {
                       </div>
                     </TableCell>
                     <TableCell>
-                      <div className="flex flex-wrap gap-1 max-w-[200px]">
+                      <div className="flex flex-wrap gap-1 max-w-[160px]">
                         {article.keywords_matched ? (
                           article.keywords_matched.split(",").map((kw, idx) => (
                             <Badge
@@ -154,6 +172,22 @@ export default function ArticleManagement() {
                         ) : (
                           <span className="text-xs text-muted-foreground">-</span>
                         )}
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex flex-col gap-1.5 min-w-[110px]">
+                        <div className="flex items-center gap-1">
+                          <span className="text-[10px] text-muted-foreground">LLM:</span>
+                          {labelBadge(article.llm_label)}
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <span className="text-[10px] text-muted-foreground">Xác nhận:</span>
+                          {article.human_label ? (
+                            labelBadge(article.human_label)
+                          ) : (
+                            <span className="text-[10px] text-muted-foreground">-</span>
+                          )}
+                        </div>
                       </div>
                     </TableCell>
                     <TableCell className="text-right">

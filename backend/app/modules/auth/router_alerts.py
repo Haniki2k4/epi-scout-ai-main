@@ -233,6 +233,7 @@ def get_alert_feed(
     alert_id: int,
     skip: int = 0,
     limit: int = 20,
+    include_label: bool = False,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_active_user),
 ):
@@ -240,6 +241,8 @@ def get_alert_feed(
     Lấy feed bài báo phù hợp với bộ lọc cảnh báo.
     Lọc từ DB theo keywords + location_filter của alert đó.
     """
+    from ...modules.evaluation.models import ArticleEvaluation
+
     alert = (
         db.query(auth_models.UserAlert)
         .filter(
@@ -260,11 +263,28 @@ def get_alert_feed(
             items=[],
         )
 
-    # Xây dựng điều kiện tìm kiếm: keywords_matched CHỨA ít nhất 1 keyword trong bộ lọc
-    keyword_conditions = [
-        news_models.ArticleDetails.keywords_matched.ilike(f"%{kw}%")
-        for kw in keywords
-    ]
+    # Xây dựng điều kiện tìm kiếm: keywords_matched chứa ít nhất 1 keyword,
+    # kết hợp với DiseaseCase.disease_name để tránh match ngữ cảnh rộng
+    # (VD: bài về Ebola không hiện trong bộ lọc "virus" nếu không có DiseaseCase khớp)
+    from sqlalchemy import exists, and_, select
+
+    keyword_conditions = []
+    for kw in keywords:
+        kw_match = news_models.ArticleDetails.keywords_matched.ilike(f"%{kw}%")
+        has_matching_case = exists(
+            select(news_models.DiseaseCase.id).where(
+                and_(
+                    news_models.DiseaseCase.article_id == news_models.ArticleIdentity.id,
+                    news_models.DiseaseCase.disease_name.ilike(f"%{kw}%"),
+                )
+            )
+        )
+        has_any_case = exists(
+            select(news_models.DiseaseCase.id).where(
+                news_models.DiseaseCase.article_id == news_models.ArticleIdentity.id
+            )
+        )
+        keyword_conditions.append(and_(kw_match, or_(has_matching_case, ~has_any_case)))
 
     query = (
         db.query(news_models.ArticleIdentity)
@@ -273,11 +293,17 @@ def get_alert_feed(
         .filter(or_(*keyword_conditions))
     )
 
-    # Lọc thêm theo location nếu có
+    # Lọc thêm theo location nếu có (dùng DiseaseCase.location thay vì keywords_matched)
     if alert.location_filter:
-        query = query.filter(
-            news_models.ArticleDetails.keywords_matched.ilike(f"%{alert.location_filter}%")
+        location_match = exists(
+            select(news_models.DiseaseCase.id).where(
+                and_(
+                    news_models.DiseaseCase.article_id == news_models.ArticleIdentity.id,
+                    news_models.DiseaseCase.location.ilike(f"%{alert.location_filter}%"),
+                )
+            )
         )
+        query = query.filter(location_match)
 
     total = query.count()
     articles = (
@@ -286,6 +312,17 @@ def get_alert_feed(
         .limit(limit)
         .all()
     )
+
+    # Gắn nhãn evaluation nếu được yêu cầu
+    if include_label and articles:
+        article_ids = [a.id for a in articles]
+        evals = db.query(ArticleEvaluation).filter(ArticleEvaluation.article_id.in_(article_ids)).all()
+        eval_map = {e.article_id: e for e in evals}
+        for a in articles:
+            e = eval_map.get(a.id)
+            if e:
+                a.llm_label = e.llm_label
+                a.human_label = e.human_label
 
     return AlertFeedResponse(
         alert_id=alert_id,
