@@ -46,6 +46,7 @@ class ArticleIdentity(Base):
     link = Column(String(500), unique=True, index=True) # Link is usually ASCII, but String is fine
     published_date = Column(DateTime, default=datetime.utcnow)
     event_id = Column(Integer, ForeignKey("news_events.id"), nullable=True, index=True)
+    is_excluded = Column(Boolean, default=False, nullable=True)  # Loại bỏ khỏi hiển thị công khai
     event_match_score = Column(Float, nullable=True)
     dedupe_reason = Column(Unicode(255), nullable=True)
 
@@ -71,6 +72,14 @@ class ArticleIdentity(Base):
     @property
     def is_whitelisted(self):
         return self.details.is_whitelisted if self.details else False
+
+    @property
+    def outbreak_relevance_score(self):
+        return self.details.outbreak_relevance_score if self.details else 0.0
+
+    @property
+    def is_suspected_false_positive(self):
+        return self.details.is_suspected_false_positive if self.details else False
         
     @property
     def tags(self):
@@ -86,7 +95,10 @@ class ArticleDetails(Base):
     source = Column(Unicode(255), nullable=True) 
     keywords_matched = Column(Unicode(500), nullable=True)
     tags = Column(Unicode(500), nullable=True) # New column for tags (e.g. "Mới, Cảnh báo")
+    llm_normalized_title = Column(Unicode(200), nullable=True)  # LLM-generated normalized title for event grouping
     is_whitelisted = Column(Boolean, default=False)
+    outbreak_relevance_score = Column(Float, default=0.0)
+    is_suspected_false_positive = Column(Boolean, default=False)
     
     identity = relationship("ArticleIdentity", back_populates="details")
 
@@ -103,19 +115,46 @@ class DiseaseCase(Base):
     
     article = relationship("ArticleIdentity", back_populates="cases")
 
-class WhitelistDomain(Base):
-    __tablename__ = "whitelist_domains"
 
-    id = Column(Integer, primary_key=True, index=True)
-    domain = Column(String(255), unique=True, index=True)
-    is_active = Column(Boolean, default=True)
 
 class Keyword(Base):
     __tablename__ = "keywords"
 
     id = Column(Integer, primary_key=True, index=True)
     text = Column(Unicode(255), unique=True, index=True) # Support Vietnamese keywords
+    is_active = Column(Boolean, default=True)             # Admin can disable keywords
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class RssSource(Base):
+    __tablename__ = "rss_sources"
+
+    id = Column(Integer, primary_key=True, index=True)
+    url = Column(String(767), unique=True, index=True, nullable=False)
+    label = Column(Unicode(255), nullable=True)    # Tên tờ báo / kênh
+    category = Column(String(100), nullable=True)  # e.g. suc-khoe, the-gioi, global
+    source_type = Column(String(50), default="DOMESTIC") # Enum: DOMESTIC, INTERNATIONAL
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class SchedulerConfig(Base):
+    """Cấu hình Auto Crawler Scheduler - chỉ có 1 bản ghi (id=1)"""
+    __tablename__ = "scheduler_config"
+
+    id = Column(Integer, primary_key=True, default=1)
+    is_enabled = Column(Boolean, default=True)            # Bật/tắt auto-scan
+    interval_hours = Column(Integer, default=6)           # Chu kỳ quét (giờ)
+    last_run_at = Column(DateTime, nullable=True)         # Thời điểm quét lần cuối (kết thúc)
+    next_run_at = Column(DateTime, nullable=True)         # Thời điểm quét tiếp theo
+    last_run_saved_count = Column(Integer, default=0)     # Số bài lưu lần cuối
+    last_scan_total_checked = Column(Integer, default=0)  # Tổng số bài đã kiểm tra
+    last_scan_noise_count = Column(Integer, default=0)    # Số bài noise
+    last_scan_irrelevant_count = Column(Integer, default=0) # Số bài irrelevant
+    last_scan_unsure_count = Column(Integer, default=0)   # Số bài unsure
+    last_scan_started_at = Column(DateTime, nullable=True) # Thời điểm bắt đầu quét
+    last_scan_duration_seconds = Column(Integer, default=0) # Tổng thời gian quét (giây)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
 

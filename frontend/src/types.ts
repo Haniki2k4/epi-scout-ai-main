@@ -1,3 +1,9 @@
+export interface DiseaseCase {
+  disease_name: string;
+  case_count: number;
+  location?: string | null;
+}
+
 export interface Article {
   id?: number;
   title: string;
@@ -7,20 +13,29 @@ export interface Article {
   published_date: string;
   keywords_matched: string;
   is_whitelisted: boolean;
+  outbreak_relevance_score?: number;
+  is_suspected_false_positive?: boolean;
+  tags?: string | null;
   event_id?: number | null;
   event_match_score?: number | null;
   dedupe_reason?: string | null;
+  cases?: DiseaseCase[];
+  llm_label?: string | null;
+  human_label?: string | null;
 }
 
-export interface WhitelistDomain {
+export interface RssSource {
   id?: number;
-  domain: string;
+  url: string;
+  label?: string | null;
+  category?: string | null;
   is_active: boolean;
+  created_at?: string;
 }
 
 export interface ScanResult {
   saved_trusted_count: number;
-  unknown_articles: Article[];
+  execution_time?: number;
 }
 
 export interface Keyword {
@@ -46,4 +61,23 @@ export interface NewsEvent {
 export interface NewsEventDetail extends Omit<NewsEvent, "article_count"> {
   article_count: number;
   articles: Article[];
+}
+
+export interface ZScoreSpike {
+  date: string;
+  cases: number;
+  rolling_mean: number;
+  rolling_std: number;
+  z_score: number;
+  is_spike: boolean;
+  threshold?: number;
+}
+
+export interface ProphetForecast {
+  date: string;
+  actual: number | null;
+  forecast: number;
+  forecast_lower: number;
+  forecast_upper: number;
+  is_future: boolean;
 }
