@@ -39,3 +39,4 @@ venv/
 # Scratch
 scratch/
 docs/draft.ini
+backup.sql

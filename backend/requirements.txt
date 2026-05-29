@@ -22,4 +22,5 @@ openpyxl
 python-docx
 PyJWT
 bcrypt
+python-dateutil
 prophet
