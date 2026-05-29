@@ -8,7 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, Scatter, ReferenceLine } from "recharts";
 import { TrendingUp, Download, FileText, BarChart3, Database, Sparkles, ShieldAlert, Send, CalendarClock, RadioTower, MapPin, AlertTriangle, Table2, Lock } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import { Article, NewsEvent, ZScoreSpike, ProphetForecast } from "@/types";
+import { NewsEvent, ZScoreSpike, ProphetForecast } from "@/types";
 import { ComposedChart, Area } from "recharts";
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter,
@@ -18,7 +18,7 @@ import { useToast } from "@/components/ui/use-toast";
 import { DiseaseSelectorModal } from "@/components/DiseaseSelectorModal";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useAuth } from "@/contexts/AuthContext";
-import { KeywordBubbleChart, KeywordBubblePoint } from "@/components/KeywordBubbleChart";
+
 
 type OverviewStats = {
   total_articles: number;
@@ -95,13 +95,7 @@ const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
   const [emailAttachWord, setEmailAttachWord] = useState(true);
   const [emailAttachExcel, setEmailAttachExcel] = useState(true);
 
-  // State cho Mức độ đa dạng bệnh
-  const [keywordTimeseries, setKeywordTimeseries] = useState<{ date: string, keyword_count: number }[]>([]);
-  const [keywordZScoreSpikes, setKeywordZScoreSpikes] = useState<ZScoreSpike[]>([]);
-  const [keywordBubbleData, setKeywordBubbleData] = useState<KeywordBubblePoint[]>([]);
-  const [bubbleArticles, setBubbleArticles] = useState<Article[]>([]);
-  const [bubbleDialogOpen, setBubbleDialogOpen] = useState(false);
-  const [selectedBubble, setSelectedBubble] = useState<KeywordBubblePoint | null>(null);
+
 
   useEffect(() => {
     const initializeDisease = async () => {
@@ -258,40 +252,7 @@ const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
       }
     };
 
-    const fetchDiversityData = async () => {
-      try {
-        const [timeseriesRes, zscoreRes] = await Promise.all([
-          fetch("/api/stats/keyword-timeseries?days=30"),
-          fetch("/api/stats/keyword-zscore?window=14&days=60")
-        ]);
-
-        if (timeseriesRes.ok) {
-          setKeywordTimeseries(await timeseriesRes.json());
-        }
-
-        if (zscoreRes.ok) {
-          const zData = await zscoreRes.json();
-          setKeywordZScoreSpikes(zData.map((d: any) => ({
-            date: d.date,
-            cases: d.count,
-            rolling_mean: d.ma,
-            rolling_std: d.std ?? 0,
-            z_score: d.zscore,
-            is_spike: d.spike_level === 'danger' || d.spike_level === 'alert',
-            threshold: d.std > 0 ? d.ma + 2 * d.std : d.count,
-          })));
-        }
-        const bubbleRes = await fetch("/api/stats/keyword-bubble?days=30&window=14");
-        if (bubbleRes.ok) {
-          setKeywordBubbleData(await bubbleRes.json());
-        }
-      } catch (e) {
-        console.error("Failed to fetch diversity data", e);
-      }
-    };
-
     fetchAnalysisData();
-    fetchDiversityData();
   }, []);
 
   // --- Report scope to hours mapping ---
@@ -405,26 +366,7 @@ const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
     }
   };
 
-  const handleBubbleClick = async (point: KeywordBubblePoint) => {
-    setSelectedBubble(point);
-    setBubbleDialogOpen(true);
-    setBubbleArticles([]);
-    try {
-      const res = await fetch(`/api/articles?keyword=${encodeURIComponent(point.keyword)}&date=${encodeURIComponent(point.date)}&limit=20&include_label=true`);
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.detail || "Khong the tai bai bao lien quan");
-      const filtered = (data.items || []).filter(
-        (a: Article) => a.human_label !== "noise" && a.human_label !== "irrelevant"
-      );
-      setBubbleArticles(filtered);
-    } catch (error) {
-      toast({
-        title: "Loi",
-        description: error instanceof Error ? error.message : "Khong the tai bai bao lien quan",
-        variant: "destructive",
-      });
-    }
-  };
+
 
   const topSignals = useMemo(() => {
     return events.slice(0, 3).map((event, index) => ({
@@ -688,10 +630,9 @@ const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
   return (
     <div className="space-y-6">
       <Tabs defaultValue="forecast" className="space-y-6">
-        <TabsList className="grid w-full grid-cols-3">
+        <TabsList className="grid w-full grid-cols-2">
           <TabsTrigger value="zscore">Phát hiện Đột biến</TabsTrigger>
           <TabsTrigger value="forecast">Dự báo sự kiện</TabsTrigger>
-          <TabsTrigger value="diversity">Toàn cảnh thông tin</TabsTrigger>
         </TabsList>
 
         <TabsContent value="zscore" className="space-y-6">
@@ -962,112 +903,10 @@ const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
           </Card>
         </TabsContent>
 
-        <TabsContent value="diversity" className="space-y-6">
-          <Card>
-            <CardHeader>
-              <CardTitle>Toàn cảnh thông tin và phân bố  </CardTitle>
-              <CardDescription>Theo dõi luồng tin tức tập trung vào các dịch bệnh nào theo thời gian. Hình càng lớn, mức độ quan tâm của truyền thông trong ngày đó càng cao.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="mt-4">
-                {keywordBubbleData.length === 0 ? (
-                  <div className="flex h-[420px] items-center justify-center rounded-lg border bg-muted/30 text-sm text-muted-foreground">
-                    Chua co du lieu bubble chart trong khoang thoi gian nay.
-                  </div>
-                ) : (
-                  <KeywordBubbleChart data={keywordBubbleData} onBubbleClick={handleBubbleClick} />
-                )}
-              </div>
-              <div className="hidden">
-                <ResponsiveContainer width="100%" height="100%">
-                  <ComposedChart data={keywordZScoreSpikes.length > 0
-                    ? keywordZScoreSpikes.map(s => ({ ...s, spike_value: s.is_spike ? s.cases : null }))
-                    : keywordTimeseries.map(item => ({ date: item.date, cases: item.keyword_count, rolling_mean: item.keyword_count, z_score: 0, is_spike: false, spike_value: null, threshold: item.keyword_count }))
-                  } margin={{ top: 20, right: 30, left: 0, bottom: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
-                    <XAxis dataKey="date" stroke="hsl(var(--muted-foreground))" tick={{ fontSize: 12 }} minTickGap={30} />
-                    <YAxis stroke="hsl(var(--muted-foreground))" tick={{ fontSize: 12 }} />
-                    <Tooltip
-                      contentStyle={{ backgroundColor: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: "8px" }}
-                      itemStyle={{ color: "hsl(var(--foreground))" }}
-                    />
-                    <Legend />
-                    <Bar dataKey="cases" name="Số loại bệnh" fill="hsl(var(--chart-3))" radius={[4, 4, 0, 0]} maxBarSize={40} />
-                    <Line type="monotone" dataKey="rolling_mean" name="Trung bình trượt (14 ngày)" stroke="hsl(var(--chart-4))" strokeWidth={2} dot={false} />
-                    <Line type="monotone" dataKey="spike_value" name="Cảnh báo đột biến" stroke="transparent" connectNulls={false}
-                      dot={{ r: 6, fill: "hsl(var(--destructive))", strokeWidth: 2, stroke: "hsl(var(--background))" }}
-                      activeDot={false} legendType="circle" />
-                    <Line type="monotone" dataKey="threshold" name="Ngưỡng bất thường" stroke="hsl(var(--destructive))" strokeWidth={1.5} strokeDasharray="6 3" dot={false} />
-                  </ComposedChart>
-                </ResponsiveContainer>
-              </div>
 
-              <div className="mt-6 grid gap-6 md:grid-cols-2">
-                <Card className="border shadow-none">
-                  <CardHeader className="py-4">
-                    <CardTitle className="text-destructive flex items-center gap-2 text-base">
-                      <AlertTriangle className="h-4 w-4" />
-                      Insight
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent className="space-y-3 pb-4">
-                    {keywordZScoreSpikes.filter(s => s.is_spike).reverse().map((spike, i) => (
-                      <div key={i} className="flex justify-between items-center p-3 rounded-lg bg-destructive/10 border border-destructive/20">
-                        <div>
-                          <div className="font-medium text-destructive">{spike.date}</div>
-                          <div className="text-xs text-muted-foreground">Z-Score: <span className="font-semibold">{spike.z_score.toFixed(2)}</span></div>
-                        </div>
-                        <div className="text-right">
-                          <div className="font-bold text-foreground">{spike.cases} loại bệnh</div>
-                          <div className="text-[10px] text-muted-foreground">+{(spike.cases - spike.rolling_mean).toFixed(1)} so với TB</div>
-                        </div>
-                      </div>
-                    ))}
-                    {keywordZScoreSpikes.filter(s => s.is_spike).length === 0 && (
-                      <div className="p-4 text-center text-sm text-muted-foreground bg-muted/50 rounded-lg">
-                        Không phát hiện sự đa dạng bất thường.
-                      </div>
-                    )}
-                  </CardContent>
-                </Card>
-              </div>
-            </CardContent>
-          </Card>
-        </TabsContent>
       </Tabs>
 
-      <Dialog open={bubbleDialogOpen} onOpenChange={setBubbleDialogOpen}>
-        <DialogContent className="max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>
-              {selectedBubble ? `${selectedBubble.keyword} - ${new Date(selectedBubble.date).toLocaleDateString("vi-VN")}` : "Bai bao lien quan"}
-            </DialogTitle>
-            <DialogDescription>
-              Danh sach bai bao lien quan den bubble da chon.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="max-h-[60vh] space-y-3 overflow-y-auto pr-1">
-            {bubbleArticles.length === 0 ? (
-              <div className="rounded-lg border bg-muted/30 p-6 text-center text-sm text-muted-foreground">
-                Khong co bai bao phu hop.
-              </div>
-            ) : bubbleArticles.map((article) => (
-              <a
-                key={article.id}
-                href={article.link}
-                target="_blank"
-                rel="noreferrer"
-                className="block rounded-lg border p-3 hover:bg-secondary/50"
-              >
-                <div className="font-medium text-foreground">{article.title}</div>
-                <div className="mt-1 text-xs text-muted-foreground">
-                  {article.source || "Khong ro nguon"} - {new Date(article.published_date).toLocaleDateString("vi-VN")}
-                </div>
-              </a>
-            ))}
-          </div>
-        </DialogContent>
-      </Dialog>
+
     </div>
   );
 };
