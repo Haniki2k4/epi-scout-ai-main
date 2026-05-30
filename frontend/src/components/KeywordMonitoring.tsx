@@ -78,19 +78,28 @@ const KeywordMonitoring = () => {
     [rssSources]
   );
 
-  // Endpoint gộp: articles + events + keywords + scan_status — 1 request thay vì 4
-  const articleSkip = (articlePage - 1) * articlePageSize;
+  // 1. Dữ liệu tĩnh (keywords, events, scan_status) — gộp thành 1 request và cache lâu
   const { data: pageData, isLoading: isPageDataLoading } = useQuery({
-    queryKey: ['page-data', articlePage, articlePageSize],
+    queryKey: ['page-data', eventPageSize],
     queryFn: () => fetchJson<PageData>(
-      `/api/page-data?skip=${articleSkip}&limit=${articlePageSize}&include_label=true&events_limit=${eventPageSize}`
+      `/api/page-data?skip=0&limit=1&include_label=false&events_limit=${eventPageSize}`
+    ),
+    staleTime: 5 * 60 * 1000, // cache 5 phút cho từ khóa và sự kiện vì ít thay đổi
+  });
+  const activeKeywords = pageData?.keywords ?? [];
+  const events = pageData?.events ?? [];
+
+  // 2. Dữ liệu tin tức động — gọi API lẻ để phân trang mượt mà không tải lại các dữ liệu tĩnh khác
+  const articleSkip = (articlePage - 1) * articlePageSize;
+  const { data: articlesData, isLoading: isArticlesLoading } = useQuery<PageData['articles']>({
+    queryKey: ['articles', articlePage, articlePageSize],
+    queryFn: () => fetchJson<PageData['articles']>(
+      `/api/articles?skip=${articleSkip}&limit=${articlePageSize}&include_label=true`
     ),
     placeholderData: (prev) => prev,
   });
-  const activeKeywords = pageData?.keywords ?? [];
-  const articles = pageData?.articles?.items ?? [];
-  const totalArticleCount = pageData?.articles?.total ?? 0;
-  const events = pageData?.events ?? [];
+  const articles = articlesData?.items ?? [];
+  const totalArticleCount = articlesData?.total ?? 0;
 
 
 
@@ -336,7 +345,9 @@ const KeywordMonitoring = () => {
         </CardHeader>
         <CardContent>
           <div className="flex flex-wrap gap-2">
-            {activeKeywords.length === 0 ? (
+            {isPageDataLoading ? (
+              <div className="text-sm text-muted-foreground animate-pulse">Đang tải danh sách từ khóa...</div>
+            ) : activeKeywords.length === 0 ? (
               <div className="text-sm text-muted-foreground">Chưa có từ khóa nào.</div>
             ) : (
               activeKeywords.map((keyword) => (
@@ -483,7 +494,12 @@ const KeywordMonitoring = () => {
               </div>
             </div>
             <div className="space-y-4">
-              {articles.length === 0 ? (
+              {isArticlesLoading ? (
+                <div className="flex flex-col items-center justify-center py-12 text-muted-foreground border border-dashed rounded-lg bg-secondary/10">
+                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mb-3"></div>
+                  <p className="text-sm font-medium">Đang tải dữ liệu tin tức...</p>
+                </div>
+              ) : articles.length === 0 ? (
                 <div className="text-center text-muted-foreground py-4">Chưa có bài viết nào.</div>
               ) : filteredArticles.length === 0 ? (
                 <div className="text-center text-muted-foreground py-4">
@@ -636,7 +652,12 @@ const KeywordMonitoring = () => {
         </CardHeader>
         <CardContent>
           <div className="space-y-3">
-            {events.length === 0 ? (
+            {isPageDataLoading ? (
+              <div className="flex flex-col items-center justify-center py-8 text-muted-foreground border border-dashed rounded-lg bg-secondary/10">
+                <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary mb-2"></div>
+                <p className="text-xs font-medium">Đang tải danh sách sự kiện...</p>
+              </div>
+            ) : events.length === 0 ? (
               <div className="py-4 text-center text-muted-foreground">
                 Chưa có sự kiện nào được gom.
               </div>
