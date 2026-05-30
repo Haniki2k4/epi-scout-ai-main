@@ -23,6 +23,10 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 DB_SSL = os.getenv("DB_SSL", "false").lower() == "true"
 
 if DATABASE_URL:
+    # Ensure it uses pymysql driver if only mysql:// is provided
+    if DATABASE_URL.startswith("mysql://"):
+        DATABASE_URL = DATABASE_URL.replace("mysql://", "mysql+pymysql://", 1)
+        
     SQLALCHEMY_DATABASE_URL = DATABASE_URL
     connect_args = {}
     if "tidb" in DATABASE_URL or "ssl" in DATABASE_URL or DB_SSL:

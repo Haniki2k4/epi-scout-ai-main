@@ -1,4 +1,5 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -24,20 +25,24 @@ const severityConfig: Record<string, { color: string; label: string }> = {
   low: { color: "bg-slate-100 text-slate-600 border-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:border-slate-700", label: "Thấp" },
 };
 
+// ── Fetch helper ──────────────────────────────────────────────────────────────
+
+async function fetchJson<T>(url: string): Promise<T> {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
 const KeywordMonitoring = () => {
   const { toast } = useToast();
-  const [activeKeywords, setActiveKeywords] = useState<Keyword[]>([]);
-  const [articles, setArticles] = useState<Article[]>([]);
   const [keywordFilter, setKeywordFilter] = useState("");
   const [selectedKeywordIds, setSelectedKeywordIds] = useState<number[]>([]);
-  const [rssSourceCount, setRssSourceCount] = useState<number>(0);
 
   // Keyword Edit State
   const [editingKeyword, setEditingKeyword] = useState<Keyword | null>(null);
   const [editKeywordText, setEditKeywordText] = useState("");
   const [editDialogOpen, setEditDialogOpen] = useState(false);
 
-  const [events, setEvents] = useState<NewsEvent[]>([]);
   const [selectedEvent, setSelectedEvent] = useState<NewsEventDetail | null>(null);
   const [eventDialogOpen, setEventDialogOpen] = useState(false);
   const [loadingEventId, setLoadingEventId] = useState<number | null>(null);
@@ -61,64 +66,38 @@ const KeywordMonitoring = () => {
   const [hoveredArticleId, setHoveredArticleId] = useState<number | null>(null);
   const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Fetch RSS source count
-  const fetchRssSourceCount = async () => {
-    try {
-      const res = await fetch("/api/rss-sources");
-      if (res.ok) {
-        const data = await res.json();
-        setRssSourceCount(Array.isArray(data) ? data.filter((s: any) => s.is_active !== false).length : 0);
-      }
-    } catch (e) {
-      console.error("Failed to fetch RSS source count", e);
-    }
-  };
+  // ── Queries (cached by TanStack Query) ─────────────────────────────────────
 
-  const fetchKeywords = async () => {
-    try {
-      const res = await fetch("/api/keywords");
-      if (res.ok) {
-        const data = await res.json();
-        setActiveKeywords(data);
-      }
-    } catch (e) {
-      console.error("Failed to fetch keywords", e);
-    }
-  };
+  const { data: rssSources = [] } = useQuery({
+    queryKey: ['rss-sources'],
+    queryFn: () => fetchJson<any[]>('/api/rss-sources'),
+  });
+  const rssSourceCount = useMemo(
+    () => rssSources.filter((s: any) => s.is_active !== false).length,
+    [rssSources]
+  );
 
-  const fetchArticles = async () => {
-    try {
-      const res = await fetch(`/api/articles?skip=0&limit=10000&include_label=true`);
-      if (res.ok) {
-        const data = await res.json();
-        setArticles(data.items);
-      }
-    } catch (e) {
-      console.error("Failed to fetch articles", e);
-    }
-  };
+  const { data: activeKeywords = [] } = useQuery({
+    queryKey: ['keywords'],
+    queryFn: () => fetchJson<Keyword[]>('/api/keywords'),
+  });
 
-  const fetchEvents = async () => {
-    try {
-      const res = await fetch("/api/events?limit=20");
-      if (res.ok) {
-        const data = await res.json();
-        setEvents(data);
-      }
-    } catch (e) {
-      console.error("Failed to fetch events", e);
-    }
-  };
+  // Server-side phân trang: chỉ tải articlePageSize bài mỗi lần
+  const articleSkip = (articlePage - 1) * articlePageSize;
+  const { data: articlesData } = useQuery({
+    queryKey: ['articles', articlePage, articlePageSize],
+    queryFn: () => fetchJson<{ items: Article[]; total: number }>(
+      `/api/articles?skip=${articleSkip}&limit=${articlePageSize}&include_label=true`
+    ),
+    placeholderData: (prev) => prev, // Giữ data cũ khi chuyển trang (smooth UX)
+  });
+  const articles = articlesData?.items ?? [];
+  const totalArticleCount = articlesData?.total ?? 0;
 
-
-
-  // Initial Fetch
-  useEffect(() => {
-    fetchKeywords();
-    fetchArticles();
-    fetchEvents();
-    fetchRssSourceCount();
-  }, []);
+  const { data: events = [] } = useQuery({
+    queryKey: ['events'],
+    queryFn: () => fetchJson<NewsEvent[]>('/api/events?limit=20'),
+  });
 
 
 
@@ -187,11 +166,11 @@ const KeywordMonitoring = () => {
     }
   };
 
-  const articleSources = Array.from(
+  const articleSources = useMemo(() => Array.from(
     new Set(articles.map((article) => article.source).filter(Boolean))
-  ).sort((a, b) => a.localeCompare(b, "vi"));
+  ).sort((a, b) => a.localeCompare(b, "vi")), [articles]);
 
-  const articleKeywords = Array.from(
+  const articleKeywords = useMemo(() => Array.from(
     new Set(
       articles.flatMap((article) =>
         (article.keywords_matched || "")
@@ -200,9 +179,11 @@ const KeywordMonitoring = () => {
           .filter(Boolean)
       )
     )
-  ).sort((a, b) => a.localeCompare(b, "vi"));
+  ).sort((a, b) => a.localeCompare(b, "vi")), [articles]);
 
-  const filteredArticles = [...articles]
+  // Server-side phân trang: articles đã được phân trang từ server
+  // Lọc client-side chỉ áp dụng trên trang hiện tại
+  const filteredArticles = useMemo(() => [...articles]
     .filter((article) => {
       const normalizedSearch = articleSearch.trim().toLowerCase();
       if (!normalizedSearch) {
@@ -259,23 +240,12 @@ const KeywordMonitoring = () => {
         return b.title.localeCompare(a.title, "vi");
       }
       return dateB - dateA;
-    });
+    }), [articles, articleSearch, articleSourceFilter, articleKeywordFilter, articleTrustFilter, articleSort]);
 
-  const totalArticlePages = Math.max(1, Math.ceil(filteredArticles.length / articlePageSize));
-  const paginatedArticles = filteredArticles.slice(
-    (articlePage - 1) * articlePageSize,
-    articlePage * articlePageSize
-  );
-
-  useEffect(() => {
-    setArticlePage(1);
-  }, [articleSearch, articleSourceFilter, articleKeywordFilter, articleTrustFilter, articleSort]);
-
-  useEffect(() => {
-    if (articlePage > totalArticlePages) {
-      setArticlePage(totalArticlePages);
-    }
-  }, [articlePage, totalArticlePages]);
+  // Server-side phân trang: tổng số trang tính từ total của server
+  const totalArticlePages = Math.max(1, Math.ceil(totalArticleCount / articlePageSize));
+  // Hiển thị trực tiếp filteredArticles vì server đã phân trang
+  const paginatedArticles = filteredArticles;
 
 
 

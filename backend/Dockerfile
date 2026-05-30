@@ -9,7 +9,9 @@ ENV HF_HOME=/home/user/.cache/huggingface
 
 # Create a non-root user and set up home directory
 RUN useradd -m -u 1000 user
-WORKDIR $HOME/app
+
+# Set working directory
+WORKDIR /home/user/app
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -18,18 +20,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements
-COPY --chown=user requirements.txt .
+COPY requirements.txt .
 
-# Install dependencies with pip cache disabled
+# Install dependencies globally as root to make sure CLI tools like uvicorn are in system PATH
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Pre-download the SentenceTransformer model during build time to speed up container startup
+# Pre-download the SentenceTransformer model globally during build time
 RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('BAAI/bge-m3')"
 
 # Copy backend application code with correct ownership
 COPY --chown=user . .
 
-# Switch to the non-root user
+# Pre-create logs directory and set correct ownership to avoid PermissionError at runtime
+RUN mkdir -p /home/user/app/logs && chown -R user:user /home/user
+
+# Switch to the non-root user for runtime security
 USER user
 
 # Expose port
