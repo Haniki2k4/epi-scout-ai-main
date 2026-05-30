@@ -126,7 +126,7 @@ def get_scan_status(
     db: Session = Depends(get_db)
 ):
     """Lấy trạng thái scan hiện tại cho tất cả người dùng (hiển thị banner)."""
-    from backend.app import scheduler as app_scheduler
+    from . import scheduler as app_scheduler
     config = app_scheduler._get_or_create_config(db)
     sched = app_scheduler.get_scheduler()
     return {
@@ -153,7 +153,7 @@ def read_articles(
 
     # Gắn nhãn evaluation nếu được yêu cầu
     if include_label:
-        from backend.app.modules.evaluation.models import ArticleEvaluation
+        from .modules.evaluation.models import ArticleEvaluation
         article_ids = [a.id for a in articles]
         evals = db.query(ArticleEvaluation).filter(ArticleEvaluation.article_id.in_(article_ids)).all()
         eval_map = {e.article_id: e for e in evals}
@@ -190,7 +190,7 @@ def get_page_data(
     total = crud.count_articles(db, keyword=keyword, date=date, include_excluded=include_excluded)
 
     if include_label:
-        from backend.app.modules.evaluation.models import ArticleEvaluation
+        from .modules.evaluation.models import ArticleEvaluation
         article_ids = [a.id for a in articles_list]
         if article_ids:
             evals = db.query(ArticleEvaluation).filter(ArticleEvaluation.article_id.in_(article_ids)).all()
@@ -208,7 +208,7 @@ def get_page_data(
     keywords_list = crud.get_active_keywords(db)
 
     # 4. Scan status
-    from backend.app import scheduler as app_scheduler
+    from . import scheduler as app_scheduler
     config = app_scheduler._get_or_create_config(db)
     sched = app_scheduler.get_scheduler()
     scan_status = {
