@@ -31,7 +31,14 @@ if DATABASE_URL:
     connect_args = {}
     if "tidb" in DATABASE_URL or "ssl" in DATABASE_URL or DB_SSL:
         connect_args = {"ssl": {}}
-    engine = create_engine(SQLALCHEMY_DATABASE_URL, pool_pre_ping=True, connect_args=connect_args)
+    engine = create_engine(
+        SQLALCHEMY_DATABASE_URL,
+        pool_pre_ping=True,
+        pool_size=3,
+        max_overflow=5,
+        pool_recycle=300,
+        connect_args=connect_args,
+    )
 else:
     SQLALCHEMY_DATABASE_URL = str(
         URL.create(
@@ -60,6 +67,9 @@ else:
         "mysql+pymysql://",
         creator=lambda: pymysql.connect(**connect_kwargs),
         pool_pre_ping=True,
+        pool_size=3,
+        max_overflow=5,
+        pool_recycle=300,
     )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

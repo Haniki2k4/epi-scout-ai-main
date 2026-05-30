@@ -14,7 +14,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { cn, isDomestic } from "@/lib/utils";
-import { Article, Keyword, NewsEvent, NewsEventDetail } from "@/types";
+import { Article, Keyword, NewsEvent, NewsEventDetail, PageData } from "@/types";
 
 const SCAN_STATE_KEY = "epi_scout_scan_state";
 
@@ -71,33 +71,26 @@ const KeywordMonitoring = () => {
   const { data: rssSources = [] } = useQuery({
     queryKey: ['rss-sources'],
     queryFn: () => fetchJson<any[]>('/api/rss-sources'),
+    staleTime: 10 * 60 * 1000, // RSS sources hiếm khi thay đổi
   });
   const rssSourceCount = useMemo(
     () => rssSources.filter((s: any) => s.is_active !== false).length,
     [rssSources]
   );
 
-  const { data: activeKeywords = [] } = useQuery({
-    queryKey: ['keywords'],
-    queryFn: () => fetchJson<Keyword[]>('/api/keywords'),
-  });
-
-  // Server-side phân trang: chỉ tải articlePageSize bài mỗi lần
+  // Endpoint gộp: articles + events + keywords + scan_status — 1 request thay vì 4
   const articleSkip = (articlePage - 1) * articlePageSize;
-  const { data: articlesData } = useQuery({
-    queryKey: ['articles', articlePage, articlePageSize],
-    queryFn: () => fetchJson<{ items: Article[]; total: number }>(
-      `/api/articles?skip=${articleSkip}&limit=${articlePageSize}&include_label=true`
+  const { data: pageData, isLoading: isPageDataLoading } = useQuery({
+    queryKey: ['page-data', articlePage, articlePageSize],
+    queryFn: () => fetchJson<PageData>(
+      `/api/page-data?skip=${articleSkip}&limit=${articlePageSize}&include_label=true&events_limit=${eventPageSize}`
     ),
-    placeholderData: (prev) => prev, // Giữ data cũ khi chuyển trang (smooth UX)
+    placeholderData: (prev) => prev,
   });
-  const articles = articlesData?.items ?? [];
-  const totalArticleCount = articlesData?.total ?? 0;
-
-  const { data: events = [] } = useQuery({
-    queryKey: ['events'],
-    queryFn: () => fetchJson<NewsEvent[]>('/api/events?limit=20'),
-  });
+  const activeKeywords = pageData?.keywords ?? [];
+  const articles = pageData?.articles?.items ?? [];
+  const totalArticleCount = pageData?.articles?.total ?? 0;
+  const events = pageData?.events ?? [];
 
 
 

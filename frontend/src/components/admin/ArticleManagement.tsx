@@ -64,18 +64,18 @@ export default function ArticleManagement() {
   const [page, setPage] = useState(1);
   const LIMIT = 8;
 
-  // Fetch Articles with labels
-  const { data, isLoading } = useQuery<PaginatedArticles>({
+  // Fetch Articles with labels (dùng endpoint gộp, chỉ cần articles)
+  const { data: pageData, isLoading } = useQuery<{ articles: PaginatedArticles }>({
     queryKey: ["admin_articles", page],
     queryFn: async () => {
-      const res = await fetch(`/api/articles?skip=${(page - 1) * LIMIT}&limit=${LIMIT}&include_label=true`);
+      const res = await fetch(`/api/page-data?skip=${(page - 1) * LIMIT}&limit=${LIMIT}&include_label=true`);
       if (!res.ok) throw new Error("Failed to fetch articles");
       return res.json();
     },
   });
 
-  const articles = data?.items || [];
-  const total = data?.total || 0;
+  const articles = pageData?.articles?.items || [];
+  const total = pageData?.articles?.total || 0;
   const totalPages = Math.ceil(total / LIMIT);
 
   // Delete Mutation
@@ -87,6 +87,7 @@ export default function ArticleManagement() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["admin_articles"] });
+      queryClient.invalidateQueries({ queryKey: ["page-data"] }); // Sync với trang tin tức
       toast.success("Đã xóa bài báo thành công");
     },
     onError: (e) => toast.error(e.message),

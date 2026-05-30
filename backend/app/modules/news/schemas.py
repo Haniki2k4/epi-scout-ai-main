@@ -126,3 +126,12 @@ class RssSourceUpdate(BaseModel):
     category: Optional[str] = None
     source_type: Optional[str] = None
     is_active: Optional[bool] = None
+
+
+class PageDataResponse(BaseModel):
+    """Response gộp cho trang Tin tức — giảm từ 4-5 request thành 1."""
+    articles: PaginatedArticles
+    events: List[NewsEventDTO] = []
+    keywords: List[KeywordDTO] = []
+    scan_status: Optional[dict] = None
+

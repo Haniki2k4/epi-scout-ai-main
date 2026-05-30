@@ -42,7 +42,31 @@ def get_articles(db: Session, skip: int = 0, limit: int = 100, keyword: str | No
         .offset(skip).limit(limit).all()
 
 def count_articles(db: Session, keyword: str | None = None, date: str | None = None, include_excluded: bool = False):
-    return _article_query(db, keyword=keyword, date=date, include_excluded=include_excluded).count()
+    """Count query riêng, KHÔNG joinedload(cases) — nhẹ hơn nhiều so với _article_query."""
+    query = db.query(func.count(models.ArticleIdentity.id))
+    if not include_excluded:
+        query = query.filter(models.ArticleIdentity.is_excluded.isnot(True))
+    if keyword:
+        query = query.join(models.ArticleDetails, models.ArticleIdentity.details).filter(
+            models.ArticleDetails.keywords_matched.ilike(f"%{keyword}%")
+        )
+        has_matching_case = exists(
+            select(models.DiseaseCase.id).where(
+                and_(
+                    models.DiseaseCase.article_id == models.ArticleIdentity.id,
+                    models.DiseaseCase.disease_name.ilike(f"%{keyword}%"),
+                )
+            )
+        )
+        has_any_case = exists(
+            select(models.DiseaseCase.id).where(
+                models.DiseaseCase.article_id == models.ArticleIdentity.id
+            )
+        )
+        query = query.filter(or_(has_matching_case, ~has_any_case))
+    if date:
+        query = query.filter(func.date_format(models.ArticleIdentity.published_date, "%Y-%m-%d") == date)
+    return query.scalar()
 
 def get_article_by_link(db: Session, link: str):
     return db.query(models.ArticleIdentity).filter(models.ArticleIdentity.link == link).first()

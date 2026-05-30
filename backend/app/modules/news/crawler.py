@@ -226,7 +226,10 @@ LLM_FEW_SHOT_DATASET_MAX_EXAMPLES = min(
 LLM_SYSTEM_PROMPT = (
     "Bạn là chuyên gia dịch tễ học AI. "
     "Nhiệm vụ: phân tích bài báo, TỰ ĐỘNG DỊCH/HIỂU NỘI DUNG NƯỚC NGOÀI (nếu có) sang Tiếng Việt và trả về JSON hợp lệ. "
-    "Lưu ý: Mọi text trong JSON (tên bệnh, location, reason...) BẰNG TIẾNG VIỆT hoặc TIẾNG ANH tùy theo chủ đề nhưng phải TƯƠNG ĐƯƠNG với từ khóa y tế Việt Nam. Không giải thích thêm ngoài JSON."
+    "Lưu ý: Mọi text trong JSON (tên bệnh, location, reason...) BẰNG TIẾNG VIỆT hoặc TIẾNG ANH tùy theo chủ đề nhưng phải TƯƠNG ĐƯƠNG với từ khóa y tế Việt Nam. Không giải thích thêm ngoài JSON.\n"
+    "QUAN TRỌNG: Luôn phân biệt rõ giữa 'ca xác nhận' (confirmed) và 'ca nghi nhiễm' (suspected). "
+    "CHỈ lấy số ca ĐÃ XÁC NHẬN vào trường cumulative_cases/new_cases. "
+    "Số ca nghi nhiễm phải ghi vào trường riêng 'suspected_cases'."
 )
 
 # Few-shot examples (7 examples covering 4 labels):
@@ -240,12 +243,22 @@ _FEW_SHOT_BLOCK = """
 ### Ví dụ 1 — relevant (ổ dịch cụ thể, có số liệu mới)
 Tiêu đề: Hà Nội, TP.HCM ghi nhận thêm 23 ca sốt xuất huyết trong một tuần, cảnh báo bùng phát
 Tóm tắt: CDC xác nhận phát sinh 23 ca mắc mới bệnh sốt xuất huyết tại hai thành phố.
-→ {"label":"relevant","normalized_title":"Dịch sốt xuất huyết tại Hà Nội và TP.HCM","matched_keywords":["sốt xuất huyết"],"location":"Hà Nội, TP.HCM","diseases":[{"disease_name":"sốt xuất huyết","cumulative_cases":0,"new_cases":23,"event_start_date":null,"event_end_date":null}],"severity":"medium","reason":"Ổ dịch cụ thể, nói rõ số ca phát sinh mới tại nhiều tỉnh."}
+→ {"label":"relevant","normalized_title":"Dịch sốt xuất huyết tại Hà Nội và TP.HCM","matched_keywords":["sốt xuất huyết"],"location":"Hà Nội, TP.HCM","diseases":[{"disease_name":"sốt xuất huyết","cumulative_cases":0,"new_cases":23,"suspected_cases":0,"case_status":"confirmed","event_start_date":null,"event_end_date":null}],"severity":"medium","reason":"Ổ dịch cụ thể, nói rõ số ca phát sinh mới tại nhiều tỉnh."}
 
 ### Ví dụ 2 — relevant (bài đề cập NHIỀU BỆNH cùng lúc — TÁCH RIÊNG từng bệnh)
 Tiêu đề: Phát hiện ổ dịch thuỷ đậu tại một điểm trường tiểu học ở Đắk Lắk
 Tóm tắt: Đến nay, tại ổ dịch này đã ghi nhận 26 trường hợp mắc bệnh thủy đậu (23 học sinh, 3 giáo viên), 1 trường hợp mắc bệnh tay chân miệng.
-→ {"label":"relevant","normalized_title":"Dịch thủy đậu và tay chân miệng tại trường học ở Đắk Lắk","matched_keywords":["thủy đậu","tay chân miệng"],"location":"Đắk Lắk","diseases":[{"disease_name":"thủy đậu","cumulative_cases":26,"new_cases":0,"event_start_date":null,"event_end_date":null},{"disease_name":"tay chân miệng","cumulative_cases":0,"new_cases":1,"event_start_date":null,"event_end_date":null}],"severity":"medium","reason":"Ổ dịch trường học, nhiều loại bệnh cùng được ghi nhận."}
+→ {"label":"relevant","normalized_title":"Dịch thủy đậu và tay chân miệng tại trường học ở Đắk Lắk","matched_keywords":["thủy đậu","tay chân miệng"],"location":"Đắk Lắk","diseases":[{"disease_name":"thủy đậu","cumulative_cases":26,"new_cases":0,"suspected_cases":0,"case_status":"confirmed","event_start_date":null,"event_end_date":null},{"disease_name":"tay chân miệng","cumulative_cases":0,"new_cases":1,"suspected_cases":0,"case_status":"confirmed","event_start_date":null,"event_end_date":null}],"severity":"medium","reason":"Ổ dịch trường học, nhiều loại bệnh cùng được ghi nhận."}
+
+### Ví dụ 8 — relevant (CHỈ CÓ CA NGHI NHIỄM, KHÔNG CÓ CA XÁC NHẬN)
+Tiêu đề: Congo ghi nhận 1.028 trường hợp nghi nhiễm Ebola
+Tóm tắt: Bộ Y tế Congo cho biết có 1.028 trường hợp nghi nhiễm Ebola, trong đó 24 ca đã được xác nhận dương tính.
+→ {"label":"relevant","normalized_title":"Dịch Ebola bùng phát tại Congo","matched_keywords":["Ebola"],"location":"Congo","diseases":[{"disease_name":"Ebola","cumulative_cases":24,"new_cases":0,"suspected_cases":1028,"case_status":"confirmed+suspected","event_start_date":null,"event_end_date":null}],"severity":"high","reason":"1.028 ca nghi nhiễm nhưng CHỈ 24 ca xác nhận, phân biệt rõ."}
+
+### Ví dụ 9 — relevant (BÀI CHỈ NÓI CA NGHI NHIỄM, KHÔNG CÓ SỐ XÁC NHẬN)
+Tiêu đề: TP.HCM phát hiện 15 trường hợp nghi nhiễm cúm A/H5N1
+Tóm tắt: Sở Y tế TP.HCM đang theo dõi 15 trường hợp nghi nhiễm cúm A/H5N1, chưa có ca nào được xác nhận.
+→ {"label":"relevant","normalized_title":"Nghi nhiễm cúm A/H5N1 tại TP.HCM","matched_keywords":["cúm A/H5N1"],"location":"TP.HCM","diseases":[{"disease_name":"cúm A/H5N1","cumulative_cases":0,"new_cases":0,"suspected_cases":15,"case_status":"suspected_only","event_start_date":null,"event_end_date":null}],"severity":"medium","reason":"15 ca nghi nhiễm, chưa xác nhận. Số xác nhận = 0."}
 
 ### Ví dụ 3 — noise (tư vấn điều trị cá nhân — có đề cập bệnh nhưng không có sự kiện dịch tễ)
 Tiêu đề: 5 sai lầm thường gặp khi điều trị sốt xuất huyết tại nhà
@@ -328,16 +341,25 @@ _SCHEMA_BLOCK = """
   "diseases": [
     {
       "disease_name": "<tên bệnh, PHẢI nằm trong danh sách keyword bên dưới>",
-      "cumulative_cases": <số nguyên, 0 nếu không đề cập>,
-      "new_cases": <số nguyên, số ca ghi nhận mới, 0 nếu không đề cập>,
+      "cumulative_cases": <số nguyên — CHỈ đếm ca ĐÃ XÁC NHẬN (confirmed), 0 nếu không đề cập hoặc chỉ có ca nghi nhiễm>,
+      "new_cases": <số nguyên — CHỈ đếm ca mới ĐÃ XÁC NHẬN (confirmed), 0 nếu không đề cập hoặc chỉ có ca nghi nhiễm>,
+      "suspected_cases": <số nguyên — số ca NGHI NHIỄM (suspected/probable/chưa xác nhận), 0 nếu không đề cập>,
+      "case_status": "<confirmed | suspected_only | confirmed+suspected | unknown>",
       "event_start_date": "<YYYY-MM-DD tương ứng với thời gian bắt đầu sự kiện thực tế được nhắc đến, null nếu không rõ>",
       "event_end_date": "<YYYY-MM-DD tương ứng với thời gian kết thúc sự kiện, null nếu không rõ>"
     }
   ],
-  "validation_note": "<Giải thích ngắn tại sao bạn chọn các số liệu này>",
+  "validation_note": "<Giải thích ngắn tại sao bạn chọn các số liệu này, ĐẶC BIỆT giải thích cách bạn phân biệt ca xác nhận vs ca nghi nhiễm>",
   "severity": "low" | "medium" | "high" | null,
   "reason": "<tối đa 20 từ tiếng Việt>"
 }
+
+**QUY TẮC PHÂN BIỆT CA XÁC NHẬN vs CA NGHI NHIỄM (CỰC KỲ QUAN TRỌNG — ƯU TIÊN CAO NHẤT):**
+- **CA XÁC NHẬN (confirmed)**: Là ca đã được xét nghiệm dương tính, đã được cơ quan y tế công bố chính thức. Từ khóa nhận biết: "xác nhận", "dương tính", "confirmed", "positive", "ca mắc", "ca bệnh", "đã xác nhận", "kết quả xét nghiệm dương tính".
+- **CA NGHI NHIỄM (suspected)**: Là ca chưa có kết quả xét nghiệm hoặc đang chờ xác nhận. Từ khóa nhận biết: "nghi nhiễm", "nghi ngờ", "nghi mắc", "suspected", "probable", "trường hợp nghi", "chưa xác nhận", "đang theo dõi", "đang chờ kết quả".
+- **QUY TẮC VÀNG**: Nếu bài báo chỉ nói "X trường hợp nghi nhiễm" mà KHÔNG nói rõ bao nhiêu ca đã xác nhận → cumulative_cases = 0, new_cases = 0, suspected_cases = X.
+- **QUY TẮC KẾT HỢP**: Nếu bài báo nói "X trường hợp nghi nhiễm, trong đó Y ca đã xác nhận" → cumulative_cases = Y (chỉ số xác nhận), suspected_cases = X (tổng nghi nhiễm).
+- **TUYỆT ĐỐI KHÔNG** lấy số ca nghi nhiễm gán vào cumulative_cases hoặc new_cases.
 
 **QUY TẮC BÓC TÁCH SỐ CA CỦA MẢNG 'diseases' (CỰC KỲ QUAN TRỌNG):**
 - NẾU báo cáo là TỔNG HỢP lũy kế tính từ quá khứ (ví dụ: "từ đầu năm đến nay", "tích lũy từ đầu năm tới 21 tháng 1"): TUYỆT ĐỐI BỎ QUA số ca đó (đặt cumulative_cases = 0, new_cases = 0).
@@ -804,7 +826,12 @@ def extract_potential_numbers(text: str) -> list[str]:
     patterns = [
         r"(\d+[\d.,]*)\s*(ca mắc|trường hợp|người mắc|ca tử vong|tử vong|f0|nhiễm|dương tính)",
         r"(tăng|giảm|thêm)\s*(\d+[\d.,]*)",
-        r"ghi nhận\s*(\d+[\d.,]*)"
+        r"ghi nhận\s*(\d+[\d.,]*)",
+        # Pattern phát hiện ca nghi nhiễm / suspected
+        r"(\d+[\d.,]*)\s*(ca nghi|trường hợp nghi|nghi nhiễm|nghi mắc|nghi ngờ|suspected|probable)",
+        r"(nghi nhiễm|nghi mắc|nghi ngờ)\s*(\d+[\d.,]*)",
+        # Pattern phát hiện ca xác nhận / confirmed
+        r"(\d+[\d.,]*)\s*(ca xác nhận|đã xác nhận|confirmed|positive|dương tính)",
     ]
     suggestions = []
     for p in patterns:
@@ -1618,13 +1645,21 @@ def llm_recheck_article(
         "severity": _normalize_llm_severity(parsed.get("severity")),
     }
 
+    # Extract suspected_cases from diseases array for logging
+    _suspected_total = sum(
+        _normalize_llm_case_count(d.get("suspected_cases"))
+        for d in meta.get("diseases", [])
+        if isinstance(d, dict)
+    )
+
     logger.info(
-        "LLM recheck success | model={} label={} keywords={} location={} cases={} severity={} reason={}",
+        "LLM recheck success | model={} label={} keywords={} location={} cases={} suspected={} severity={} reason={}",
         used_model,
         label,
         normalized_keywords,
         meta["location"],
         f"cum={meta['cumulative_cases']}/new={meta['new_cases']}",
+        _suspected_total,
         meta["severity"],
         reason,
     )
@@ -1920,18 +1955,28 @@ def scan_news(
                         }]
                     
                     # Tính tổng số ca để hiển thị trên UI
-                    total_cases_all_diseases = sum(
-                        max(d.get("cumulative_cases", 0), d.get("new_cases", 0))
-                        for d in diseases_list
-                    )
+                    # Ưu tiên confirmed (cumulative/new_cases), fallback sang suspected
+                    total_cases_all_diseases = 0
+                    for d in diseases_list:
+                        confirmed = max(
+                            _normalize_llm_case_count(d.get("cumulative_cases")),
+                            _normalize_llm_case_count(d.get("new_cases")),
+                        )
+                        suspected = _normalize_llm_case_count(d.get("suspected_cases"))
+                        # Normalize: đảm bảo cumulative/new_cases/suspected_cases là int
+                        d["cumulative_cases"] = _normalize_llm_case_count(d.get("cumulative_cases"))
+                        d["new_cases"] = _normalize_llm_case_count(d.get("new_cases"))
+                        d["suspected_cases"] = suspected
+                        # Dùng confirmed nếu có, nếu không fallback sang suspected
+                        total_cases_all_diseases += confirmed if confirmed > 0 else suspected
 
                     # Cập nhật keywords_matched cho bài nhiều bệnh
-                    # Chỉ lấy bệnh có số ca > 0 để tránh match ngữ cảnh rộng
+                    # Chỉ lấy bệnh có số ca > 0 (confirmed hoặc suspected) để tránh match ngữ cảnh rộng
                     if llm_label == "relevant" and diseases_list:
                         disease_names_from_llm = [
                             d["disease_name"] for d in diseases_list
                             if d.get("disease_name")
-                            and (d.get("cumulative_cases", 0) > 0 or d.get("new_cases", 0) > 0)
+                            and (d.get("cumulative_cases", 0) > 0 or d.get("new_cases", 0) > 0 or d.get("suspected_cases", 0) > 0)
                         ]
                         if disease_names_from_llm:
                             matched_kw_str = ", ".join(disease_names_from_llm)
@@ -1939,9 +1984,15 @@ def scan_news(
                             matched_kw_str = ", ".join(llm_keywords)
 
                     # Tổng số ca của bệnh đầu tiên (dùng để resolve_event)
+                    # Ưu tiên confirmed, fallback sang suspected nếu không có confirmed
                     primary_disease = diseases_list[0] if diseases_list else {}
                     cumulative_cases = primary_disease.get("cumulative_cases", 0)
                     new_cases = primary_disease.get("new_cases", 0)
+                    # Nếu không có confirmed nào, dùng suspected cho event resolution
+                    if cumulative_cases == 0 and new_cases == 0:
+                        suspected_fallback = primary_disease.get("suspected_cases", 0)
+                        if suspected_fallback > 0:
+                            cumulative_cases = suspected_fallback
 
                     # ---- Location: LLM first, normalize via province gazetteer ----
                     raw_location = llm_meta.get("location")
@@ -2007,7 +2058,25 @@ def scan_news(
                     article_dto.event_match_score = event_match_score
                     article_dto.dedupe_reason = dedupe_reason
                     # Lưu số ca tổng vào tags để hiển thị trên UI (dùng tags làm carrier field)
-                    article_dto.tags = f"cases:{total_cases_all_diseases}" if total_cases_all_diseases > 0 else None
+                    # Bao gồm cả thông tin trạng thái (confirmed/suspected)
+                    if total_cases_all_diseases > 0:
+                        # Kiểm tra có bao nhiêu confirmed vs suspected
+                        total_confirmed = sum(
+                            max(_normalize_llm_case_count(d.get("cumulative_cases")), _normalize_llm_case_count(d.get("new_cases")))
+                            for d in diseases_list
+                        )
+                        total_suspected = sum(
+                            _normalize_llm_case_count(d.get("suspected_cases"))
+                            for d in diseases_list
+                        )
+                        if total_confirmed > 0 and total_suspected > 0:
+                            article_dto.tags = f"cases:{total_confirmed},suspected:{total_suspected}"
+                        elif total_suspected > 0 and total_confirmed == 0:
+                            article_dto.tags = f"suspected:{total_suspected}"
+                        else:
+                            article_dto.tags = f"cases:{total_cases_all_diseases}"
+                    else:
+                        article_dto.tags = None
                     saved_article = crud.create_article(db, article_dto)
 
                     # Lưu llm_label vào ArticleEvaluation để hiển thị trên UI
@@ -2027,12 +2096,15 @@ def scan_news(
                         d_name = disease_entry.get("disease_name") or (matched_kw_str.split(", ")[0])
                         d_cumulative = disease_entry.get("cumulative_cases", 0)
                         d_new = disease_entry.get("new_cases", 0)
-                        d_total = max(d_cumulative, d_new)
+                        d_suspected = disease_entry.get("suspected_cases", 0)
+                        d_confirmed = max(d_cumulative, d_new)
+                        # Ưu tiên confirmed, fallback sang suspected nếu không có confirmed
+                        d_total = d_confirmed if d_confirmed > 0 else d_suspected
                         start_str = disease_entry.get("event_start_date")
                         end_str = disease_entry.get("event_end_date")
 
                         if d_total == 0:
-                            continue  # Không có số liệu, bỏ qua
+                            continue  # Không có số liệu (cả confirmed lẫn suspected), bỏ qua
 
                         report_start_date = pub_date
                         report_end_date = pub_date
