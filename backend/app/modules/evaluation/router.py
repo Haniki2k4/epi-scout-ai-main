@@ -521,15 +521,11 @@ def export_evaluations_excel(
 def sync_dataset_to_file(db: Session = Depends(get_db), current_admin=Depends(security.require_admin_role)):
     evals = db.query(models.ArticleEvaluation).filter(models.ArticleEvaluation.is_verified == True).all()
     dataset_rows = []
-    orphaned_deleted = False
     
     for e in evals:
-        if not e.article:
-            db.delete(e)
-            orphaned_deleted = True
-            continue
-            
         if e.human_label in VALID_EVALUATION_LABELS:
+            if not e.article:
+                continue
             title = _safe_text(e.article.title)
             summary_text = _safe_text(e.article.summary)
             if title and summary_text:
@@ -539,9 +535,6 @@ def sync_dataset_to_file(db: Session = Depends(get_db), current_admin=Depends(se
                     "llm_label": e.llm_label or "relevant",
                     "human_label": e.human_label,
                 })
-                
-    if orphaned_deleted:
-        db.commit()
     
     if not dataset_rows:
         raise HTTPException(status_code=400, detail="Không có dữ liệu gán nhãn hợp lệ để đồng bộ.")
