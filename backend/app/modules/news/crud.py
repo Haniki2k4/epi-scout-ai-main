@@ -145,12 +145,16 @@ def compute_event_severity(event) -> str:
 def get_events(db: Session, skip: int = 0, limit: int = 100):
     return db.query(models.NewsEvent).order_by(models.NewsEvent.event_date.desc(), models.NewsEvent.id.desc()).offset(skip).limit(limit).all()
 
-def delete_article(db: Session, article_id: int) -> bool:
+def delete_article(db: Session, article_id: int):
     article = db.query(models.ArticleIdentity).filter(models.ArticleIdentity.id == article_id).first()
     if article:
-        # Cascade delete is usually configured in SQLAlchemy for ArticleDetails, 
-        # but just to be safe, we let SQLAlchemy handle or explicitly delete details if needed.
-        # Here we just delete the indentity and let the DB cascasing manage details.
+        from ..evaluation.models import ArticleEvaluation
+        
+        # Xóa các liên kết (evaluation, details, cases) để tránh lỗi NoneType khi thống kê/đồng bộ
+        db.query(ArticleEvaluation).filter(ArticleEvaluation.article_id == article_id).delete(synchronize_session=False)
+        db.query(models.ArticleDetails).filter(models.ArticleDetails.article_id == article_id).delete(synchronize_session=False)
+        db.query(models.DiseaseCase).filter(models.DiseaseCase.article_id == article_id).delete(synchronize_session=False)
+        
         db.delete(article)
         db.commit()
         return True

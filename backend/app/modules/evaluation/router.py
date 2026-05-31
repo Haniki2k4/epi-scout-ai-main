@@ -301,10 +301,18 @@ async def import_evaluations_excel(
         )
 
     header_row, columns = column_match
+    from datetime import datetime
+
     summary = {"updated": 0, "skipped": 0, "not_found": 0, "errors": 0, "dataset_examples": 0}
     details: list[dict[str, str | int]] = []
     dataset_rows: list[dict[str, str]] = []
 
+    # 1. Thu thập dữ liệu từ file Excel
+    raw_rows = []
+    all_article_ids = set()
+    all_links = set()
+    all_titles = set()
+    
     for excel_row_number, row in enumerate(sheet.iter_rows(min_row=header_row + 1, values_only=True), start=header_row + 1):
         if not any(row):
             summary["skipped"] += 1
@@ -314,9 +322,61 @@ async def import_evaluations_excel(
         if human_label not in VALID_EVALUATION_LABELS:
             summary["skipped"] += 1
             continue
+            
+        raw_id = _get_cell(row, columns.get("article_id"))
+        if raw_id is not None and str(raw_id).strip():
+            try:
+                all_article_ids.add(int(float(str(raw_id).strip())))
+            except ValueError:
+                pass
+                
+        link = _safe_text(_get_cell(row, columns.get("link")))
+        if link:
+            all_links.add(link)
+            
+        title = _safe_text(_get_cell(row, columns.get("title")))
+        if title:
+            all_titles.add(title)
+            
+        raw_rows.append((excel_row_number, row, human_label))
 
+    # 2. Batch query các bài viết
+    articles_by_id = {a.id: a for a in db.query(ArticleIdentity).filter(ArticleIdentity.id.in_(all_article_ids)).all()} if all_article_ids else {}
+    articles_by_link = {a.link: a for a in db.query(ArticleIdentity).filter(ArticleIdentity.link.in_(all_links)).all()} if all_links else {}
+    articles_by_title = {a.title: a for a in db.query(ArticleIdentity).filter(ArticleIdentity.title.in_(all_titles)).all()} if all_titles else {}
+
+    def find_article_in_memory(r):
+        r_id = _get_cell(r, columns.get("article_id"))
+        if r_id is not None and str(r_id).strip():
+            try:
+                aid = int(float(str(r_id).strip()))
+                if aid in articles_by_id: return articles_by_id[aid]
+            except ValueError:
+                pass
+        lnk = _safe_text(_get_cell(r, columns.get("link")))
+        if lnk and lnk in articles_by_link: return articles_by_link[lnk]
+        ttl = _safe_text(_get_cell(r, columns.get("title")))
+        if ttl and ttl in articles_by_title: return articles_by_title[ttl]
+        return None
+
+    # 3. Batch query evaluations
+    found_articles = set()
+    article_mapping = {}
+    for excel_row_number, row, human_label in raw_rows:
+        article = find_article_in_memory(row)
+        if article:
+            found_articles.add(article.id)
+            article_mapping[excel_row_number] = article
+            
+    eval_map = {}
+    if found_articles:
+        evals = db.query(models.ArticleEvaluation).filter(models.ArticleEvaluation.article_id.in_(found_articles)).all()
+        eval_map = {e.article_id: e for e in evals}
+        
+    # 4. Xử lý gán nhãn hàng loạt
+    for excel_row_number, row, human_label in raw_rows:
         try:
-            article = _find_article_for_import(db, row, columns)
+            article = article_mapping.get(excel_row_number)
             if not article:
                 summary["not_found"] += 1
                 details.append({"row": excel_row_number, "status": "not_found"})
@@ -325,7 +385,19 @@ async def import_evaluations_excel(
             imported_llm_label = _normalize_label(_get_cell(row, columns.get("llm_label")))
             fallback_llm_label = "relevant" if article.event_id else "irrelevant"
             llm_label = imported_llm_label or fallback_llm_label
-            eval_record = crud.update_human_label(db, article.id, human_label, current_admin.id, llm_label)
+            
+            # Cập nhật trực tiếp không qua crud.update_human_label để tránh db.commit() nhiều lần
+            eval_record = eval_map.get(article.id)
+            if not eval_record:
+                eval_record = models.ArticleEvaluation(article_id=article.id)
+                db.add(eval_record)
+                eval_map[article.id] = eval_record
+                
+            eval_record.llm_label = llm_label
+            eval_record.human_label = human_label
+            eval_record.is_verified = True
+            eval_record.verified_at = datetime.utcnow()
+            eval_record.verified_by = current_admin.id
 
             title = _safe_text(article.title) or _safe_text(_get_cell(row, columns.get("title")))
             summary_text = _safe_text(article.summary) or _safe_text(_get_cell(row, columns.get("summary")))
@@ -345,9 +417,15 @@ async def import_evaluations_excel(
                 "title": title[:80],
             })
         except Exception as exc:
-            db.rollback()
             summary["errors"] += 1
             details.append({"row": excel_row_number, "status": "error", "reason": str(exc)})
+
+    # Lưu toàn bộ thay đổi 1 lần
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Lỗi khi lưu dữ liệu vào database: {str(e)}")
 
     workbook.close()
 
@@ -378,9 +456,18 @@ def export_evaluations_excel(
     from fastapi.responses import StreamingResponse
     import io
 
-    # Lấy các bài báo mới nhất và nhãn LLM, nhãn thủ công
+    # Lấy các bài báo mới nhất
     # Để đơn giản, lấy 500 bài báo gần đây
     articles = db.query(ArticleIdentity).order_by(ArticleIdentity.published_date.desc()).limit(500).all()
+    
+    # Batch-load evaluations cho 500 bài viết trong 1 query (tránh N+1)
+    article_ids = [a.id for a in articles]
+    eval_map = {}
+    if article_ids:
+        evals = db.query(models.ArticleEvaluation).filter(
+            models.ArticleEvaluation.article_id.in_(article_ids)
+        ).all()
+        eval_map = {e.article_id: e for e in evals}
     
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -399,9 +486,8 @@ def export_evaluations_excel(
     header_row = ws.max_row
     
     for a in articles:
-        # Nhãn LLM tạm coi là "relevant" nếu được lưu, hoặc lấy từ LLM meta nếu có.
-        # Ở đây ta lấy từ evaluation model nếu có
-        eval_rec = crud.get_evaluation_by_article(db, a.id)
+        # Lấy từ dict thay vì query DB cho từng bài (N+1)
+        eval_rec = eval_map.get(a.id)
         llm_lbl = eval_rec.llm_label if eval_rec and eval_rec.llm_label else ("relevant" if a.event_id else "irrelevant")
         human_lbl = eval_rec.human_label if eval_rec and eval_rec.human_label else ""
         
@@ -438,6 +524,8 @@ def sync_dataset_to_file(db: Session = Depends(get_db), current_admin=Depends(se
     
     for e in evals:
         if e.human_label in VALID_EVALUATION_LABELS:
+            if not e.article:
+                continue
             title = _safe_text(e.article.title)
             summary_text = _safe_text(e.article.summary)
             if title and summary_text:
