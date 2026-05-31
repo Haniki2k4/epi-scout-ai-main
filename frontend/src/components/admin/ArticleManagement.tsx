@@ -95,7 +95,8 @@ export default function ArticleManagement() {
   });
 
   const handleDelete = (id: number) => {
-    if (window.confirm("Bạn có chắc muốn xóa bài báo này khỏi cơ sở dữ liệu không?")) {
+    const message = "CẢNH BÁO: Xóa bài báo này sẽ làm mất vĩnh viễn các dữ liệu liên quan như biểu đồ thống kê, sự kiện dịch tễ và nhãn đánh giá mô hình.\n\nBạn có chắc chắn muốn xóa không?";
+    if (window.confirm(message)) {
       deleteArticleMutation.mutate(id);
     }
   };
