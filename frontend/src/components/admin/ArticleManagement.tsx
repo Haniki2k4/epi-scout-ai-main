@@ -64,18 +64,19 @@ export default function ArticleManagement() {
   const [page, setPage] = useState(1);
   const LIMIT = 8;
 
-  // Fetch Articles with labels (dùng endpoint gộp, chỉ cần articles)
-  const { data: pageData, isLoading } = useQuery<{ articles: PaginatedArticles }>({
+  // Fetch Articles with labels — dùng API lẻ nhẹ hơn thay vì page-data gộp
+  const { data: articlesData, isLoading } = useQuery<PaginatedArticles>({
     queryKey: ["admin_articles", page],
     queryFn: async () => {
-      const res = await fetch(`/api/page-data?skip=${(page - 1) * LIMIT}&limit=${LIMIT}&include_label=true`);
+      const res = await fetch(`/api/articles?skip=${(page - 1) * LIMIT}&limit=${LIMIT}&include_label=true`);
       if (!res.ok) throw new Error("Failed to fetch articles");
       return res.json();
     },
+    placeholderData: (prev) => prev,
   });
 
-  const articles = pageData?.articles?.items || [];
-  const total = pageData?.articles?.total || 0;
+  const articles = articlesData?.items || [];
+  const total = articlesData?.total || 0;
   const totalPages = Math.ceil(total / LIMIT);
 
   // Delete Mutation

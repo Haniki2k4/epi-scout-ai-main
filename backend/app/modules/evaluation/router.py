@@ -203,9 +203,18 @@ def get_articles_for_evaluation(
         .all()
     )
 
+    # Batch-load evaluations cho tất cả bài viết trong 1 query (thay vì N+1)
+    article_ids = [a.id for a in articles]
+    eval_map: dict[int, models.ArticleEvaluation] = {}
+    if article_ids:
+        evals = db.query(models.ArticleEvaluation).filter(
+            models.ArticleEvaluation.article_id.in_(article_ids)
+        ).all()
+        eval_map = {e.article_id: e for e in evals}
+
     results: List[ArticleForEvaluation] = []
     for a in articles:
-        eval_rec = crud.get_evaluation_by_article(db, a.id)
+        eval_rec = eval_map.get(a.id)
 
         # llm_label: ưu tiên lấy từ DB, fallback về event_id
         if eval_rec and eval_rec.llm_label:
