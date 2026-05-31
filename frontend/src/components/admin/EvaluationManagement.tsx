@@ -134,17 +134,18 @@ export default function EvaluationManagement() {
       const headers = { Authorization: `Bearer ${token}` };
 
       // Fetch articles URL
-      const url = new URL("/api/evaluation/articles", window.location.origin);
-      url.searchParams.append("limit", limit.toString());
-      url.searchParams.append("skip", ((page - 1) * limit).toString());
+      const searchParams = new URLSearchParams();
+      searchParams.append("limit", limit.toString());
+      searchParams.append("skip", ((page - 1) * limit).toString());
       if (filterLabel) {
-        url.searchParams.append("filter_label", filterLabel);
+        searchParams.append("filter_label", filterLabel);
       }
+      const urlStr = `/api/evaluation/articles?${searchParams.toString()}`;
 
       // Gọi song song metrics + articles (thay vì tuần tự — giảm ~50% thời gian chờ)
       const [mResult, aResult] = await Promise.allSettled([
         fetch("/api/evaluation/metrics", { headers }),
-        fetch(url.toString(), { headers }),
+        fetch(urlStr, { headers }),
       ]);
 
       if (mResult.status === "fulfilled" && mResult.value.ok) {
