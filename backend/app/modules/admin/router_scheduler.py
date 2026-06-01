@@ -46,7 +46,7 @@ def get_scheduler_status(
     _=Depends(require_admin_role)
 ):
     """Lấy trạng thái hiện tại của scheduler (Admin only)."""
-    from backend.app import scheduler as app_scheduler
+    from ... import scheduler as app_scheduler
     config = app_scheduler._get_or_create_config(db)
     sched = app_scheduler.get_scheduler()
     return SchedulerStatusResponse(
@@ -66,7 +66,7 @@ def update_scheduler_config(
     _=Depends(require_admin_role)
 ):
     """Cập nhật cấu hình scheduler (bật/tắt, thay đổi chu kỳ). Admin only."""
-    from backend.app import scheduler as app_scheduler
+    from ... import scheduler as app_scheduler
     config = app_scheduler._get_or_create_config(db)
 
     if body.is_enabled is not None:
@@ -105,7 +105,7 @@ async def trigger_manual_scan(
     """
     from datetime import timedelta
     import pytz
-    from backend.app import scheduler as app_scheduler
+    from ... import scheduler as app_scheduler
 
     VN_TZ = pytz.timezone("Asia/Ho_Chi_Minh")
     config = app_scheduler._get_or_create_config(db)

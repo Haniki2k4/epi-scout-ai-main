@@ -81,3 +81,17 @@ export interface ProphetForecast {
   forecast_upper: number;
   is_future: boolean;
 }
+
+export interface PageData {
+  articles: { items: Article[]; total: number; skip: number; limit: number };
+  events: NewsEvent[];
+  keywords: Keyword[];
+  scan_status: {
+    scheduler_running: boolean;
+    is_scanning: boolean;
+    last_run_at: string | null;
+    last_run_saved_count: number;
+    next_run_at: string | null;
+  } | null;
+}
+

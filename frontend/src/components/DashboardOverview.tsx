@@ -1,4 +1,5 @@
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useRef } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { AlertCircle, Globe, Activity, Info, MapPin, Component } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -73,34 +74,30 @@ const DISEASE_COLORS = [
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
-const DashboardOverview = () => {
-  const [stats, setStats] = useState({
-    total_events_7d: 0,
-    keywords_today: 0,
-    keywords_7d: 0,
-    top_disease: null as string | null,
-    top_disease_mentions: 0,
-  });
-  const [topDiseases, setTopDiseases] = useState<TopDisease[]>([]);
-  const [selectedPeriod, setSelectedPeriod] = useState<MonthOption>(MONTH_OPTIONS[2]);
-  const [loadingTopDiseases, setLoadingTopDiseases] = useState(false);
+// ── Fetch helpers ──────────────────────────────────────────────────────────
 
-  const [locationData, setLocationData] = useState<LocationItem[]>([]);
+async function fetchJson<T>(url: string): Promise<T> {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+// ── Component ─────────────────────────────────────────────────────────────────
+
+const DashboardOverview = () => {
+  const [selectedPeriod, setSelectedPeriod] = useState<MonthOption>(MONTH_OPTIONS[2]);
+
   const [hoveredLocation, setHoveredLocation] = useState<(MappedLocation & { x: number, y: number }) | null>(null);
   const [locationFilterIdx, setLocationFilterIdx] = useState(0);
 
   const mapRef = useRef<MapShellRef>(null);
-  const [geoJsonData, setGeoJsonData] = useState<any>(null);
 
-  useEffect(() => {
-    fetch('/vn_map_lite.geojson')
-      .then(res => res.json())
-      .then(data => setGeoJsonData(data))
-      .catch(err => console.error("Could not load map json:", err));
-  }, []);
+  const { data: geoJsonData } = useQuery({
+    queryKey: ['geo-json'],
+    queryFn: () => fetchJson<any>('/vn_map_lite.geojson'),
+    staleTime: Infinity, // GeoJSON không bao giờ thay đổi
+  });
 
-  const [interestResult, setInterestResult] = useState<StackedResult | null>(null);
-  const [stackedResult, setStackedResult] = useState<StackedResult | null>(null);
   const [stackedDays, setStackedDays] = useState(30);
   const [interestDays, setInterestDays] = useState(30);
   const [selectedStackedDiseases, setSelectedStackedDiseases] = useState<string[]>(() => loadSavedKeywords().stacked);
@@ -113,106 +110,88 @@ const DashboardOverview = () => {
     }));
   }, [selectedStackedDiseases, selectedInterestDiseases]);
 
-  // ── Fetches ─────────────────────────────────────────────────────────────────
+  // ── Queries (cached by TanStack Query) ─────────────────────────────────────
 
+  const { data: stats } = useQuery({
+    queryKey: ['stats-overview'],
+    queryFn: () => fetchJson<{
+      total_events_7d: number;
+      keywords_today: number;
+      keywords_7d: number;
+      top_disease: string | null;
+      top_disease_mentions: number;
+    }>('/api/stats/overview'),
+    placeholderData: {
+      total_events_7d: 0,
+      keywords_today: 0,
+      keywords_7d: 0,
+      top_disease: null,
+      top_disease_mentions: 0,
+    },
+  });
+
+  const topDiseasesUrl = selectedPeriod.days
+    ? `/api/stats/top-diseases?days=${selectedPeriod.days}`
+    : `/api/stats/top-diseases?months=${selectedPeriod.months}`;
+
+  const { data: topDiseases = [], isLoading: loadingTopDiseases } = useQuery({
+    queryKey: ['top-diseases', selectedPeriod.label],
+    queryFn: () => fetchJson<TopDisease[]>(topDiseasesUrl),
+  });
+
+  const locationFilter = LOCATION_FILTER_OPTIONS[locationFilterIdx];
+  const locationUrl = locationFilter.month && locationFilter.year
+    ? `/api/stats/heatmap?days=${locationFilter.days}&month=${locationFilter.month}&year=${locationFilter.year}`
+    : `/api/stats/heatmap?days=${locationFilter.days}`;
+
+  const { data: locationData = [] } = useQuery({
+    queryKey: ['heatmap', locationFilterIdx],
+    queryFn: () => fetchJson<LocationItem[]>(locationUrl),
+  });
+
+  const { data: interestResult } = useQuery({
+    queryKey: ['interest-trends', interestDays],
+    queryFn: () => fetchJson<StackedResult>(`/api/stats/interest-trends?days=${interestDays}`),
+  });
+
+  // Auto-select top 5 diseases khi data interest mới về và chưa có lựa chọn
   useEffect(() => {
-    const fetchStats = async () => {
-      try {
-        const res = await fetch("/api/stats/overview");
-        if (res.ok) {
-          const data = await res.json();
-          if (data && typeof data === 'object') setStats(prev => ({ ...prev, ...data }));
-        }
-      } catch { }
-    };
-    fetchStats();
-  }, []);
+    if (!interestResult || !Array.isArray(interestResult.diseases)) return;
+    setSelectedInterestDiseases(prev => {
+      if (prev.length) return prev;
+      const seen = new Set<string>();
+      return interestResult.diseases.filter((d: string) => {
+        const key = d.toLowerCase();
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      }).slice(0, 5);
+    });
+  }, [interestResult]);
 
+  const { data: stackedResult } = useQuery({
+    queryKey: ['stacked-trends', stackedDays],
+    queryFn: () => fetchJson<StackedResult>(`/api/stats/stacked-trends?days=${stackedDays}`),
+  });
+
+  // Auto-select top 5 diseases khi data stacked mới về và chưa có lựa chọn
   useEffect(() => {
-    const fetchTopDiseases = async () => {
-      setLoadingTopDiseases(true);
-      try {
-        const url = selectedPeriod.days
-          ? `/api/stats/top-diseases?days=${selectedPeriod.days}`
-          : `/api/stats/top-diseases?months=${selectedPeriod.months}`;
-        const res = await fetch(url);
-        if (res.ok) {
-          const data = await res.json();
-          setTopDiseases(Array.isArray(data) ? data : []);
-        }
-      } catch { } finally { setLoadingTopDiseases(false); }
-    };
-    fetchTopDiseases();
-  }, [selectedPeriod]);
-
-  const fetchLocation = useCallback(async (idx: number) => {
-    const filter = LOCATION_FILTER_OPTIONS[idx];
-    let url = `/api/stats/heatmap?days=${filter.days}`;
-    if (filter.month && filter.year) url += `&month=${filter.month}&year=${filter.year}`;
-    try {
-      const res = await fetch(url);
-      if (res.ok) {
-        const data = await res.json();
-        setLocationData(Array.isArray(data) ? data : []);
-      }
-    } catch { }
-  }, []);
-
-  useEffect(() => { fetchLocation(locationFilterIdx); }, [locationFilterIdx, fetchLocation]);
-
-  useEffect(() => {
-    const fetchInterest = async () => {
-      try {
-        const res = await fetch(`/api/stats/interest-trends?days=${interestDays}`);
-        if (res.ok) {
-          const data = await res.json();
-          if (data && Array.isArray(data.diseases)) {
-            setInterestResult(data);
-            setSelectedInterestDiseases(prev => {
-              if (prev.length) return prev;
-              const seen = new Set<string>();
-              return data.diseases.filter((d: string) => {
-                const key = d.toLowerCase();
-                if (seen.has(key)) return false;
-                seen.add(key);
-                return true;
-              }).slice(0, 5);
-            });
-          }
-        }
-      } catch { }
-    };
-    fetchInterest();
-  }, [interestDays]);
-
-  useEffect(() => {
-    const fetchStacked = async () => {
-      try {
-        const res = await fetch(`/api/stats/stacked-trends?days=${stackedDays}`);
-        if (res.ok) {
-          const data = await res.json();
-          if (data && Array.isArray(data.diseases)) {
-            setStackedResult(data);
-            setSelectedStackedDiseases(prev => {
-              if (prev.length) return prev;
-              const seen = new Set<string>();
-              return data.diseases.filter((d: string) => {
-                const key = d.toLowerCase();
-                if (seen.has(key)) return false;
-                seen.add(key);
-                return true;
-              }).slice(0, 5);
-            });
-          }
-        }
-      } catch { }
-    };
-    fetchStacked();
-  }, [stackedDays]);
+    if (!stackedResult || !Array.isArray(stackedResult.diseases)) return;
+    setSelectedStackedDiseases(prev => {
+      if (prev.length) return prev;
+      const seen = new Set<string>();
+      return stackedResult.diseases.filter((d: string) => {
+        const key = d.toLowerCase();
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      }).slice(0, 5);
+    });
+  }, [stackedResult]);
 
   // ── Derived ──────────────────────────────────────────────────────────────────
 
-  const maxRiskScore = (Array.isArray(locationData) && locationData.length > 0) 
+  const maxRiskScore = (Array.isArray(locationData) && locationData.length > 0)
     ? ((locationData[0] as any).risk_score || locationData[0].total_mentions) : 1;
 
   useEffect(() => {
@@ -247,7 +226,7 @@ const DashboardOverview = () => {
         <Card className="border-l-4 border-l-primary">
           <CardHeader className="pb-3">
             <CardDescription>Sự kiện cảnh báo (7 ngày)</CardDescription>
-            <CardTitle className="text-3xl">{stats.total_events_7d?.toLocaleString() ?? 0}</CardTitle>
+            <CardTitle className="text-3xl">{stats?.total_events_7d?.toLocaleString() ?? 0}</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="flex items-center gap-2 text-sm">
@@ -260,15 +239,15 @@ const DashboardOverview = () => {
         <Card className="border-l-4 border-l-destructive">
           <CardHeader className="pb-3">
             <CardDescription>Bệnh được quan tâm nhất (30d)</CardDescription>
-            <CardTitle className="text-xl leading-tight truncate" title={stats.top_disease ?? "—"}>
-              {stats.top_disease ?? "—"}
+            <CardTitle className="text-xl leading-tight truncate" title={stats?.top_disease ?? "—"}>
+              {stats?.top_disease ?? "—"}
             </CardTitle>
           </CardHeader>
           <CardContent>
             <div className="flex items-center gap-2 text-sm">
               <AlertCircle className="h-4 w-4 text-destructive" />
               <span className="text-muted-foreground">
-                {stats.top_disease_mentions > 0 ? `${stats.top_disease_mentions} bài nhắc đến` : "Chưa có dữ liệu"}
+                {(stats?.top_disease_mentions ?? 0) > 0 ? `${stats?.top_disease_mentions} bài nhắc đến` : "Chưa có dữ liệu"}
               </span>
             </div>
           </CardContent>
@@ -277,7 +256,7 @@ const DashboardOverview = () => {
         <Card className="border-l-4 border-l-amber-500">
           <CardHeader className="pb-3">
             <CardDescription>Bệnh có tin mới (Hôm nay)</CardDescription>
-            <CardTitle className="text-3xl">{stats.keywords_today?.toLocaleString() ?? 0}</CardTitle>
+            <CardTitle className="text-3xl">{stats?.keywords_today?.toLocaleString() ?? 0}</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="flex items-center gap-2 text-sm">
@@ -290,7 +269,7 @@ const DashboardOverview = () => {
         <Card className="border-l-4 border-l-emerald-500">
           <CardHeader className="pb-3">
             <CardDescription>Bệnh có tin mới (7 ngày)</CardDescription>
-            <CardTitle className="text-3xl">{stats.keywords_7d?.toLocaleString() ?? 0}</CardTitle>
+            <CardTitle className="text-3xl">{stats?.keywords_7d?.toLocaleString() ?? 0}</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="flex items-center gap-2 text-sm">

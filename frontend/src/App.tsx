@@ -10,7 +10,16 @@ import AdminInterface from "./pages/AdminInterface";
 import { AuthProvider } from "./contexts/AuthContext";
 import { PublicRoute, AdminRoute } from "./components/auth/AuthGuard";
 
-const queryClient = new QueryClient();
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      staleTime: 2 * 60 * 1000,   // 2 phút: data vẫn "fresh", không refetch khi remount
+      gcTime: 5 * 60 * 1000,      // 5 phút: giữ cache trong memory sau unmount
+      refetchOnWindowFocus: false, // Không refetch khi focus lại tab trình duyệt
+      retry: 1,                    // Chỉ retry 1 lần khi lỗi mạng
+    },
+  },
+});
 
 const App = () => (
   <QueryClientProvider client={queryClient}>

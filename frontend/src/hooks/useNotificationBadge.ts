@@ -1,60 +1,41 @@
-import { useEffect, useState, useCallback } from "react";
+import { useCallback } from "react";
+import { useQuery } from "@tanstack/react-query";
 
 const POLL_INTERVAL_MS = 5 * 60 * 1000; // poll mỗi 5 phút
 
+async function fetchImportantSignals(): Promise<any[]> {
+  const res = await fetch("/api/alerts/important-signals?hours=24&min_score=2");
+  if (!res.ok) return [];
+  const data = await res.json();
+  return Array.isArray(data) ? data : [];
+}
+
 /**
  * Hook trả về số lượng tín hiệu cảnh báo quan trọng (score >= 2) trong 24h.
+ * Dùng chung queryKey với useImportantSignals → TanStack Query chỉ gọi API 1 lần.
  */
 export function useNewArticleCount() {
-  const [count, setCount] = useState<number>(0);
-
-  const fetchSignalsCount = useCallback(async () => {
-    try {
-      const res = await fetch("/api/alerts/important-signals?hours=24&min_score=2");
-      if (!res.ok) return;
-      const data = await res.json();
-      setCount(Array.isArray(data) ? data.length : 0);
-    } catch {
-      // silent
-    }
-  }, []);
-
-  useEffect(() => {
-    fetchSignalsCount();
-    const id = setInterval(fetchSignalsCount, POLL_INTERVAL_MS);
-    return () => clearInterval(id);
-  }, [fetchSignalsCount]);
-
-  return count;
+  const { data = [] } = useQuery({
+    queryKey: ['important-signals'],
+    queryFn: fetchImportantSignals,
+    refetchInterval: POLL_INTERVAL_MS,
+  });
+  return data.length;
 }
 
 /**
  * Hook trả về danh sách chi tiết các tín hiệu cảnh báo quan trọng.
+ * Dùng chung queryKey với useNewArticleCount → TanStack Query chỉ gọi API 1 lần.
  */
 export function useImportantSignals(isAuthenticated: boolean) {
-  const [signals, setSignals] = useState<any[]>([]);
-  const [loading, setLoading] = useState(false);
+  const { data: signals = [], isLoading: loading, refetch } = useQuery({
+    queryKey: ['important-signals'],
+    queryFn: fetchImportantSignals,
+    enabled: isAuthenticated,
+    refetchInterval: POLL_INTERVAL_MS,
+  });
 
-  const fetchSignals = useCallback(async () => {
-    if (!isAuthenticated) return;
-    setLoading(true);
-    try {
-      const res = await fetch("/api/alerts/important-signals?hours=24&min_score=2");
-      if (!res.ok) return;
-      const data = await res.json();
-      setSignals(Array.isArray(data) ? data : []);
-    } catch {
-      // silent
-    } finally {
-      setLoading(false);
-    }
-  }, [isAuthenticated]);
-
-  useEffect(() => {
-    fetchSignals();
-  }, [fetchSignals]);
-
-  return { signals, loading, refresh: fetchSignals };
+  return { signals, loading, refresh: refetch };
 }
 
 /**

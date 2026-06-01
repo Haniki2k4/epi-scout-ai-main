@@ -20,10 +20,25 @@ DB_USER = os.getenv("DB_USER", "root")
 DB_PASSWORD = os.getenv("DB_PASSWORD", "")
 
 DATABASE_URL = os.getenv("DATABASE_URL")
+DB_SSL = os.getenv("DB_SSL", "false").lower() == "true"
 
 if DATABASE_URL:
+    # Ensure it uses pymysql driver if only mysql:// is provided
+    if DATABASE_URL.startswith("mysql://"):
+        DATABASE_URL = DATABASE_URL.replace("mysql://", "mysql+pymysql://", 1)
+        
     SQLALCHEMY_DATABASE_URL = DATABASE_URL
-    engine = create_engine(SQLALCHEMY_DATABASE_URL, pool_pre_ping=True)
+    connect_args = {}
+    if "tidb" in DATABASE_URL or "ssl" in DATABASE_URL or DB_SSL:
+        connect_args = {"ssl": {}}
+    engine = create_engine(
+        SQLALCHEMY_DATABASE_URL,
+        pool_pre_ping=True,
+        pool_size=3,
+        max_overflow=5,
+        pool_recycle=300,
+        connect_args=connect_args,
+    )
 else:
     SQLALCHEMY_DATABASE_URL = str(
         URL.create(
@@ -38,16 +53,23 @@ else:
     # Use a direct PyMySQL creator for local env-driven config.
     # This avoids SQLAlchemy DSN parsing/auth edge cases while keeping the
     # connection settings in one place.
+    connect_kwargs = {
+        "host": SERVER_NAME,
+        "port": int(DB_PORT),
+        "user": DB_USER,
+        "password": DB_PASSWORD,
+        "database": DATABASE_NAME,
+    }
+    if DB_SSL or "tidb" in SERVER_NAME:
+        connect_kwargs["ssl"] = {}
+
     engine = create_engine(
         "mysql+pymysql://",
-        creator=lambda: pymysql.connect(
-            host=SERVER_NAME,
-            port=int(DB_PORT),
-            user=DB_USER,
-            password=DB_PASSWORD,
-            database=DATABASE_NAME,
-        ),
+        creator=lambda: pymysql.connect(**connect_kwargs),
         pool_pre_ping=True,
+        pool_size=3,
+        max_overflow=5,
+        pool_recycle=300,
     )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

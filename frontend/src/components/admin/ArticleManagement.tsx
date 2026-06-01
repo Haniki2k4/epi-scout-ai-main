@@ -64,18 +64,19 @@ export default function ArticleManagement() {
   const [page, setPage] = useState(1);
   const LIMIT = 8;
 
-  // Fetch Articles with labels
-  const { data, isLoading } = useQuery<PaginatedArticles>({
+  // Fetch Articles with labels — dùng API lẻ nhẹ hơn thay vì page-data gộp
+  const { data: articlesData, isLoading } = useQuery<PaginatedArticles>({
     queryKey: ["admin_articles", page],
     queryFn: async () => {
       const res = await fetch(`/api/articles?skip=${(page - 1) * LIMIT}&limit=${LIMIT}&include_label=true`);
       if (!res.ok) throw new Error("Failed to fetch articles");
       return res.json();
     },
+    placeholderData: (prev) => prev,
   });
 
-  const articles = data?.items || [];
-  const total = data?.total || 0;
+  const articles = articlesData?.items || [];
+  const total = articlesData?.total || 0;
   const totalPages = Math.ceil(total / LIMIT);
 
   // Delete Mutation
@@ -87,13 +88,14 @@ export default function ArticleManagement() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["admin_articles"] });
+      queryClient.invalidateQueries({ queryKey: ["page-data"] }); // Sync với trang tin tức
       toast.success("Đã xóa bài báo thành công");
     },
     onError: (e) => toast.error(e.message),
   });
 
   const handleDelete = (id: number) => {
-    if (window.confirm("Bạn có chắc muốn xóa bài báo này khỏi cơ sở dữ liệu không?")) {
+    if (window.confirm("Cảnh báo: Việc xóa bài báo này sẽ làm mất vĩnh viễn dữ liệu liên quan như thống kê biểu đồ, dữ liệu gán nhãn LLM.\n\nBạn có chắc chắn muốn xóa bài báo này khỏi hệ thống không?")) {
       deleteArticleMutation.mutate(id);
     }
   };

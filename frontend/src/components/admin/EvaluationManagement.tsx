@@ -133,23 +133,27 @@ export default function EvaluationManagement() {
       const token = localStorage.getItem("token");
       const headers = { Authorization: `Bearer ${token}` };
 
-      // Fetch metrics
-      const mRes = await fetch("/api/evaluation/metrics", { headers });
-      if (mRes.ok) {
-        setMetrics(await mRes.json());
-      }
-
-      // Fetch articles qua endpoint chuyên dụng:
-      const url = new URL("/api/evaluation/articles", window.location.origin);
-      url.searchParams.append("limit", limit.toString());
-      url.searchParams.append("skip", ((page - 1) * limit).toString());
+      // Fetch articles URL
+      const searchParams = new URLSearchParams();
+      searchParams.append("limit", limit.toString());
+      searchParams.append("skip", ((page - 1) * limit).toString());
       if (filterLabel) {
-        url.searchParams.append("filter_label", filterLabel);
+        searchParams.append("filter_label", filterLabel);
+      }
+      const urlStr = `/api/evaluation/articles?${searchParams.toString()}`;
+
+      // Gọi song song metrics + articles (thay vì tuần tự — giảm ~50% thời gian chờ)
+      const [mResult, aResult] = await Promise.allSettled([
+        fetch("/api/evaluation/metrics", { headers }),
+        fetch(urlStr, { headers }),
+      ]);
+
+      if (mResult.status === "fulfilled" && mResult.value.ok) {
+        setMetrics(await mResult.value.json());
       }
 
-      const aRes = await fetch(url.toString(), { headers });
-      if (aRes.ok) {
-        const data = await aRes.json();
+      if (aResult.status === "fulfilled" && aResult.value.ok) {
+        const data = await aResult.value.json();
         setArticles((data.items || []).map((a: Article) => ({ ...a, draft_keyword: a.corrected_keyword })));
         setTotalArticles(data.total || 0);
         setTotalVerified(data.total_verified || 0);

@@ -126,7 +126,7 @@ def get_scan_status(
     db: Session = Depends(get_db)
 ):
     """Lấy trạng thái scan hiện tại cho tất cả người dùng (hiển thị banner)."""
-    from backend.app import scheduler as app_scheduler
+    from . import scheduler as app_scheduler
     config = app_scheduler._get_or_create_config(db)
     sched = app_scheduler.get_scheduler()
     return {
@@ -153,7 +153,7 @@ def read_articles(
 
     # Gắn nhãn evaluation nếu được yêu cầu
     if include_label:
-        from backend.app.modules.evaluation.models import ArticleEvaluation
+        from .modules.evaluation.models import ArticleEvaluation
         article_ids = [a.id for a in articles]
         evals = db.query(ArticleEvaluation).filter(ArticleEvaluation.article_id.in_(article_ids)).all()
         eval_map = {e.article_id: e for e in evals}
@@ -169,6 +169,67 @@ def read_articles(
         "total": total,
         "skip": skip,
         "limit": limit
+    }
+
+@app.get("/api/page-data", response_model=schemas.PageDataResponse)
+def get_page_data(
+    skip: int = 0,
+    limit: int = 20,
+    keyword: str | None = None,
+    date: str | None = None,
+    include_excluded: bool = False,
+    include_label: bool = False,
+    events_limit: int = 20,
+    db: Session = Depends(get_db),
+):
+    """Endpoint gộp: articles + events + keywords + scan_status — 1 request thay vì 4-5."""
+    logger.info("Page data requested | skip={} limit={} keyword={} events_limit={}", skip, limit, keyword, events_limit)
+
+    # 1. Articles (reuse logic from read_articles)
+    articles_list = crud.get_articles(db, skip=skip, limit=limit, keyword=keyword, date=date, include_excluded=include_excluded)
+    total = crud.count_articles(db, keyword=keyword, date=date, include_excluded=include_excluded)
+
+    if include_label:
+        from .modules.evaluation.models import ArticleEvaluation
+        article_ids = [a.id for a in articles_list]
+        if article_ids:
+            evals = db.query(ArticleEvaluation).filter(ArticleEvaluation.article_id.in_(article_ids)).all()
+            eval_map = {e.article_id: e for e in evals}
+            for a in articles_list:
+                e = eval_map.get(a.id)
+                if e:
+                    a.llm_label = e.llm_label
+                    a.human_label = e.human_label
+
+    # 2. Events
+    events_list = crud.get_events(db, skip=0, limit=events_limit)
+
+    # 3. Keywords (active only)
+    keywords_list = crud.get_active_keywords(db)
+
+    # 4. Scan status
+    from . import scheduler as app_scheduler
+    config = app_scheduler._get_or_create_config(db)
+    sched = app_scheduler.get_scheduler()
+    scan_status = {
+        "scheduler_running": sched.running,
+        "is_scanning": getattr(crawler, "is_scanning_flag", False),
+        "last_run_at": config.last_run_at.isoformat() if config.last_run_at else None,
+        "last_run_saved_count": config.last_run_saved_count,
+        "next_run_at": config.next_run_at.isoformat() if config.next_run_at else None,
+    }
+
+    logger.info("Page data completed | articles={} events={} keywords={}", len(articles_list), len(events_list), len(keywords_list))
+    return {
+        "articles": {
+            "items": articles_list,
+            "total": total,
+            "skip": skip,
+            "limit": limit,
+        },
+        "events": events_list,
+        "keywords": keywords_list,
+        "scan_status": scan_status,
     }
 
 @app.get("/api/articles/new-count")

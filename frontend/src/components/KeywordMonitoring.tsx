@@ -1,4 +1,5 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -13,7 +14,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { cn, isDomestic } from "@/lib/utils";
-import { Article, Keyword, NewsEvent, NewsEventDetail } from "@/types";
+import { Article, Keyword, NewsEvent, NewsEventDetail, PageData } from "@/types";
 
 const SCAN_STATE_KEY = "epi_scout_scan_state";
 
@@ -24,20 +25,24 @@ const severityConfig: Record<string, { color: string; label: string }> = {
   low: { color: "bg-slate-100 text-slate-600 border-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:border-slate-700", label: "Thấp" },
 };
 
+// ── Fetch helper ──────────────────────────────────────────────────────────────
+
+async function fetchJson<T>(url: string): Promise<T> {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
 const KeywordMonitoring = () => {
   const { toast } = useToast();
-  const [activeKeywords, setActiveKeywords] = useState<Keyword[]>([]);
-  const [articles, setArticles] = useState<Article[]>([]);
   const [keywordFilter, setKeywordFilter] = useState("");
   const [selectedKeywordIds, setSelectedKeywordIds] = useState<number[]>([]);
-  const [rssSourceCount, setRssSourceCount] = useState<number>(0);
 
   // Keyword Edit State
   const [editingKeyword, setEditingKeyword] = useState<Keyword | null>(null);
   const [editKeywordText, setEditKeywordText] = useState("");
   const [editDialogOpen, setEditDialogOpen] = useState(false);
 
-  const [events, setEvents] = useState<NewsEvent[]>([]);
   const [selectedEvent, setSelectedEvent] = useState<NewsEventDetail | null>(null);
   const [eventDialogOpen, setEventDialogOpen] = useState(false);
   const [loadingEventId, setLoadingEventId] = useState<number | null>(null);
@@ -61,64 +66,40 @@ const KeywordMonitoring = () => {
   const [hoveredArticleId, setHoveredArticleId] = useState<number | null>(null);
   const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Fetch RSS source count
-  const fetchRssSourceCount = async () => {
-    try {
-      const res = await fetch("/api/rss-sources");
-      if (res.ok) {
-        const data = await res.json();
-        setRssSourceCount(Array.isArray(data) ? data.filter((s: any) => s.is_active !== false).length : 0);
-      }
-    } catch (e) {
-      console.error("Failed to fetch RSS source count", e);
-    }
-  };
+  // ── Queries (cached by TanStack Query) ─────────────────────────────────────
 
-  const fetchKeywords = async () => {
-    try {
-      const res = await fetch("/api/keywords");
-      if (res.ok) {
-        const data = await res.json();
-        setActiveKeywords(data);
-      }
-    } catch (e) {
-      console.error("Failed to fetch keywords", e);
-    }
-  };
+  const { data: rssSources = [] } = useQuery({
+    queryKey: ['rss-sources'],
+    queryFn: () => fetchJson<any[]>('/api/rss-sources'),
+    staleTime: 10 * 60 * 1000, // RSS sources hiếm khi thay đổi
+  });
+  const rssSourceCount = useMemo(
+    () => rssSources.filter((s: any) => s.is_active !== false).length,
+    [rssSources]
+  );
 
-  const fetchArticles = async () => {
-    try {
-      const res = await fetch(`/api/articles?skip=0&limit=10000&include_label=true`);
-      if (res.ok) {
-        const data = await res.json();
-        setArticles(data.items);
-      }
-    } catch (e) {
-      console.error("Failed to fetch articles", e);
-    }
-  };
+  // 1. Dữ liệu tĩnh (keywords, events, scan_status) — gộp thành 1 request và cache lâu
+  const { data: pageData, isLoading: isPageDataLoading } = useQuery({
+    queryKey: ['page-data', eventPageSize],
+    queryFn: () => fetchJson<PageData>(
+      `/api/page-data?skip=0&limit=1&include_label=false&events_limit=${eventPageSize}`
+    ),
+    staleTime: 5 * 60 * 1000, // cache 5 phút cho từ khóa và sự kiện vì ít thay đổi
+  });
+  const activeKeywords = pageData?.keywords ?? [];
+  const events = pageData?.events ?? [];
 
-  const fetchEvents = async () => {
-    try {
-      const res = await fetch("/api/events?limit=20");
-      if (res.ok) {
-        const data = await res.json();
-        setEvents(data);
-      }
-    } catch (e) {
-      console.error("Failed to fetch events", e);
-    }
-  };
-
-
-
-  // Initial Fetch
-  useEffect(() => {
-    fetchKeywords();
-    fetchArticles();
-    fetchEvents();
-    fetchRssSourceCount();
-  }, []);
+  // 2. Dữ liệu tin tức động — gọi API lẻ để phân trang mượt mà không tải lại các dữ liệu tĩnh khác
+  const articleSkip = (articlePage - 1) * articlePageSize;
+  const { data: articlesData, isLoading: isArticlesLoading } = useQuery<PageData['articles']>({
+    queryKey: ['articles', articlePage, articlePageSize],
+    queryFn: () => fetchJson<PageData['articles']>(
+      `/api/articles?skip=${articleSkip}&limit=${articlePageSize}&include_label=true`
+    ),
+    placeholderData: (prev) => prev,
+  });
+  const articles = articlesData?.items ?? [];
+  const totalArticleCount = articlesData?.total ?? 0;
 
 
 
@@ -187,11 +168,11 @@ const KeywordMonitoring = () => {
     }
   };
 
-  const articleSources = Array.from(
+  const articleSources = useMemo(() => Array.from(
     new Set(articles.map((article) => article.source).filter(Boolean))
-  ).sort((a, b) => a.localeCompare(b, "vi"));
+  ).sort((a, b) => a.localeCompare(b, "vi")), [articles]);
 
-  const articleKeywords = Array.from(
+  const articleKeywords = useMemo(() => Array.from(
     new Set(
       articles.flatMap((article) =>
         (article.keywords_matched || "")
@@ -200,9 +181,11 @@ const KeywordMonitoring = () => {
           .filter(Boolean)
       )
     )
-  ).sort((a, b) => a.localeCompare(b, "vi"));
+  ).sort((a, b) => a.localeCompare(b, "vi")), [articles]);
 
-  const filteredArticles = [...articles]
+  // Server-side phân trang: articles đã được phân trang từ server
+  // Lọc client-side chỉ áp dụng trên trang hiện tại
+  const filteredArticles = useMemo(() => [...articles]
     .filter((article) => {
       const normalizedSearch = articleSearch.trim().toLowerCase();
       if (!normalizedSearch) {
@@ -259,23 +242,12 @@ const KeywordMonitoring = () => {
         return b.title.localeCompare(a.title, "vi");
       }
       return dateB - dateA;
-    });
+    }), [articles, articleSearch, articleSourceFilter, articleKeywordFilter, articleTrustFilter, articleSort]);
 
-  const totalArticlePages = Math.max(1, Math.ceil(filteredArticles.length / articlePageSize));
-  const paginatedArticles = filteredArticles.slice(
-    (articlePage - 1) * articlePageSize,
-    articlePage * articlePageSize
-  );
-
-  useEffect(() => {
-    setArticlePage(1);
-  }, [articleSearch, articleSourceFilter, articleKeywordFilter, articleTrustFilter, articleSort]);
-
-  useEffect(() => {
-    if (articlePage > totalArticlePages) {
-      setArticlePage(totalArticlePages);
-    }
-  }, [articlePage, totalArticlePages]);
+  // Server-side phân trang: tổng số trang tính từ total của server
+  const totalArticlePages = Math.max(1, Math.ceil(totalArticleCount / articlePageSize));
+  // Hiển thị trực tiếp filteredArticles vì server đã phân trang
+  const paginatedArticles = filteredArticles;
 
 
 
@@ -373,7 +345,9 @@ const KeywordMonitoring = () => {
         </CardHeader>
         <CardContent>
           <div className="flex flex-wrap gap-2">
-            {activeKeywords.length === 0 ? (
+            {isPageDataLoading ? (
+              <div className="text-sm text-muted-foreground animate-pulse">Đang tải danh sách từ khóa...</div>
+            ) : activeKeywords.length === 0 ? (
               <div className="text-sm text-muted-foreground">Chưa có từ khóa nào.</div>
             ) : (
               activeKeywords.map((keyword) => (
@@ -520,7 +494,12 @@ const KeywordMonitoring = () => {
               </div>
             </div>
             <div className="space-y-4">
-              {articles.length === 0 ? (
+              {isArticlesLoading ? (
+                <div className="flex flex-col items-center justify-center py-12 text-muted-foreground border border-dashed rounded-lg bg-secondary/10">
+                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mb-3"></div>
+                  <p className="text-sm font-medium">Đang tải dữ liệu tin tức...</p>
+                </div>
+              ) : articles.length === 0 ? (
                 <div className="text-center text-muted-foreground py-4">Chưa có bài viết nào.</div>
               ) : filteredArticles.length === 0 ? (
                 <div className="text-center text-muted-foreground py-4">
@@ -673,7 +652,12 @@ const KeywordMonitoring = () => {
         </CardHeader>
         <CardContent>
           <div className="space-y-3">
-            {events.length === 0 ? (
+            {isPageDataLoading ? (
+              <div className="flex flex-col items-center justify-center py-8 text-muted-foreground border border-dashed rounded-lg bg-secondary/10">
+                <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary mb-2"></div>
+                <p className="text-xs font-medium">Đang tải danh sách sự kiện...</p>
+              </div>
+            ) : events.length === 0 ? (
               <div className="py-4 text-center text-muted-foreground">
                 Chưa có sự kiện nào được gom.
               </div>
