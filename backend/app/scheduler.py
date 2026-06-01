@@ -209,6 +209,18 @@ def _reschedule_job(scheduler: AsyncIOScheduler, interval_hours: int, run_now: b
     logger.info("Scheduler job rescheduled | interval_hours={} run_now={}", interval_hours, run_now)
 
 
+def _is_scan_overdue(config: models.SchedulerConfig) -> bool:
+    if not config.last_run_at:
+        return True
+
+    last_run = config.last_run_at
+    if last_run.tzinfo is None:
+        last_run = VN_TZ.localize(last_run)
+
+    diff = datetime.now(VN_TZ) - last_run
+    return diff.total_seconds() >= config.interval_hours * 3600
+
+
 def _schedule_daily_ai_summary(scheduler: AsyncIOScheduler) -> None:
     """Đăng ký job AI summary chạy vào 00:05 mỗi ngày để tự động tổng hợp khi sang ngày mới."""
     if scheduler.get_job("daily_ai_summary"):
@@ -268,6 +280,32 @@ def start_scheduler() -> None:
     if not scheduler.running:
         scheduler.start()
         logger.info("APScheduler started | interval_hours={} scheduled_emails={}", interval_hours, len(users))
+
+
+def ensure_scheduler_running() -> bool:
+    """
+    Reconcile the in-memory scheduler after an external wake-up request.
+    HF Spaces can resume a suspended process without executing FastAPI startup again.
+    """
+    with SessionLocal() as db:
+        config = _get_or_create_config(db)
+        interval_hours = config.interval_hours
+        should_run_now = config.is_enabled and _is_scan_overdue(config)
+
+    scheduler = get_scheduler()
+    if not scheduler.running:
+        start_scheduler()
+        scheduler = get_scheduler()
+
+    if not scheduler.get_job("auto_scan"):
+        _reschedule_job(scheduler, interval_hours, run_now=should_run_now)
+
+    if should_run_now and not getattr(crawler, "is_scanning_flag", False):
+        scheduler.modify_job("auto_scan", next_run_time=datetime.now(VN_TZ))
+        logger.info("Overdue auto-scan queued after wake-up")
+        return True
+
+    return False
 
 
 def stop_scheduler() -> None:

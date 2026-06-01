@@ -1,5 +1,9 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef, ReactNode } from 'react';
 import { toast } from 'sonner';
+
+const INACTIVITY_TIMEOUT_MS = 15 * 60 * 1000;
+const LAST_ACTIVITY_STORAGE_KEY = 'epi_scout_last_activity_at';
+const ACTIVITY_EVENTS: Array<keyof WindowEventMap> = ['pointerdown', 'keydown', 'scroll', 'touchstart'];
 
 export interface User {
   id: number;
@@ -26,6 +30,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [user, setUser] = useState<User | null>(null);
   const [token, setToken] = useState<string | null>(localStorage.getItem('token'));
   const [isLoading, setIsLoading] = useState<boolean>(true);
+  const inactivityTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     const fetchUser = async () => {
@@ -59,6 +64,71 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     };
 
     fetchUser();
+  }, [token]);
+
+  useEffect(() => {
+    if (!token) {
+      return;
+    }
+
+    const logoutForInactivity = () => {
+      localStorage.removeItem('token');
+      localStorage.removeItem(LAST_ACTIVITY_STORAGE_KEY);
+      sessionStorage.removeItem('epi_scout_scan_state');
+      setToken(null);
+      setUser(null);
+      toast.success('Phiên đăng nhập đã hết hạn do không hoạt động trong 15 phút');
+      window.location.href = '/';
+    };
+
+    const scheduleLogout = () => {
+      if (inactivityTimerRef.current) {
+        clearTimeout(inactivityTimerRef.current);
+      }
+
+      const lastActivityAt = Number(localStorage.getItem(LAST_ACTIVITY_STORAGE_KEY)) || Date.now();
+      const remainingTime = Math.max(0, INACTIVITY_TIMEOUT_MS - (Date.now() - lastActivityAt));
+      inactivityTimerRef.current = setTimeout(logoutForInactivity, remainingTime);
+    };
+
+    const recordActivity = () => {
+      const lastActivityAt = Number(localStorage.getItem(LAST_ACTIVITY_STORAGE_KEY)) || Date.now();
+      if (Date.now() - lastActivityAt >= INACTIVITY_TIMEOUT_MS) {
+        logoutForInactivity();
+        return;
+      }
+
+      localStorage.setItem(LAST_ACTIVITY_STORAGE_KEY, Date.now().toString());
+      scheduleLogout();
+    };
+
+    const syncActivityAcrossTabs = (event: StorageEvent) => {
+      if (event.key === 'token' && !event.newValue) {
+        setToken(null);
+        setUser(null);
+        window.location.href = '/';
+        return;
+      }
+      if (event.key === LAST_ACTIVITY_STORAGE_KEY) {
+        scheduleLogout();
+      }
+    };
+
+    if (!localStorage.getItem(LAST_ACTIVITY_STORAGE_KEY)) {
+      localStorage.setItem(LAST_ACTIVITY_STORAGE_KEY, Date.now().toString());
+    }
+
+    scheduleLogout();
+    ACTIVITY_EVENTS.forEach((eventName) => window.addEventListener(eventName, recordActivity, { passive: true }));
+    window.addEventListener('storage', syncActivityAcrossTabs);
+
+    return () => {
+      if (inactivityTimerRef.current) {
+        clearTimeout(inactivityTimerRef.current);
+      }
+      ACTIVITY_EVENTS.forEach((eventName) => window.removeEventListener(eventName, recordActivity));
+      window.removeEventListener('storage', syncActivityAcrossTabs);
+    };
   }, [token]);
 
   // Global Fetch Interceptor to attach Authorization header
@@ -104,11 +174,13 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
   const login = (newToken: string) => {
     localStorage.setItem('token', newToken);
+    localStorage.setItem(LAST_ACTIVITY_STORAGE_KEY, Date.now().toString());
     setToken(newToken);
   };
 
   const logout = () => {
     localStorage.removeItem('token');
+    localStorage.removeItem(LAST_ACTIVITY_STORAGE_KEY);
     sessionStorage.removeItem('epi_scout_scan_state');
     setToken(null);
     setUser(null);

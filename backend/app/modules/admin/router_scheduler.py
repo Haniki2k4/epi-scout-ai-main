@@ -1,7 +1,10 @@
 """
 Router quản lý Auto Crawler Scheduler - chỉ Admin mới được thao tác.
 """
-from fastapi import APIRouter, Depends, HTTPException
+import hmac
+import os
+
+from fastapi import APIRouter, Depends, Header, HTTPException
 from sqlalchemy.orm import Session
 from pydantic import BaseModel, Field
 from datetime import datetime
@@ -15,6 +18,7 @@ from ...core.logger import get_logger
 logger = get_logger("backend.admin.scheduler")
 
 router = APIRouter(prefix="/api/scheduler", tags=["scheduler"])
+SCHEDULER_WAKE_SECRET = os.environ.get("SCHEDULER_WAKE_SECRET")
 
 
 # --- Schemas ---
@@ -39,6 +43,23 @@ class ManualScanRequest(BaseModel):
 
 
 # --- Endpoints ---
+
+@router.post("/wake")
+def wake_scheduler(x_scheduler_secret: str = Header(default="")):
+    """Wake HF Spaces and queue an overdue scan without waiting for the crawl to finish."""
+    if not SCHEDULER_WAKE_SECRET:
+        raise HTTPException(status_code=503, detail="Scheduler wake endpoint is not configured")
+    if not hmac.compare_digest(x_scheduler_secret, SCHEDULER_WAKE_SECRET):
+        raise HTTPException(status_code=401, detail="Invalid scheduler wake secret")
+
+    from ... import scheduler as app_scheduler
+    scan_queued = app_scheduler.ensure_scheduler_running()
+    return {
+        "status": "ok",
+        "scheduler_running": app_scheduler.get_scheduler().running,
+        "scan_queued": scan_queued,
+    }
+
 
 @router.get("/status", response_model=SchedulerStatusResponse)
 def get_scheduler_status(
