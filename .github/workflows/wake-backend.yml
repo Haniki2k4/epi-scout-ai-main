@@ -1,0 +1,26 @@
+name: Wake backend scheduler
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+
+jobs:
+  wake-backend:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wake Hugging Face backend
+        env:
+          BACKEND_WAKE_URL: ${{ secrets.BACKEND_WAKE_URL }}
+          SCHEDULER_WAKE_SECRET: ${{ secrets.SCHEDULER_WAKE_SECRET }}
+        run: |
+          test -n "$BACKEND_WAKE_URL"
+          test -n "$SCHEDULER_WAKE_SECRET"
+          curl --fail --silent --show-error \
+            --retry 2 \
+            --retry-delay 10 \
+            --connect-timeout 30 \
+            --max-time 240 \
+            -X POST \
+            -H "X-Scheduler-Secret: $SCHEDULER_WAKE_SECRET" \
+            "${BACKEND_WAKE_URL%/}/api/scheduler/wake"

@@ -1,4 +1,4 @@
-# Epi Scout AI- 0.3.43
+# Epi Scout AI- 0.3.48
 
 Hệ thống giám sát tin tức dịch bệnh đa người dùng, gồm:
 
@@ -503,6 +503,7 @@ DB_NAME=EpiScoutDB
 DB_USER=epi_scout
 DB_PASSWORD=epi_scout_dev_pw
 SECRET_KEY=change-me-in-production
+SCHEDULER_WAKE_SECRET=change-me-in-production
 ```
 
 Có thể dùng `DATABASE_URL` thay cho bộ biến DB rời.
@@ -584,7 +585,14 @@ Trong dev mode, request `/api` được proxy về backend.
 - `SECRET_KEY`
 - JWT expiry mặc định 7 ngày
 
-### 11.3. LLM Re-check
+### 11.3. Scheduler wake-up
+
+- Set `SCHEDULER_WAKE_SECRET` on the Hugging Face Space.
+- Add GitHub repository secret `SCHEDULER_WAKE_SECRET` with the same value.
+- Add GitHub repository secret `BACKEND_WAKE_URL`, for example `https://your-space.hf.space`.
+- `.github/workflows/wake-backend.yml` calls `/api/scheduler/wake` every 30 minutes so the Space wakes periodically and overdue scans are queued.
+
+### 11.4. LLM Re-check
 
 - `LLM_RECHECK_ENABLED`
 - `LLM_RECHECK_MODEL`
