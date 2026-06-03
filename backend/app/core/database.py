@@ -34,8 +34,8 @@ if DATABASE_URL:
     engine = create_engine(
         SQLALCHEMY_DATABASE_URL,
         pool_pre_ping=True,
-        pool_size=3,
-        max_overflow=5,
+        pool_size=25,
+        max_overflow=35,
         pool_recycle=300,
         connect_args=connect_args,
     )
@@ -67,8 +67,8 @@ else:
         "mysql+pymysql://",
         creator=lambda: pymysql.connect(**connect_kwargs),
         pool_pre_ping=True,
-        pool_size=3,
-        max_overflow=5,
+        pool_size=25,
+        max_overflow=35,
         pool_recycle=300,
     )
 
