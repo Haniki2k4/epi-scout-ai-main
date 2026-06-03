@@ -1,4 +1,4 @@
-# Epi Scout AI- 0.3.48
+# Epi Scout AI- 0.3.50
 
 Hệ thống giám sát tin tức dịch bệnh đa người dùng, gồm:
 
