@@ -54,6 +54,15 @@ export function ExcelProgressDialog({
   const currentStepIndex = getCurrentStepIndex(progress, steps.length);
 
   useEffect(() => {
+    if (status === "success" && open) {
+      const timer = window.setTimeout(() => {
+        onOpenChange(false);
+      }, 2000); // Tự động đóng sau 2 giây
+      return () => window.clearTimeout(timer);
+    }
+  }, [status, open, onOpenChange]);
+
+  useEffect(() => {
     if (!open) {
       setProgress(0);
       return;
@@ -134,7 +143,7 @@ export function ExcelProgressDialog({
 
           <div className="grid gap-2">
             {steps.map((step, index) => {
-              const isDone = status !== "error" && index < currentStepIndex;
+              const isDone = status === "success" || (status !== "error" && index < currentStepIndex);
               const isCurrent = index === currentStepIndex && status === "running";
               const isError = status === "error" && index === currentStepIndex;
 
