@@ -31,6 +31,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
+import { ExcelProgressDialog, type ExcelProgressMode, type ExcelProgressStatus } from "@/components/admin/ExcelProgressDialog";
 
 // --- Types ---
 
@@ -102,6 +103,15 @@ interface ImportResult {
   }>;
 }
 
+interface ExcelProgressState {
+  open: boolean;
+  mode: ExcelProgressMode;
+  status: ExcelProgressStatus;
+  fileName?: string;
+  fileSize?: number;
+  message?: string;
+}
+
 // --- Helpers ---
 
 export default function EvaluationManagement() {
@@ -113,6 +123,11 @@ export default function EvaluationManagement() {
   const [loading, setLoading] = useState(false);
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [excelProgress, setExcelProgress] = useState<ExcelProgressState>({
+    open: false,
+    mode: "export",
+    status: "running",
+  });
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [importResult, setImportResult] = useState<ImportResult | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -122,6 +137,7 @@ export default function EvaluationManagement() {
   const [savingKeywordId, setSavingKeywordId] = useState<number | null>(null);
   const [savedKeywordId, setSavedKeywordId] = useState<number | null>(null);
   const limit = 100;
+  const isExcelProgressRunning = excelProgress.open && excelProgress.status === "running";
 
   useEffect(() => {
     fetchData();
@@ -264,9 +280,15 @@ export default function EvaluationManagement() {
   };
 
   const handleExportExcel = async () => {
+    setExcelProgress({
+      open: true,
+      mode: "export",
+      status: "running",
+      fileName: "llm_evaluation_dataset.xlsx",
+    });
+
     try {
       const token = localStorage.getItem("token");
-      toast({ title: "Đang tải...", description: "Vui lòng chờ trong khi hệ thống xuất file Excel." });
 
       const response = await fetch(`/api/evaluation/export-excel`, {
         method: "GET",
@@ -294,9 +316,20 @@ export default function EvaluationManagement() {
       document.body.removeChild(link);
       window.URL.revokeObjectURL(url);
 
+      setExcelProgress((current) => ({
+        ...current,
+        status: "success",
+        fileSize: blob.size,
+        message: "Đã xuất file Excel thành công.",
+      }));
       toast({ title: "Thành công", description: "Đã xuất file Excel thành công." });
     } catch (e: unknown) {
       const message = e instanceof Error ? e.message : "Đã có lỗi xảy ra khi xuất file.";
+      setExcelProgress((current) => ({
+        ...current,
+        status: "error",
+        message,
+      }));
       toast({ title: "Lỗi", description: message, variant: "destructive" });
     }
   };
@@ -321,6 +354,13 @@ export default function EvaluationManagement() {
   const handleImportExcel = async () => {
     if (!selectedFile) return;
 
+    setExcelProgress({
+      open: true,
+      mode: "import",
+      status: "running",
+      fileName: selectedFile.name,
+      fileSize: selectedFile.size,
+    });
     setImporting(true);
     try {
       const token = localStorage.getItem("token");
@@ -352,12 +392,24 @@ export default function EvaluationManagement() {
       const result = await response.json() as ImportResult;
       setImportResult(result);
       await fetchData();
+      const successMessage = `Đã cập nhật ${result.summary.updated} nhãn và đồng bộ ${result.summary.dataset_examples} mẫu cho mô hình.`;
+      setExcelProgress((current) => ({
+        ...current,
+        status: "success",
+        fileName: result.filename || current.fileName,
+        message: successMessage,
+      }));
       toast({
         title: "Thành công",
-        description: `Đã cập nhật ${result.summary.updated} nhãn và đồng bộ ${result.summary.dataset_examples} mẫu cho mô hình.`,
+        description: successMessage,
       });
     } catch (e: unknown) {
       const message = e instanceof Error ? e.message : "Đã có lỗi xảy ra khi nhập file.";
+      setExcelProgress((current) => ({
+        ...current,
+        status: "error",
+        message,
+      }));
       toast({ title: "Lỗi", description: message, variant: "destructive" });
     } finally {
       setImporting(false);
@@ -366,6 +418,16 @@ export default function EvaluationManagement() {
 
   return (
     <div className="space-y-6">
+      <ExcelProgressDialog
+        open={excelProgress.open}
+        mode={excelProgress.mode}
+        status={excelProgress.status}
+        fileName={excelProgress.fileName}
+        fileSize={excelProgress.fileSize}
+        message={excelProgress.message}
+        onOpenChange={(open) => setExcelProgress((current) => ({ ...current, open }))}
+      />
+
       <div className="flex justify-between items-start">
         <div>
           <h2 className="text-3xl font-bold tracking-tight">Đánh giá Mô hình LLM</h2>
@@ -497,7 +559,7 @@ export default function EvaluationManagement() {
               </DialogFooter>
             </DialogContent>
           </Dialog>
-          <Button variant="outline" className="gap-2" onClick={handleExportExcel}>
+          <Button variant="outline" className="gap-2" onClick={handleExportExcel} disabled={isExcelProgressRunning}>
             <Download className="h-4 w-4" />
             Xuất Excel
           </Button>
