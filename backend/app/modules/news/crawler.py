@@ -108,16 +108,19 @@ def fetch_sapo(url: str) -> str | None:
         # Xóa các script, style, header, footer và các thành phần không mong muốn
         for el in soup(["script", "style", "noscript", "header", "footer", "nav", "aside"]):
             el.decompose()
+        _strip_structural_noise(soup)
         
         # Xóa các khối tin liên quan, quảng cáo, bình luận thường gặp
         NOISY_SELECTORS = [
             ".article_footer", ".article-footer", ".related-news", ".related_news",
             ".article_tag", ".article-tag", "#comment", "#ads", ".ads",
-            "div[id*='adsweb']", "div[class*='related']",
+            "div[id*='adsweb']", "div[class*='related']", "div[class*='relate']",
             "[class*='article-related']", "[class*='article_related']",
+            "[class*='article-relate']", "[class*='article_relate']",
             "[class*='related-new']", "[class*='related_news']",
             "[class*='related-news']", "[class*='related_post']",
-            "[class*='relatedpost']", "[class*='relat-']",
+            "[class*='relatedpost']", "[class*='relat-']", "[class*='relate-']",
+            "[data-source*='related']", "[data-tag*='related']",
             ".box_comment_vne", ".box-tinlienquanv2", ".box-item-vne",
             "article.story", ".story"
         ]
