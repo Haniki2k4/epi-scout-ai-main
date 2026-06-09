@@ -288,7 +288,7 @@ const DashboardOverview = () => {
             <div className="flex items-center justify-between flex-wrap gap-2">
               <div>
                 <CardTitle>Xu hướng ca bệnh theo loại</CardTitle>
-                <CardDescription>Số ca từng bệnh chồng theo ngày</CardDescription>
+                <CardDescription>Số ca từng bệnh theo ngày</CardDescription>
               </div>
               <div className="flex gap-2">
                 {stackedResult && Array.isArray(stackedResult.diseases) && stackedResult.diseases.length > 0 && (
