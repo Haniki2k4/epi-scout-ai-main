@@ -26,6 +26,15 @@ def update_human_label(db: Session, article_id: int, human_label: str | None, us
 
     if human_label is not None:
         eval_record.human_label = human_label
+        
+        # Đồng bộ is_excluded cho ArticleIdentity
+        article = db.query(ArticleIdentity).filter(ArticleIdentity.id == article_id).first()
+        if article:
+            if human_label in ["noise", "irrelevant", "unsure"]:
+                article.is_excluded = True
+            elif human_label == "relevant":
+                article.is_excluded = False
+                
     if keyword_is_correct is not None:
         eval_record.keyword_is_correct = keyword_is_correct
     if corrected_keyword is not None:
