@@ -143,7 +143,15 @@ def compute_event_severity(event) -> str:
     return "low"
 
 def get_events(db: Session, skip: int = 0, limit: int = 100):
-    return db.query(models.NewsEvent).order_by(models.NewsEvent.event_date.desc(), models.NewsEvent.id.desc()).offset(skip).limit(limit).all()
+    # Chỉ lấy các sự kiện có ít nhất một bài viết hợp lệ (is_excluded != True)
+    has_valid_article = exists().where(
+        and_(
+            models.ArticleIdentity.event_id == models.NewsEvent.id,
+            models.ArticleIdentity.is_excluded.isnot(True)
+        )
+    )
+    return db.query(models.NewsEvent).filter(has_valid_article).order_by(models.NewsEvent.event_date.desc(), models.NewsEvent.id.desc()).offset(skip).limit(limit).all()
+
 
 def delete_article(db: Session, article_id: int):
     article = db.query(models.ArticleIdentity).filter(models.ArticleIdentity.id == article_id).first()

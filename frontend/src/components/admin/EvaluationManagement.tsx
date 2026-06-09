@@ -32,6 +32,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { ExcelProgressDialog, type ExcelProgressMode, type ExcelProgressStatus } from "@/components/admin/ExcelProgressDialog";
+import { useQueryClient } from "@tanstack/react-query";
 
 // --- Types ---
 
@@ -115,6 +116,7 @@ interface ExcelProgressState {
 // --- Helpers ---
 
 export default function EvaluationManagement() {
+  const queryClient = useQueryClient();
   const { toast } = useToast();
   const [articles, setArticles] = useState<Article[]>([]);
   const [metrics, setMetrics] = useState<Metrics>({ accuracy: 0, precision: 0, recall: 0, f1_score: 0, total_verified: 0, agreement_rate: 0, confusion_matrix: {}, disease_accuracy: 0 });
@@ -195,6 +197,7 @@ export default function EvaluationManagement() {
       if (res.ok) {
         toast({ title: "Thành công", description: "Đã cập nhật nhãn đánh giá" });
         setArticles(articles.map(a => a.id === articleId ? { ...a, human_label: label, is_verified: true } : a));
+        queryClient.invalidateQueries({ queryKey: ["page-data"] });
         // Refresh metrics
         const mRes = await fetch("/api/evaluation/metrics", { headers: { Authorization: `Bearer ${token}` } });
         if (mRes.ok) setMetrics(await mRes.json());
@@ -245,6 +248,7 @@ export default function EvaluationManagement() {
         }));
         setSavedKeywordId(articleId);
         setTimeout(() => setSavedKeywordId(null), 2000);
+        queryClient.invalidateQueries({ queryKey: ["page-data"] });
         // Refresh metrics
         const mRes = await fetch("/api/evaluation/metrics", { headers: { Authorization: `Bearer ${token}` } });
         if (mRes.ok) setMetrics(await mRes.json());
@@ -391,6 +395,7 @@ export default function EvaluationManagement() {
 
       const result = await response.json() as ImportResult;
       setImportResult(result);
+      queryClient.invalidateQueries({ queryKey: ["page-data"] });
       await fetchData();
       const successMessage = `Đã cập nhật ${result.summary.updated} nhãn và đồng bộ ${result.summary.dataset_examples} mẫu cho mô hình.`;
       setExcelProgress((current) => ({

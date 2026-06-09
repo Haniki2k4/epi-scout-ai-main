@@ -251,9 +251,8 @@ const KeywordMonitoring = () => {
 
 
 
-  const validEvents = useMemo(() => events.filter((e) => e.article_count > 0), [events]);
-  const totalEventPages = Math.max(1, Math.ceil(validEvents.length / eventPageSize));
-  const paginatedEvents = validEvents.slice(
+  const totalEventPages = Math.max(1, Math.ceil(events.length / eventPageSize));
+  const paginatedEvents = events.slice(
     (eventPage - 1) * eventPageSize,
     eventPage * eventPageSize
   );
@@ -307,12 +306,7 @@ const KeywordMonitoring = () => {
             </div>
           )}
           <div className="space-y-3 overflow-y-auto pr-2">
-            {selectedEvent?.articles
-              .filter((article) => {
-                const label = article.human_label || article.llm_label;
-                return label !== "noise" && label !== "irrelevant" && label !== "unsure";
-              })
-              .map((article) => (
+            {selectedEvent?.articles.map((article) => (
               <div key={article.id || article.link} className="rounded-lg border p-3">
                 <div className="flex items-start justify-between gap-3">
                   <div className="space-y-1">
@@ -666,7 +660,7 @@ const KeywordMonitoring = () => {
                 <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary mb-2"></div>
                 <p className="text-xs font-medium">Đang tải danh sách sự kiện...</p>
               </div>
-            ) : validEvents.length === 0 ? (
+            ) : events.length === 0 ? (
               <div className="py-4 text-center text-muted-foreground">
                 Chưa có sự kiện nào được gom.
               </div>
@@ -708,7 +702,7 @@ const KeywordMonitoring = () => {
               ))
             )}
           </div>
-          {validEvents.length > 0 && (
+          {events.length > 0 && (
             <div className="mt-4 flex items-center justify-end gap-2">
               <Button
                 type="button"

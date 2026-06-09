@@ -49,12 +49,6 @@ def parse_keywords_input(text: str) -> list[str]:
 def init_database() -> None:
     with database.SessionLocal() as db:
         try:
-            # Migration data: Đồng bộ is_excluded cho các bài viết đã bị đánh nhãn
-            from sqlalchemy import text
-            db.execute(text("UPDATE article_identity SET is_excluded = 1 WHERE id IN (SELECT article_id FROM article_evaluation WHERE human_label IN ('noise', 'irrelevant', 'unsure'))"))
-            db.execute(text("UPDATE article_identity SET is_excluded = 0 WHERE id IN (SELECT article_id FROM article_evaluation WHERE human_label = 'relevant')"))
-            db.commit()
-            
             crud.seed_default_keywords(db)
             crud.seed_default_rss_sources(db)
             logger.info("Backend startup complete, default keywords and RSS sources seeded")
@@ -573,29 +567,7 @@ def read_event_detail(event_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Event not found")
         
     severity = event.severity or crud.compute_event_severity(event)
-    
-    # Load evaluation cho event articles
-    from .modules.evaluation.models import ArticleEvaluation
-    article_ids = [a.id for a in event.articles]
-    evals = db.query(ArticleEvaluation).filter(ArticleEvaluation.article_id.in_(article_ids)).all() if article_ids else []
-    eval_map = {e.article_id: e for e in evals}
-    
-    valid_articles = []
-    for a in event.articles:
-        if getattr(a, "is_excluded", False):
-            continue
-            
-        e = eval_map.get(a.id)
-        hl = e.human_label if e else None
-        llm = e.llm_label if e else ("relevant" if a.event_id else "irrelevant")
-        
-        # Lọc các bài báo không phù hợp
-        if (hl in ["noise", "irrelevant", "unsure"]) or (not hl and llm in ["noise", "irrelevant", "unsure"]):
-            continue
-            
-        a.human_label = hl
-        a.llm_label = llm
-        valid_articles.append(a)
+    valid_articles = event.valid_articles
     
     logger.info("Read event detail completed | event_id={} valid_article_count={}", event_id, len(valid_articles))
     
@@ -609,9 +581,9 @@ def read_event_detail(event_id: int, db: Session = Depends(get_db)):
         "severity": severity,
         "status": event.status,
         "fingerprint": event.fingerprint,
-        "article_count": len(valid_articles),
-        "source_count": len(set(a.source for a in valid_articles if a.source)),
-        "sources_preview": sorted(list(set(a.source for a in valid_articles if a.source)))[:5],
+        "article_count": event.article_count,
+        "source_count": event.source_count,
+        "sources_preview": event.sources_preview,
         "articles": valid_articles,
     }
 

@@ -399,6 +399,40 @@ async def import_evaluations_excel(
             eval_record.verified_at = datetime.utcnow()
             eval_record.verified_by = current_admin.id
 
+            # Đồng bộ is_excluded cho ArticleIdentity
+            if human_label in ["noise", "irrelevant", "unsure"]:
+                article.is_excluded = True
+            elif human_label == "relevant":
+                article.is_excluded = False
+                if article.event_id is None:
+                    try:
+                        from ..news.crawler import resolve_event_for_article
+                        case_count = 0
+                        location = None
+                        if article.cases:
+                            case_count = article.cases[0].case_count
+                            location = article.cases[0].location
+                        
+                        event, score, reason, plot_cases = resolve_event_for_article(
+                            db=db,
+                            title=article.title,
+                            normalized_title=article.details.llm_normalized_title if article.details else article.title,
+                            summary=article.details.summary if article.details else "",
+                            matched_keywords=article.details.keywords_matched if article.details else "",
+                            pub_date=article.published_date,
+                            location=location,
+                            cumulative_cases=0,
+                            new_cases=case_count,
+                            severity=None
+                        )
+                        if event:
+                            article.event_id = event.id
+                            article.event_match_score = score
+                            article.dedupe_reason = reason
+                    except Exception as e:
+                        import logging
+                        logging.getLogger("backend.evaluation").error(f"Error resolving event for article {article.id} during excel import: {str(e)}")
+
             title = _safe_text(article.title) or _safe_text(_get_cell(row, columns.get("title")))
             summary_text = _safe_text(article.summary) or _safe_text(_get_cell(row, columns.get("summary")))
             if title and summary_text:

@@ -2045,18 +2045,24 @@ def scan_news(
                         logger.debug("Article link already exists | link={}", link)
                         continue
 
-                    event, event_match_score, dedupe_reason, event_current_total = resolve_event_for_article(
-                        db=db,
-                        title=title,
-                        normalized_title=llm_normalized_title,
-                        summary=effective_summary,
-                        matched_keywords=matched_kw_str,
-                        pub_date=pub_date,
-                        location=location_merged,
-                        cumulative_cases=cumulative_cases,
-                        new_cases=new_cases,
-                        severity=llm_meta.get("severity"),
-                    )
+                    # Nếu llm_label là rác hoặc unsure, loại bỏ khỏi gom cụm sự kiện
+                    if llm_label in ["noise", "irrelevant", "unsure"]:
+                        event = None
+                        event_match_score = None
+                        dedupe_reason = f"Excluded by LLM label: {llm_label}"
+                    else:
+                        event, event_match_score, dedupe_reason, event_current_total = resolve_event_for_article(
+                            db=db,
+                            title=title,
+                            normalized_title=llm_normalized_title,
+                            summary=effective_summary,
+                            matched_keywords=matched_kw_str,
+                            pub_date=pub_date,
+                            location=location_merged,
+                            cumulative_cases=cumulative_cases,
+                            new_cases=new_cases,
+                            severity=llm_meta.get("severity"),
+                        )
                     article_dto.event_id = event.id if event else None
                     article_dto.event_match_score = event_match_score
                     article_dto.dedupe_reason = dedupe_reason
@@ -2081,6 +2087,10 @@ def scan_news(
                     else:
                         article_dto.tags = None
                     saved_article = crud.create_article(db, article_dto)
+
+                    # Đồng bộ is_excluded dựa trên llm_label ngay khi lưu bài viết
+                    if llm_label in ["noise", "irrelevant", "unsure"]:
+                        saved_article.is_excluded = True
 
                     # Lưu llm_label vào ArticleEvaluation để hiển thị trên UI
                     from ..evaluation.models import ArticleEvaluation as EvalModel
