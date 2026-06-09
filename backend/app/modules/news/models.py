@@ -24,28 +24,7 @@ class NewsEvent(Base):
 
     @property
     def valid_articles(self):
-        from sqlalchemy.orm.session import object_session
-        from ..evaluation.models import ArticleEvaluation
-        
-        session = object_session(self)
-        if not session or not self.articles:
-            return [a for a in (self.articles or []) if not getattr(a, "is_excluded", False)]
-            
-        article_ids = [a.id for a in self.articles]
-        evals = session.query(ArticleEvaluation).filter(ArticleEvaluation.article_id.in_(article_ids)).all()
-        eval_map = {e.article_id: e for e in evals}
-        
-        valid = []
-        for a in self.articles:
-            if getattr(a, "is_excluded", False):
-                continue
-            e = eval_map.get(a.id)
-            label = e.human_label if (e and e.human_label) else (e.llm_label if e else None)
-            if label in ["noise", "irrelevant", "unsure"]:
-                continue
-            valid.append(a)
-            
-        return valid
+        return [a for a in (self.articles or []) if not getattr(a, "is_excluded", False)]
 
     @property
     def article_count(self):
