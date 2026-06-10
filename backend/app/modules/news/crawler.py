@@ -108,16 +108,19 @@ def fetch_sapo(url: str) -> str | None:
         # Xóa các script, style, header, footer và các thành phần không mong muốn
         for el in soup(["script", "style", "noscript", "header", "footer", "nav", "aside"]):
             el.decompose()
+        _strip_structural_noise(soup)
         
         # Xóa các khối tin liên quan, quảng cáo, bình luận thường gặp
         NOISY_SELECTORS = [
             ".article_footer", ".article-footer", ".related-news", ".related_news",
             ".article_tag", ".article-tag", "#comment", "#ads", ".ads",
-            "div[id*='adsweb']", "div[class*='related']",
+            "div[id*='adsweb']", "div[class*='related']", "div[class*='relate']",
             "[class*='article-related']", "[class*='article_related']",
+            "[class*='article-relate']", "[class*='article_relate']",
             "[class*='related-new']", "[class*='related_news']",
             "[class*='related-news']", "[class*='related_post']",
-            "[class*='relatedpost']", "[class*='relat-']",
+            "[class*='relatedpost']", "[class*='relat-']", "[class*='relate-']",
+            "[data-source*='related']", "[data-tag*='related']",
             ".box_comment_vne", ".box-tinlienquanv2", ".box-item-vne",
             "article.story", ".story"
         ]
@@ -2042,18 +2045,24 @@ def scan_news(
                         logger.debug("Article link already exists | link={}", link)
                         continue
 
-                    event, event_match_score, dedupe_reason, event_current_total = resolve_event_for_article(
-                        db=db,
-                        title=title,
-                        normalized_title=llm_normalized_title,
-                        summary=effective_summary,
-                        matched_keywords=matched_kw_str,
-                        pub_date=pub_date,
-                        location=location_merged,
-                        cumulative_cases=cumulative_cases,
-                        new_cases=new_cases,
-                        severity=llm_meta.get("severity"),
-                    )
+                    # Nếu llm_label là rác hoặc unsure, loại bỏ khỏi gom cụm sự kiện
+                    if llm_label in ["noise", "irrelevant", "unsure"]:
+                        event = None
+                        event_match_score = None
+                        dedupe_reason = f"Excluded by LLM label: {llm_label}"
+                    else:
+                        event, event_match_score, dedupe_reason, event_current_total = resolve_event_for_article(
+                            db=db,
+                            title=title,
+                            normalized_title=llm_normalized_title,
+                            summary=effective_summary,
+                            matched_keywords=matched_kw_str,
+                            pub_date=pub_date,
+                            location=location_merged,
+                            cumulative_cases=cumulative_cases,
+                            new_cases=new_cases,
+                            severity=llm_meta.get("severity"),
+                        )
                     article_dto.event_id = event.id if event else None
                     article_dto.event_match_score = event_match_score
                     article_dto.dedupe_reason = dedupe_reason
@@ -2078,6 +2087,10 @@ def scan_news(
                     else:
                         article_dto.tags = None
                     saved_article = crud.create_article(db, article_dto)
+
+                    # Đồng bộ is_excluded dựa trên llm_label ngay khi lưu bài viết
+                    if llm_label in ["noise", "irrelevant", "unsure"]:
+                        saved_article.is_excluded = True
 
                     # Lưu llm_label vào ArticleEvaluation để hiển thị trên UI
                     from ..evaluation.models import ArticleEvaluation as EvalModel

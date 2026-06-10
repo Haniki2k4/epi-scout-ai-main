@@ -1,5 +1,5 @@
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import func, exists, and_, or_, select
+from sqlalchemy import func, exists, and_, or_, select, not_
 from . import models, schemas
 from datetime import datetime
 
@@ -143,7 +143,38 @@ def compute_event_severity(event) -> str:
     return "low"
 
 def get_events(db: Session, skip: int = 0, limit: int = 100):
-    return db.query(models.NewsEvent).order_by(models.NewsEvent.event_date.desc(), models.NewsEvent.id.desc()).offset(skip).limit(limit).all()
+    from ..evaluation.models import ArticleEvaluation
+    
+    # Một bài báo có nhãn rác (noise, irrelevant, unsure) từ evaluation
+    is_trash_evaluation = exists().where(
+        and_(
+            ArticleEvaluation.article_id == models.ArticleIdentity.id,
+            or_(
+                ArticleEvaluation.human_label.in_(["noise", "irrelevant", "unsure"]),
+                and_(
+                    ArticleEvaluation.human_label.is_(None),
+                    ArticleEvaluation.llm_label.in_(["noise", "irrelevant", "unsure"])
+                )
+            )
+        )
+    )
+    
+    # Bài báo hợp lệ: không bị loại trừ và không có nhãn rác
+    is_valid_article = and_(
+        models.ArticleIdentity.is_excluded.isnot(True),
+        not_(is_trash_evaluation)
+    )
+    
+    # Sự kiện hợp lệ: có ít nhất một bài báo hợp lệ
+    has_valid_article = exists().where(
+        and_(
+            models.ArticleIdentity.event_id == models.NewsEvent.id,
+            is_valid_article
+        )
+    )
+    
+    return db.query(models.NewsEvent).filter(has_valid_article).order_by(models.NewsEvent.event_date.desc(), models.NewsEvent.id.desc()).offset(skip).limit(limit).all()
+
 
 def delete_article(db: Session, article_id: int):
     article = db.query(models.ArticleIdentity).filter(models.ArticleIdentity.id == article_id).first()

@@ -23,12 +23,37 @@ class NewsEvent(Base):
     articles = relationship("ArticleIdentity", back_populates="event")
 
     @property
+    def valid_articles(self):
+        from sqlalchemy.orm.session import object_session
+        from ..evaluation.models import ArticleEvaluation
+        
+        session = object_session(self)
+        if not session or not self.articles:
+            return [a for a in (self.articles or []) if not getattr(a, "is_excluded", False)]
+            
+        article_ids = [a.id for a in self.articles]
+        evals = session.query(ArticleEvaluation).filter(ArticleEvaluation.article_id.in_(article_ids)).all()
+        eval_map = {e.article_id: e for e in evals}
+        
+        valid = []
+        for a in self.articles:
+            if getattr(a, "is_excluded", False):
+                continue
+            e = eval_map.get(a.id)
+            label = e.human_label if (e and e.human_label) else (e.llm_label if e else None)
+            if label in ["noise", "irrelevant", "unsure"]:
+                continue
+            valid.append(a)
+            
+        return valid
+
+    @property
     def article_count(self):
-        return len(self.articles or [])
+        return len(self.valid_articles)
 
     @property
     def unique_sources(self):
-        return sorted({article.source for article in (self.articles or []) if article.source})
+        return sorted({article.source for article in self.valid_articles if getattr(article, "source", None)})
 
     @property
     def source_count(self):

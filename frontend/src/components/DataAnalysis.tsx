@@ -87,6 +87,49 @@ const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
   const [loadingZscore, setLoadingZscore] = useState(false);
   const [loadingForecast, setLoadingForecast] = useState(false);
 
+  // Tính toán khuyến nghị động dựa theo mô hình z-score
+  const dynamicRecommendations = useMemo(() => {
+    const spikes = zscoreSpikes.filter(s => s.is_spike);
+    const disease = forecastDisease || "Sởi";
+
+    if (spikes.length > 0) {
+      const latestSpike = spikes[spikes.length - 1];
+      return [
+        {
+          title: "Kích hoạt đáp ứng khẩn cấp",
+          description: `Phát hiện ${spikes.length} điểm bất thường cho bệnh ${disease}. Bất thường gần nhất vào ngày ${latestSpike.date} với Z-Score ${latestSpike.z_score.toFixed(2)} (${latestSpike.cases} bài viết, cao hơn TB ${latestSpike.rolling_mean.toFixed(1)}). Cần nhanh chóng điều tra thực tế.`,
+          bgColor: "bg-destructive/10 border-destructive/20 text-destructive-foreground dark:text-red-400",
+          titleColor: "text-destructive font-semibold flex items-center gap-1.5",
+          icon: <ShieldAlert className="h-4 w-4" />
+        },
+        {
+          title: "Xác minh nguồn lực và ổ dịch",
+          description: `Đẩy mạnh rà soát các nguồn báo chí địa phương xung quanh ngày ${latestSpike.date} để đối chiếu dữ liệu ca mắc thực tế tại bệnh viện với tần suất tin tức.`,
+          bgColor: "bg-amber-500/10 border-amber-500/20 text-foreground dark:text-amber-400",
+          titleColor: "text-amber-700 dark:text-amber-500 font-semibold flex items-center gap-1.5",
+          icon: <AlertTriangle className="h-4 w-4" />
+        }
+      ];
+    } else {
+      return [
+        {
+          title: "Duy trì theo dõi thường quy",
+          description: `Ngưỡng hiện tại của bệnh ${disease} đang nằm trong giới hạn bình thường. Tiếp tục theo dõi dịch tễ học định kỳ.`,
+          bgColor: "bg-green-500/10 border-green-500/20 text-foreground dark:text-green-400",
+          titleColor: "text-green-700 dark:text-green-500 font-semibold flex items-center gap-1.5",
+          icon: <Sparkles className="h-4 w-4" />
+        },
+        {
+          title: "Giám sát thông tin liên tục",
+          description: "Tiếp tục thu thập dữ liệu báo chí và mạng xã hội để kịp thời phát hiện các dấu hiệu bùng phát bất thường.",
+          bgColor: "bg-secondary border-border/50 text-muted-foreground",
+          titleColor: "text-foreground font-semibold flex items-center gap-1.5",
+          icon: <RadioTower className="h-4 w-4" />
+        }
+      ];
+    }
+  }, [zscoreSpikes, forecastDisease]);
+
   // State báo cáo
   const [exportingWord, setExportingWord] = useState(false);
   const [exportingExcel, setExportingExcel] = useState(false);
@@ -675,7 +718,7 @@ const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
                     <Line type="monotone" dataKey="spike_value" name="Cảnh báo đột biến" stroke="transparent" connectNulls={false}
                       dot={{ r: 6, fill: "hsl(var(--destructive))", strokeWidth: 2, stroke: "hsl(var(--background))" }}
                       activeDot={false} legendType="circle" />
-                    <Line type="monotone" dataKey="threshold" name="Ngưỡng bất thường (MA+2σ)" stroke="hsl(var(--destructive))" strokeWidth={1.5} strokeDasharray="6 3" dot={false} />
+                    <Line type="monotone" dataKey="threshold" name="Ngưỡng bất thường" stroke="hsl(var(--destructive))" strokeWidth={1.5} strokeDasharray="6 3" dot={false} />
                   </ComposedChart>
                 </ResponsiveContainer>
               </div>
@@ -718,18 +761,17 @@ const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
                 <CardTitle>Khuyến nghị Giám sát</CardTitle>
               </CardHeader>
               <CardContent className="space-y-3">
-                <div className="rounded-lg bg-secondary p-3">
-                  <p className="mb-1 text-sm font-medium text-foreground">Kích hoạt đáp ứng nhanh</p>
-                  <p className="text-sm text-muted-foreground">
-                    Các điểm cảnh báo đỏ cho thấy số ca mắc vượt quá 2 độ lệch chuẩn so với chu kỳ 14 ngày. Cần xem xét điều tra dịch tễ học lập tức.
-                  </p>
-                </div>
-                <div className="rounded-lg bg-secondary p-3">
-                  <p className="mb-1 text-sm font-medium text-foreground">Xác minh nguồn tin</p>
-                  <p className="text-sm text-muted-foreground">
-                    Đẩy mạnh rà soát các nguồn báo chí địa phương xung quanh ngày có cảnh báo để đối chiếu ổ dịch.
-                  </p>
-                </div>
+                {dynamicRecommendations.map((rec, index) => (
+                  <div key={index} className={`rounded-lg border p-3 ${rec.bgColor}`}>
+                    <p className={`mb-1 text-sm ${rec.titleColor}`}>
+                      {rec.icon}
+                      {rec.title}
+                    </p>
+                    <p className="text-sm">
+                      {rec.description}
+                    </p>
+                  </div>
+                ))}
               </CardContent>
             </Card>
           </div>

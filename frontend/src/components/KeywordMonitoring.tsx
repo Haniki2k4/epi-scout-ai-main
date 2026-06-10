@@ -575,6 +575,9 @@ const KeywordMonitoring = () => {
                         {!article.is_whitelisted && (
                           <Badge variant="outline">Thủ công</Badge>
                         )}
+                        {(article.human_label === "unsure" || (!article.human_label && article.llm_label === "unsure")) && (
+                          <Badge variant="secondary" className="bg-yellow-100 text-yellow-800 hover:bg-yellow-100 border-yellow-300">Cần xác minh</Badge>
+                        )}
                       </div>
                       <div className="flex flex-wrap gap-1">
                         {article.keywords_matched?.split(",").map((keyword, i) => (

@@ -565,10 +565,27 @@ def read_event_detail(event_id: int, db: Session = Depends(get_db)):
     if not event:
         logger.warning("Read event detail failed | event_id={} reason=not_found", event_id)
         raise HTTPException(status_code=404, detail="Event not found")
-    if not event.severity:
-        event.severity = crud.compute_event_severity(event)
-    logger.info("Read event detail completed | event_id={} article_count={}", event_id, len(event.articles))
-    return event
+        
+    severity = event.severity or crud.compute_event_severity(event)
+    valid_articles = event.valid_articles
+    
+    logger.info("Read event detail completed | event_id={} valid_article_count={}", event_id, len(valid_articles))
+    
+    return {
+        "id": event.id,
+        "canonical_title": event.canonical_title,
+        "disease_name": event.disease_name,
+        "location": event.location,
+        "event_date": event.event_date,
+        "case_count": event.case_count,
+        "severity": severity,
+        "status": event.status,
+        "fingerprint": event.fingerprint,
+        "article_count": event.article_count,
+        "source_count": event.source_count,
+        "sources_preview": event.sources_preview,
+        "articles": valid_articles,
+    }
 
 
 @app.get("/api/rss-sources", response_model=List[schemas.RssSourceDTO])
