@@ -82,8 +82,7 @@ def create_article(db: Session, article: schemas.ArticleCreate):
         dedupe_reason=article.dedupe_reason,
     )
     db.add(db_identity)
-    db.commit()
-    db.refresh(db_identity)
+    db.flush()
 
     # 2. Create Details
     db_details = models.ArticleDetails(
@@ -98,7 +97,7 @@ def create_article(db: Session, article: schemas.ArticleCreate):
         is_suspected_false_positive=article.is_suspected_false_positive,
     )
     db.add(db_details)
-    db.commit()
+    db.flush()
     
     return db_identity
 
@@ -114,6 +113,7 @@ def get_recent_events(
         models.NewsEvent.disease_name == disease_name,
         models.NewsEvent.event_date >= start_date,
         models.NewsEvent.event_date <= end_date,
+        models.NewsEvent.status.notin_(["rejected", "closed"]),
     )
     if location:
         query = query.filter(models.NewsEvent.location == location)
@@ -122,13 +122,13 @@ def get_recent_events(
 
 def compute_event_severity(event) -> str:
     score = 0
-    if event.case_count >= 100:
+    if (event.case_count or 0) >= 100:
         score += 5
-    elif event.case_count >= 50:
+    elif (event.case_count or 0) >= 50:
         score += 4
-    elif event.case_count >= 10:
+    elif (event.case_count or 0) >= 10:
         score += 3
-    elif event.case_count >= 1:
+    elif (event.case_count or 0) >= 1:
         score += 1
     if event.event_date:
         days_old = (datetime.utcnow() - event.event_date).days
@@ -173,7 +173,7 @@ def get_events(db: Session, skip: int = 0, limit: int = 100):
         )
     )
     
-    return db.query(models.NewsEvent).filter(has_valid_article).order_by(models.NewsEvent.event_date.desc(), models.NewsEvent.id.desc()).offset(skip).limit(limit).all()
+    return db.query(models.NewsEvent).filter(has_valid_article, models.NewsEvent.status != "rejected").order_by(models.NewsEvent.event_date.desc(), models.NewsEvent.id.desc()).offset(skip).limit(limit).all()
 
 
 def delete_article(db: Session, article_id: int):
@@ -192,7 +192,7 @@ def delete_article(db: Session, article_id: int):
     return False
 
 def get_event_by_id(db: Session, event_id: int):
-    return db.query(models.NewsEvent).filter(models.NewsEvent.id == event_id).first()
+    return db.query(models.NewsEvent).filter(models.NewsEvent.id == event_id, models.NewsEvent.status != "rejected").first()
 
 
 def create_news_event(
@@ -201,7 +201,7 @@ def create_news_event(
     disease_name: str,
     location: str | None,
     event_date: datetime,
-    case_count: int,
+    case_count: int | None,
     severity: str | None,
     fingerprint: str,
 ):
@@ -215,7 +215,7 @@ def create_news_event(
         fingerprint=fingerprint,
     )
     db.add(event)
-    db.commit()
+    db.flush()
     db.refresh(event)
     return event
 
@@ -224,7 +224,6 @@ def update_news_event(
     db: Session,
     event: models.NewsEvent,
     canonical_title: str | None = None,
-    case_count: int | None = None,
     severity: str | None = None,
 ):
     db_event = db.query(models.NewsEvent).filter(models.NewsEvent.id == event.id).first()
@@ -235,9 +234,6 @@ def update_news_event(
     if canonical_title and len(canonical_title) > len(db_event.canonical_title or ""):
         db_event.canonical_title = canonical_title
         has_changed = True
-    if case_count is not None and case_count > (db_event.case_count or 0):
-        db_event.case_count = case_count
-        has_changed = True
     if severity and not db_event.severity:
         db_event.severity = severity
         has_changed = True
@@ -246,15 +242,13 @@ def update_news_event(
         # Avoid hitting the database if there are no real changes
         return db_event
     
-    db.commit()
-    db.refresh(db_event)
     return db_event
 
 # --- Disease Cases ---
 
 def create_disease_case(db: Session, case: models.DiseaseCase):
     db.add(case)
-    db.commit()
+    db.flush()
     db.refresh(case)
     return case
 
@@ -275,8 +269,6 @@ def update_disease_case(db: Session, case_id: int, new_count: int, article_id: i
     if db_case:
         db_case.case_count = new_count
         db_case.article_id = article_id
-        db.commit()
-        db.refresh(db_case)
     return db_case
 
 

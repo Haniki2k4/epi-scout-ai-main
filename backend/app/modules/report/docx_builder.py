@@ -84,7 +84,7 @@ def build_word_report(report_data: dict) -> bytes:
 
     _add_paragraph(
         doc,
-        "BÁO CÁO GIÁM SÁT DỊCH BỆNH DỰA VÀO SỰ KIỆN (EBS)",
+        "BÁO CÁO TÍN HIỆU EBS" if report_data.get("report_type") != "verified" else "BÁO CÁO SỰ KIỆN ĐÃ XÁC MINH",
         bold=True, size=14, color="1565C0",
         align=WD_ALIGN_PARAGRAPH.CENTER, space_before=4, space_after=4,
     )
@@ -106,10 +106,10 @@ def build_word_report(report_data: dict) -> bytes:
     stats_table.alignment = WD_TABLE_ALIGNMENT.CENTER
     stats_table.style = "Table Grid"
 
-    headers = ["Tổng số bài báo", "Tổng số ca bệnh", "Tín hiệu cảnh báo"]
+    headers = ["Bài báo", "Sự kiện đã xác minh", "Tín hiệu"]
     values = [
         str(overview.get("total_articles", 0)),
-        str(overview.get("total_cases", 0)),
+        str(overview.get("verified_events_count", 0)),
         str(overview.get("alert_count", 0)),
     ]
     for i, (h, v) in enumerate(zip(headers, values)):
@@ -131,7 +131,7 @@ def build_word_report(report_data: dict) -> bytes:
     # =========================================================
     # II. TOP SỰ KIỆN NỔI BẬT
     # =========================================================
-    _add_paragraph(doc, "II. CÁC SỰ KIỆN DỊCH BỆNH NỔI BẬT", bold=True, size=12, color="1565C0", space_before=14)
+    _add_paragraph(doc, "II. TÍN HIỆU / SỰ KIỆN NỔI BẬT", bold=True, size=12, color="1565C0", space_before=14)
 
     if top_events:
         for idx, event in enumerate(top_events[:5], start=1):
@@ -142,12 +142,13 @@ def build_word_report(report_data: dict) -> bytes:
             run_title.font.size = Pt(11)
             run_title.font.name = "Times New Roman"
 
-            if event.location or event.case_count:
+            if event.status or event.location or event.article_count:
                 detail_parts = []
+                detail_parts.append(f"Trạng thái: {event.status}")
                 if event.location:
                     detail_parts.append(f"Địa điểm: {event.location}")
-                if event.case_count:
-                    detail_parts.append(f"Số ca: {event.case_count}")
+                if event.case_count is not None:
+                    detail_parts.append(f"Số ca đã xác minh: {event.case_count}")
                 if event.article_count:
                     detail_parts.append(f"Được đưa tin bởi {event.article_count} bài báo")
                 detail_p = doc.add_paragraph("   " + " | ".join(detail_parts))

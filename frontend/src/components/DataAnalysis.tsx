@@ -20,12 +20,6 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { useAuth } from "@/contexts/AuthContext";
 
 
-type OverviewStats = {
-  total_articles: number;
-  total_cases: number;
-  alert_count: number;
-};
-
 interface DataAnalysisProps {
   showOnlyReport?: boolean;
 }
@@ -66,17 +60,9 @@ function setToCache<T>(key: string, data: T): void {
 const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
   const { toast } = useToast();
   const { isGuest } = useAuth();
-  const [stats, setStats] = useState<OverviewStats>({
-    total_articles: 0,
-    total_cases: 0,
-    alert_count: 0,
-  });
-  const [trends, setTrends] = useState<{ date: string; cases: number }[]>([]);
   const [events, setEvents] = useState<NewsEvent[]>([]);
   const [reportScope, setReportScope] = useState("weekly");
-  const [reportAudience, setReportAudience] = useState("cdc");
-  const [reportRegion, setReportRegion] = useState("all");
-  const [reportTitle, setReportTitle] = useState("Báo cáo giám sát dịch bệnh tuần");
+  const [reportType, setReportType] = useState<"signal" | "verified">("signal");
   const [zscoreSpikes, setZscoreSpikes] = useState<ZScoreSpike[]>([]);
   const [prophetForecast, setProphetForecast] = useState<ProphetForecast[]>([]);
   const [prophetMetrics, setProphetMetrics] = useState<{ mae: number | null, rmse: number | null, eval_method: string } | null>(null);
@@ -96,14 +82,14 @@ const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
       const latestSpike = spikes[spikes.length - 1];
       return [
         {
-          title: "Kích hoạt đáp ứng khẩn cấp",
-          description: `Phát hiện ${spikes.length} điểm bất thường cho bệnh ${disease}. Bất thường gần nhất vào ngày ${latestSpike.date} với Z-Score ${latestSpike.z_score.toFixed(2)} (${latestSpike.cases} bài viết, cao hơn TB ${latestSpike.rolling_mean.toFixed(1)}). Cần nhanh chóng điều tra thực tế.`,
+          title: "Ưu tiên kiểm tra tín hiệu báo chí",
+          description: `Phát hiện ${spikes.length} điểm bất thường cho bệnh ${disease}. Bất thường gần nhất vào ngày ${latestSpike.date} với Z-Score ${latestSpike.z_score.toFixed(2)} (${latestSpike.cases} bài viết, cao hơn TB ${latestSpike.rolling_mean.toFixed(1)}). Cần chuyên viên đối chiếu với nguồn y tế trước khi kết luận.`,
           bgColor: "bg-destructive/10 border-destructive/20 text-destructive-foreground dark:text-red-400",
           titleColor: "text-destructive font-semibold flex items-center gap-1.5",
           icon: <ShieldAlert className="h-4 w-4" />
         },
         {
-          title: "Xác minh nguồn lực và ổ dịch",
+          title: "Đối chiếu nguồn và số liệu",
           description: `Đẩy mạnh rà soát các nguồn báo chí địa phương xung quanh ngày ${latestSpike.date} để đối chiếu dữ liệu ca mắc thực tế tại bệnh viện với tần suất tin tức.`,
           bgColor: "bg-amber-500/10 border-amber-500/20 text-foreground dark:text-amber-400",
           titleColor: "text-amber-700 dark:text-amber-500 font-semibold flex items-center gap-1.5",
@@ -114,14 +100,14 @@ const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
       return [
         {
           title: "Duy trì theo dõi thường quy",
-          description: `Ngưỡng hiện tại của bệnh ${disease} đang nằm trong giới hạn bình thường. Tiếp tục theo dõi dịch tễ học định kỳ.`,
+          description: `Lượt nhắc trên báo về ${disease} chưa có đột biến theo mô hình này. Tiếp tục theo dõi và xác minh thông tin mới.`,
           bgColor: "bg-green-500/10 border-green-500/20 text-foreground dark:text-green-400",
           titleColor: "text-green-700 dark:text-green-500 font-semibold flex items-center gap-1.5",
           icon: <Sparkles className="h-4 w-4" />
         },
         {
           title: "Giám sát thông tin liên tục",
-          description: "Tiếp tục thu thập dữ liệu báo chí và mạng xã hội để kịp thời phát hiện các dấu hiệu bùng phát bất thường.",
+          description: "Tiếp tục thu thập dữ liệu báo chí để phát hiện thay đổi tần suất đưa tin.",
           bgColor: "bg-secondary border-border/50 text-muted-foreground",
           titleColor: "text-foreground font-semibold flex items-center gap-1.5",
           icon: <RadioTower className="h-4 w-4" />
@@ -273,31 +259,11 @@ const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
   }, [forecastDisease]);
 
   useEffect(() => {
-    const fetchAnalysisData = async () => {
-      try {
-        const [statsRes, trendsRes, eventsRes] = await Promise.all([
-          fetch("/api/stats/overview"),
-          fetch("/api/stats/trends?days=30"),
-          fetch("/api/events?limit=6"),
-        ]);
-
-        if (statsRes.ok) {
-          setStats(await statsRes.json());
-        }
-        if (trendsRes.ok) {
-          setTrends(await trendsRes.json());
-        }
-        if (eventsRes.ok) {
-          setEvents(await eventsRes.json());
-        }
-      } catch (e) {
-        console.error("Failed to fetch analysis data", e);
-      }
-    };
-
-    fetchAnalysisData();
+    fetch("/api/events?limit=100")
+      .then((response) => response.ok ? response.json() : Promise.reject(new Error("Không tải được sự kiện")))
+      .then((data: NewsEvent[]) => setEvents(data))
+      .catch((error) => console.error("Failed to fetch report preview", error));
   }, []);
-
   // --- Report scope to hours mapping ---
   const scopeHours = useMemo(() => {
     if (reportScope === "daily") return 24;
@@ -305,12 +271,10 @@ const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
     return 720; // monthly ~30 days
   }, [reportScope]);
 
-  const reportWindowLabel = useMemo(() => {
-    if (reportScope === "daily") return "24 giờ gần nhất";
-    if (reportScope === "weekly") return "72 giờ (3 ngày) gần nhất";
-    return "30 ngày gần nhất";
-  }, [reportScope]);
-
+  const previewEvents = useMemo(() => events.filter((event) =>
+    (reportType === "signal" || event.status === "verified_event") &&
+    new Date(event.event_date).getTime() >= Date.now() - scopeHours * 60 * 60 * 1000
+  ), [events, reportType, scopeHours]);
   // --- Hàm xuất báo cáo Word ---
   const handleExportWord = async () => {
     setExportingWord(true);
@@ -322,7 +286,7 @@ const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
           "Content-Type": "application/json",
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
-        body: JSON.stringify({ scope_hours: scopeHours }),
+        body: JSON.stringify({ scope_hours: scopeHours, report_type: reportType }),
       });
       if (!res.ok) throw new Error("Tạo báo cáo thất bại");
       const blob = await res.blob();
@@ -355,7 +319,7 @@ const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
           "Content-Type": "application/json",
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
-        body: JSON.stringify({ scope_hours: scopeHours }),
+        body: JSON.stringify({ scope_hours: scopeHours, report_type: reportType }),
       });
       if (!res.ok) throw new Error("Xuất Excel thất bại");
       const blob = await res.blob();
@@ -390,6 +354,7 @@ const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
         },
         body: JSON.stringify({
           scope_hours: scopeHours,
+          report_type: reportType,
           attach_docx: emailAttachWord,
           attach_excel: emailAttachExcel,
         }),
@@ -410,39 +375,6 @@ const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
   };
 
 
-
-  const topSignals = useMemo(() => {
-    return events.slice(0, 3).map((event, index) => ({
-      id: event.id,
-      title: event.canonical_title,
-      level: index === 0 ? "Ưu tiên cao" : index === 1 ? "Theo dõi sát" : "Theo dõi",
-      sourceCount: event.source_count,
-      articleCount: event.article_count,
-      location: event.location || "Chưa rõ địa bàn",
-    }));
-  }, [events]);
-
-  const reportSections = useMemo(() => {
-    const peakTrend = trends.reduce<{ date: string; cases: number } | null>(
-      (current, item) => {
-        if (!current || item.cases > current.cases) {
-          return item;
-        }
-        return current;
-      },
-      null
-    );
-
-    return [
-      `Tổng hợp ${stats.total_articles} bài viết, ${stats.total_cases} ca ghi nhận và ${stats.alert_count} tín hiệu cảnh báo trong ${reportWindowLabel}.`,
-      peakTrend
-        ? `Ngày có tín hiệu mạnh nhất là ${peakTrend.date} với ${peakTrend.cases} ca được báo chí ghi nhận.`
-        : "Chưa có dữ liệu xu hướng đủ mạnh để kết luận ngày đỉnh tín hiệu.",
-      topSignals.length > 0
-        ? `Sự kiện cần chú ý nhất: ${topSignals[0].title}, đã xuất hiện trên ${topSignals[0].sourceCount} nguồn khác nhau.`
-        : "Chưa có sự kiện nổi bật được gom nhóm để đưa vào báo cáo.",
-    ];
-  }, [reportWindowLabel, stats, topSignals, trends]);
 
   const reportTabContent = (
     <div className="space-y-6">
@@ -469,6 +401,16 @@ const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
 
       <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
         <div className="space-y-2">
+          <Label>Loại báo cáo</Label>
+          <Select value={reportType} onValueChange={(value) => setReportType(value as "signal" | "verified")}>
+            <SelectTrigger><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="signal">Tín hiệu và sự kiện (trừ bác bỏ)</SelectItem>
+              <SelectItem value="verified">Chỉ sự kiện đã xác minh</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-2">
           <Label>Khung thời gian</Label>
           <Select value={reportScope} onValueChange={setReportScope}>
             <SelectTrigger>
@@ -482,55 +424,13 @@ const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
           </Select>
         </div>
 
-        <div className="space-y-2">
-          <Label>Đối tượng nhận báo cáo</Label>
-          <Select value={reportAudience} onValueChange={setReportAudience}>
-            <SelectTrigger>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="cdc">CDC / Trung tâm y tế dự phòng</SelectItem>
-              <SelectItem value="moh">Bộ Y tế (Cục Y tế dự phòng)</SelectItem>
-              <SelectItem value="hospital">Bệnh viện (Khoa truyền nhiễm)</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-
-        <div className="space-y-2">
-          <Label>Phạm vi địa lý (Mô phỏng)</Label>
-          <Select value={reportRegion} onValueChange={setReportRegion}>
-            <SelectTrigger>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">Toàn quốc</SelectItem>
-              <SelectItem value="north">Miền Bắc</SelectItem>
-              <SelectItem value="central">Miền Trung</SelectItem>
-              <SelectItem value="south">Miền Nam</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
       </div>
-
-      <Card>
-        <CardContent className="pt-6">
-          <div className="space-y-2">
-            <Label>Tiêu đề báo cáo</Label>
-            <Input
-              value={reportTitle}
-              onChange={e => setReportTitle(e.target.value)}
-              className="text-lg font-medium"
-            />
-            <p className="text-xs text-muted-foreground">Tiêu đề này sẽ được in trong file Word xuất ra.</p>
-          </div>
-        </CardContent>
-      </Card>
 
       <div className="space-y-6">
         <Card className="overflow-hidden">
           <CardHeader>
-            <CardTitle>Preview bảng báo cáo</CardTitle>
-            <CardDescription>Bản xem trước dữ liệu sẽ được xuất ra trong Phụ lục I</CardDescription>
+            <CardTitle>Xem nhanh sự kiện</CardTitle>
+            <CardDescription>Lọc theo loại và kỳ báo cáo; file xuất có thêm các mục chi tiết.</CardDescription>
           </CardHeader>
           <CardContent className="p-0">
             <div className="overflow-x-auto">
@@ -547,14 +447,14 @@ const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {events.length === 0 ? (
+                  {previewEvents.length === 0 ? (
                     <TableRow>
                       <TableCell colSpan={7} className="text-center py-6 text-muted-foreground">
-                        Không có dữ liệu sự kiện để hiển thị.
+                        Không có sự kiện phù hợp loại và kỳ báo cáo.
                       </TableCell>
                     </TableRow>
                   ) : (
-                    events.slice(0, 5).map((event, idx) => (
+                    previewEvents.slice(0, 5).map((event, idx) => (
                       <TableRow key={event.id}>
                         <TableCell className="font-medium">{idx + 1}</TableCell>
                         <TableCell>{new Date(event.event_date).toLocaleDateString("vi-VN")}</TableCell>
@@ -577,13 +477,13 @@ const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
                           </div>
                         </TableCell>
                         <TableCell>
-                          {event.case_count > 0 ? (
-                            <Badge variant="destructive">{event.case_count} ca</Badge>
-                          ) : "Chưa rõ"}
+                          {event.case_count != null && event.case_count > 0 ? (
+                            <Badge variant="destructive">{event.case_count} ca đã xác minh</Badge>
+                          ) : "Chưa có số ca xác minh"}
                         </TableCell>
                         <TableCell>
-                          <Badge variant={idx === 0 ? "default" : "secondary"}>
-                            {idx === 0 ? "Cảnh báo" : "Theo dõi"}
+                          <Badge variant={event.status === "verified_event" ? "default" : "secondary"}>
+                            {event.status === "verified_event" ? "Đã xác minh" : "Tín hiệu"}
                           </Badge>
                         </TableCell>
                       </TableRow>
@@ -593,7 +493,7 @@ const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
               </Table>
             </div>
             <div className="p-4 border-t text-sm text-muted-foreground text-center bg-secondary/20">
-              Chỉ hiển thị tối đa 5 sự kiện nổi bật nhất. Hãy xuất file Excel hoặc Word để xem toàn bộ danh sách.
+              Hiển thị tối đa 5 sự kiện. File xuất được tạo từ dữ liệu mới nhất.
             </div>
           </CardContent>
         </Card>
@@ -615,7 +515,7 @@ const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
             <div className="rounded-lg border p-3 text-sm space-y-2">
               <p className="font-medium text-foreground">Thông tin báo cáo</p>
               <p className="text-muted-foreground">
-                Khoảng thời gian: <strong>{scopeHours} giờ gần nhất</strong>
+                Loại: <strong>{reportType === "verified" ? "Sự kiện đã xác minh" : "Tín hiệu và sự kiện"}</strong> · Khoảng thời gian: <strong>{scopeHours} giờ gần nhất</strong>
               </p>
             </div>
 
@@ -674,15 +574,15 @@ const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
     <div className="space-y-6">
       <Tabs defaultValue="forecast" className="space-y-6">
         <TabsList className="grid w-full grid-cols-2">
-          <TabsTrigger value="zscore">Phát hiện Đột biến</TabsTrigger>
-          <TabsTrigger value="forecast">Dự báo sự kiện</TabsTrigger>
+          <TabsTrigger value="zscore">Đột biến lượt nhắc</TabsTrigger>
+          <TabsTrigger value="forecast">Dự báo xu hướng báo chí</TabsTrigger>
         </TabsList>
 
         <TabsContent value="zscore" className="space-y-6">
           <Card>
             <CardHeader className="flex flex-row items-center justify-between pb-2">
               <div className="space-y-1">
-                <CardTitle>Mô hình cảnh báo đột biến</CardTitle>
+                <CardTitle>Phát hiện đột biến lượt nhắc trên báo</CardTitle>
                 <CardDescription>Phát hiện bất thường dựa trên độ lệch chuẩn của <strong>số lượng bài báo</strong> nhắc đến bệnh theo ngày</CardDescription>
               </div>
               <DiseaseSelectorModal
@@ -781,7 +681,7 @@ const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
           <Card>
             <CardHeader className="flex flex-row items-center justify-between pb-2">
               <div className="space-y-1">
-                <CardTitle>Xu hướng Sự quan tâm</CardTitle>
+                <CardTitle>Dự báo xu hướng báo chí</CardTitle>
                 <CardDescription>Mô hình dự báo số lượng bài báo được viết về bệnh trong tương lai (Prophet AI - khoảng tin cậy 80%)</CardDescription>
               </div>
               <DiseaseSelectorModal

@@ -313,6 +313,7 @@ export default function UserManagement() {
                   disabled={editItem?.username === "epi_scout_admin"}
                 >
                   <option value="user">Người dùng (Chỉ quét & xem)</option>
+                  <option value="analyst">Chuyên viên dịch tễ</option>
                   <option value="admin">Quản trị viên (Toàn quyền)</option>
                 </select>
               </div>

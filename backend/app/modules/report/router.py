@@ -4,7 +4,7 @@ Report Router - API endpoints cho module báo cáo dịch tễ.
 import io
 import json
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional, List, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from fastapi.responses import Response
@@ -29,10 +29,12 @@ router = APIRouter(prefix="/api/report", tags=["report"])
 
 class ReportRequest(BaseModel):
     scope_hours: int = 72  # Mặc định 72h = 3 ngày
+    report_type: Literal["signal", "verified"] = "signal"
 
 
 class SendEmailRequest(BaseModel):
     scope_hours: int = 72
+    report_type: Literal["signal", "verified"] = "signal"
     attach_docx: bool = True
     attach_excel: bool = True
     custom_recipients: Optional[List[str]] = None  # Ghi đè danh sách người nhận
@@ -48,7 +50,7 @@ def generate_word_report(
     logger.info("Word report requested | scope_hours={} user={}", body.scope_hours, current_user.username)
 
     try:
-        report_data = get_report_data(db, scope_hours=body.scope_hours)
+        report_data = get_report_data(db, scope_hours=body.scope_hours, report_type=body.report_type)
         docx_bytes = build_word_report(report_data)
 
         date_str = datetime.utcnow().strftime("%Y%m%d_%H%M")
@@ -78,7 +80,7 @@ def export_ebs_excel(
     logger.info("Excel EBS report requested | scope_hours={} user={}", body.scope_hours, current_user.username)
 
     try:
-        report_data = get_report_data(db, scope_hours=body.scope_hours)
+        report_data = get_report_data(db, scope_hours=body.scope_hours, report_type=body.report_type)
         excel_bytes = build_ebs_excel(report_data, username=current_user.username)
 
         date_str = datetime.utcnow().strftime("%Y%m%d_%H%M")
@@ -108,7 +110,7 @@ def send_report_via_email(
     )
 
     try:
-        report_data = get_report_data(db, scope_hours=body.scope_hours)
+        report_data = get_report_data(db, scope_hours=body.scope_hours, report_type=body.report_type)
         docx_bytes = build_word_report(report_data) if body.attach_docx else None
         excel_bytes = build_ebs_excel(report_data) if body.attach_excel else None
 

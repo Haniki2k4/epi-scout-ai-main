@@ -26,8 +26,8 @@ interface TopDisease { disease_name: string; article_count: number }
 interface LocationItem {
   location: string;
   total_mentions: number;
-  total_cases: number;
-  diseases: { disease_name: string; mentions: number; cases: number }[];
+  total_cases: number | null;
+  diseases: { disease_name: string; mentions: number; cases: number | null }[];
 }
 interface StackedTrend { date: string;[disease: string]: number | string }
 interface StackedResult { dates: string[]; diseases: string[]; data: StackedTrend[] }
@@ -287,8 +287,8 @@ const DashboardOverview = () => {
           <CardHeader>
             <div className="flex items-center justify-between flex-wrap gap-2">
               <div>
-                <CardTitle>Xu hướng ca bệnh theo loại</CardTitle>
-                <CardDescription>Số ca từng bệnh theo ngày</CardDescription>
+                <CardTitle>Xu hướng lượt nhắc trên báo theo bệnh</CardTitle>
+                <CardDescription>Số bài báo nhắc đến từng bệnh theo ngày</CardDescription>
               </div>
               <div className="flex gap-2">
                 {stackedResult && Array.isArray(stackedResult.diseases) && stackedResult.diseases.length > 0 && (
@@ -434,7 +434,7 @@ const DashboardOverview = () => {
                 >
                   <p className="font-semibold text-foreground mb-1">📍 {hoveredLocation.name}</p>
                   <p className="text-muted-foreground text-xs mb-2">
-                    {hoveredLocation.mentions} lượt nhắc · {hoveredLocation.cases.toLocaleString()} ca
+                    {hoveredLocation.mentions} lượt nhắc · số ca chưa xác minh
                   </p>
                   <div className="space-y-1">
                     {Array.isArray(hoveredLocation.diseases) && hoveredLocation.diseases.map((d) => (

@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Unicode, UnicodeText, Float, inspect, text
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Unicode, UnicodeText, Float, UniqueConstraint, inspect, text
 from sqlalchemy.orm import relationship
 from datetime import datetime
 
@@ -13,9 +13,17 @@ class NewsEvent(Base):
     disease_name = Column(Unicode(255), index=True, nullable=False)
     location = Column(Unicode(255), nullable=True)
     event_date = Column(DateTime, default=datetime.utcnow, index=True)
-    case_count = Column(Integer, default=0)
+    case_count = Column(Integer, nullable=True)
     severity = Column(Unicode(50), nullable=True)
-    status = Column(Unicode(50), default="active")
+    status = Column(Unicode(50), default="pending_review")
+    analyst_reviewed_at = Column(DateTime, nullable=True)
+    analyst_reviewed_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    verified_at = Column(DateTime, nullable=True)
+    verified_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    rejection_reason = Column(Unicode(500), nullable=True)
+    verification_notes = Column(UnicodeText, nullable=True)
+    verification_source = Column(Unicode(500), nullable=True)
+    verified_case_source_id = Column(Integer, ForeignKey("disease_cases.id"), nullable=True)
     fingerprint = Column(String(255), index=True, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -62,6 +70,19 @@ class NewsEvent(Base):
     @property
     def sources_preview(self):
         return self.unique_sources[:5]
+
+class EventReviewLog(Base):
+    __tablename__ = "event_review_log"
+
+    id = Column(Integer, primary_key=True)
+    event_id = Column(Integer, ForeignKey("news_events.id"), nullable=False, index=True)
+    actor_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    old_status = Column(String(50), nullable=True)
+    new_status = Column(String(50), nullable=False)
+    reason = Column(Unicode(500), nullable=True)
+    notes = Column(UnicodeText, nullable=True)
+    verification_source = Column(Unicode(500), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 class ArticleIdentity(Base):
     __tablename__ = "article_identity"
@@ -132,15 +153,21 @@ class DiseaseCase(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     article_id = Column(Integer, ForeignKey("article_identity.id"))
-    
-    disease_name = Column(Unicode(255), index=True) # e.g. "Sốt xuất huyết"
-    case_count = Column(Integer, default=0)         # e.g. 5
-    location = Column(Unicode(255), nullable=True)  # e.g. "Hà Nội"
-    report_date = Column(DateTime, default=datetime.utcnow) # Time associated with the report
-    
+    disease_name = Column(Unicode(255), index=True)
+    case_count = Column(Integer, nullable=True)  # legacy; never aggregate
+    location = Column(Unicode(255), nullable=True)
+    report_date = Column(DateTime, default=datetime.utcnow)
+    reported_value = Column(Integer, nullable=True)
+    case_type = Column(String(30), nullable=True)
+    count_scope = Column(String(20), nullable=True)
+    report_period_start = Column(DateTime, nullable=True)
+    report_period_end = Column(DateTime, nullable=True)
+    evidence_quote = Column(Unicode(400), nullable=True)
+    time_allocation = Column(String(20), nullable=True)
+    location_allocation = Column(String(20), nullable=True)
+    data_quality = Column(String(20), nullable=True)
+
     article = relationship("ArticleIdentity", back_populates="cases")
-
-
 
 class Keyword(Base):
     __tablename__ = "keywords"
@@ -162,6 +189,59 @@ class RssSource(Base):
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
+
+class CrawlRun(Base):
+    __tablename__ = "crawl_runs"
+
+    id = Column(Integer, primary_key=True)
+    source_id = Column(Integer, ForeignKey("rss_sources.id"), nullable=True)
+    feed_url = Column(String(767), nullable=False)
+    started_at = Column(DateTime, nullable=False)
+    finished_at = Column(DateTime, nullable=True)
+    entries_fetched = Column(Integer, default=0)
+    entries_passed_stage1 = Column(Integer, default=0)
+    entries_saved = Column(Integer, default=0)
+    error_count = Column(Integer, default=0)
+    error_sample = Column(Unicode(500), nullable=True)
+
+
+class RssEntrySample(Base):
+    __tablename__ = "rss_entry_samples"
+
+    id = Column(Integer, primary_key=True)
+    source_id = Column(Integer, ForeignKey("rss_sources.id"), nullable=True)
+    link = Column(String(767), nullable=False)
+    title = Column(Unicode(500), nullable=False)
+    summary = Column(UnicodeText, nullable=True)
+    published_date = Column(DateTime, nullable=True)
+    sampled_at = Column(DateTime, nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+    passed_stage1 = Column(Boolean, nullable=False)
+    llm_label = Column(String(20), nullable=True)
+    predicted_disease = Column(Unicode(500), nullable=True)
+    predicted_location = Column(Unicode(255), nullable=True)
+    predicted_event_date = Column(DateTime, nullable=True)
+    predicted_case_values = Column(UnicodeText, nullable=True)
+    article_id = Column(Integer, ForeignKey("article_identity.id", ondelete="SET NULL"), nullable=True)
+    human_relevant = Column(Boolean, nullable=True)
+    labeled_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    labeled_at = Column(DateTime, nullable=True)
+    human_disease = Column(Unicode(255), nullable=True)
+    human_location = Column(Unicode(255), nullable=True)
+    human_event_date = Column(DateTime, nullable=True)
+    human_case_value = Column(Integer, nullable=True)
+
+class EventPairLabel(Base):
+    __tablename__ = "event_pair_labels"
+    __table_args__ = (UniqueConstraint("article_a_id", "article_b_id", name="uq_event_pair_articles"),)
+
+    id = Column(Integer, primary_key=True)
+    article_a_id = Column(Integer, ForeignKey("article_identity.id"), nullable=False)
+    article_b_id = Column(Integer, ForeignKey("article_identity.id"), nullable=False)
+    same_event = Column(Boolean, nullable=False)
+    predicted_same_event = Column(Boolean, nullable=False)
+    labeled_by = Column(Integer, ForeignKey("users.id"), nullable=False)
+    labeled_at = Column(DateTime, nullable=False)
 
 class SchedulerConfig(Base):
     """Cấu hình Auto Crawler Scheduler - chỉ có 1 bản ghi (id=1)"""

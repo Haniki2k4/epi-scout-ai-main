@@ -14,6 +14,7 @@ def get_report_data(
     db: Session,
     scope_hours: int = 72,
     alert: UserAlert = None,
+    report_type: str = "signal",
 ) -> dict:
     """
     Lấy dữ liệu thô từ DB để render báo cáo.
@@ -47,22 +48,34 @@ def get_report_data(
 
     # --- Top sự kiện nổi bật trong khoảng thời gian ---
     events_query = db.query(models.NewsEvent).filter(models.NewsEvent.event_date >= start_date)
+    if report_type == "verified":
+        events_query = events_query.filter(models.NewsEvent.status == "verified_event")
+    else:
+        events_query = events_query.filter(models.NewsEvent.status != "rejected")
     if location_filter:
         events_query = events_query.filter(models.NewsEvent.location.ilike(f"%{location_filter}%"))
     if keyword_filters:
         or_conditions = [models.NewsEvent.disease_name.ilike(f"%{k}%") for k in keyword_filters]
         events_query = events_query.filter(or_(*or_conditions))
 
-    top_events = events_query.order_by(models.NewsEvent.case_count.desc()).limit(10).all()
+    overview["alert_count"] = events_query.count()
+    overview["verified_events_count"] = events_query.filter(models.NewsEvent.status == "verified_event").count()
+    top_events = events_query.order_by(models.NewsEvent.event_date.desc()).limit(10).all()
+    allowed_event_ids = events_query.with_entities(models.NewsEvent.id)
+    overview["total_articles"] = db.query(models.ArticleIdentity).filter(
+        models.ArticleIdentity.published_date >= start_date,
+        models.ArticleIdentity.event_id.in_(allowed_event_ids),
+    ).count()
 
     # --- Top dịch bệnh theo số bài báo ---
     scope_days = max(1, scope_hours // 24)
-    top_diseases = stats.disease_mention_counts(db, days=scope_days)
+    top_diseases = [] if report_type == "verified" else stats.disease_mention_counts(db, days=scope_days)
 
     # --- Bài báo có tag cảnh báo ---
     alert_query = db.query(models.ArticleIdentity).join(models.ArticleDetails).filter(
         models.ArticleDetails.tags.like("%Cảnh báo%"),
         models.ArticleIdentity.published_date >= start_date,
+        models.ArticleIdentity.event_id.in_(allowed_event_ids),
     )
     if keyword_filters:
         or_conditions = [
@@ -73,7 +86,10 @@ def get_report_data(
     alert_articles = alert_query.order_by(models.ArticleIdentity.published_date.desc()).limit(5).all()
 
     # --- Bài báo mới nhất ---
-    recent_query = db.query(models.ArticleIdentity).filter(models.ArticleIdentity.published_date >= start_date)
+    recent_query = db.query(models.ArticleIdentity).filter(
+        models.ArticleIdentity.published_date >= start_date,
+        models.ArticleIdentity.event_id.in_(allowed_event_ids),
+    )
     if keyword_filters:
         # Lọc bằng cách join bảng Details nếu cần tìm theo keyword (do keywords_matched nằm ở Details)
         recent_query = recent_query.join(models.ArticleDetails)
@@ -86,6 +102,7 @@ def get_report_data(
 
     return {
         "generated_at": end_date,
+        "report_type": report_type,
         "scope_hours": scope_hours,
         "start_date": start_date,
         "end_date": end_date,

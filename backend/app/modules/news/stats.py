@@ -54,7 +54,8 @@ def top_mentions(db: Session, months: int = 1):
 def get_overview_stats(db: Session):
     # Tổng sự kiện dịch tễ mới trong 7 ngày
     seven_days_ago = datetime.utcnow() - timedelta(days=7)
-    total_events_7d = db.query(models.NewsEvent).filter(models.NewsEvent.event_date >= seven_days_ago).count()
+    total_events_7d = db.query(models.NewsEvent).filter(models.NewsEvent.event_date >= seven_days_ago, models.NewsEvent.status != "rejected").count()
+    verified_events_7d = db.query(models.NewsEvent).filter(models.NewsEvent.event_date >= seven_days_ago, models.NewsEvent.status == "verified_event").count()
 
     # Số lượng keyword (bệnh) có bài báo trong hôm nay
     today_mentions = disease_mention_counts(db, days=1)
@@ -69,6 +70,7 @@ def get_overview_stats(db: Session):
 
     return {
         "total_events_7d": total_events_7d,
+        "verified_events_7d": verified_events_7d,
         "keywords_today": keywords_today,
         "keywords_7d": keywords_7d,
         "top_disease": top["disease_name"],
@@ -78,76 +80,56 @@ def get_overview_stats(db: Session):
 
 
 def get_trend_data(db: Session, days: int = 7):
-    """
-    Get case counts by day for the last N days.
-    Logic chống cộng luỹ kế và tách riêng ngày:
-    - Trong cùng 1 ngày của 1 ổ dịch: Báo lúc 9h (10 ca), 17h (35 ca) -> Lấy một số MAX duy nhất 35.
-    - So sánh với ngày hôm qua: Báo (40 ca) -> Lấy (40) trừ đi (35 hôm qua) -> Hôm nay chỉ tăng biểu đồ cột 5 ca mới (Không gộp ngày).
-    """
-    # 1. Trích xuất cao nhất từng ngày của từng sự kiện
-    results = (
+    """Daily article mentions. Keep `cases` for one API transition period."""
+    start_date = datetime.utcnow() - timedelta(days=days - 1)
+    rows = (
         db.query(
-            models.ArticleIdentity.event_id,
-            func.date_format(models.DiseaseCase.report_date, "%Y-%m-%d").label("date_str"),
-            func.max(models.DiseaseCase.case_count).label("day_max")
+            func.date_format(models.ArticleIdentity.published_date, "%Y-%m-%d").label("date_str"),
+            func.count(models.ArticleIdentity.id).label("mentions"),
         )
-        .join(models.DiseaseCase, models.DiseaseCase.article_id == models.ArticleIdentity.id)
-        .filter(models.ArticleIdentity.event_id.isnot(None))
+        .filter(models.ArticleIdentity.published_date >= start_date)
         .filter(models.ArticleIdentity.is_excluded.isnot(True))
-        .group_by(models.ArticleIdentity.event_id, func.date_format(models.DiseaseCase.report_date, "%Y-%m-%d"))
-        .order_by(models.ArticleIdentity.event_id, func.date_format(models.DiseaseCase.report_date, "%Y-%m-%d"))
+        .group_by(func.date_format(models.ArticleIdentity.published_date, "%Y-%m-%d"))
         .all()
     )
-
-    # 2. Xử lý logic tách phần "cộng thêm" bằng Python
-    daily_net = defaultdict(int)
-    prev_max = defaultdict(int)
-
-    for event_id, date_str, day_max in results:
-        net_increase = max(0, day_max - prev_max[event_id])
-        daily_net[date_str] += net_increase
-        prev_max[event_id] = day_max
-
-    # 3. Format dữ liệu trả về cho Chart 7 ngày gần nhất
-    start_date = datetime.utcnow() - timedelta(days=days-1) # Đảm bảo mảng lấy đủ days
-    target_dates = [(start_date + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(days)]
-
-    data = []
-    for d in target_dates:
-        data.append({"date": d, "cases": daily_net[d]})
-
-    return data
-
+    counts = {row.date_str: row.mentions for row in rows}
+    return [
+        {
+            "date": day,
+            "cases": counts.get(day, 0),
+            "mention_count": counts.get(day, 0),
+            "metric_type": "mention_count",
+        }
+        for day in (
+            (start_date + timedelta(days=i)).strftime("%Y-%m-%d")
+            for i in range(days)
+        )
+    ]
 
 def get_heatmap_data(db: Session, days: int = 30):
-    start_date = datetime.utcnow() - timedelta(days=days-1)
-    results = (
-        db.query(
-            func.date_format(models.DiseaseCase.report_date, "%Y-%m-%d").label("date_str"),
-            models.DiseaseCase.disease_name,
-            func.count(func.distinct(models.DiseaseCase.article_id)).label("count"),
-        )
-        .filter(
-            models.DiseaseCase.report_date >= start_date,
-            models.DiseaseCase.disease_name.isnot(None),
-            models.DiseaseCase.disease_name != "",
-        )
-        .group_by(
-            func.date_format(models.DiseaseCase.report_date, "%Y-%m-%d"),
-            models.DiseaseCase.disease_name
-        )
+    """Daily article mentions by disease; legacy case rows are not a time series."""
+    start_date = datetime.utcnow() - timedelta(days=days - 1)
+    rows = (
+        db.query(models.ArticleIdentity.published_date, models.ArticleDetails.keywords_matched)
+        .join(models.ArticleDetails, models.ArticleDetails.article_id == models.ArticleIdentity.id)
+        .filter(models.ArticleIdentity.published_date >= start_date)
+        .filter(models.ArticleIdentity.is_excluded.isnot(True))
         .all()
     )
-    return [{"date": r.date_str, "disease": r.disease_name, "count": r.count} for r in results]
+    counts = defaultdict(int)
+    for published_date, keywords in rows:
+        if published_date and keywords:
+            for disease in {item.strip() for item in keywords.split(",") if item.strip()}:
+                counts[(published_date.strftime("%Y-%m-%d"), disease)] += 1
+    return [
+        {"date": day, "disease": disease, "count": count}
+        for (day, disease), count in sorted(counts.items())
+    ]
 
 
 def get_location_heatmap_data(db: Session, days: int = 30, month: int = None, year: int = None):
-    """
-    Trả về top địa danh được nhắc đến nhiều nhất cùng thống kê bệnh khi hover.
-    Hỗ trợ: rolling N ngày HOẶC lọc theo tháng/năm cụ thể.
-    """
+    """Article mentions by event location; do not sum source claims across articles."""
     import calendar
-    from datetime import date as date_type
 
     if month and year:
         _, last_day = calendar.monthrange(year, month)
@@ -157,103 +139,44 @@ def get_location_heatmap_data(db: Session, days: int = 30, month: int = None, ye
         end_date = datetime.utcnow()
         start_date = end_date - timedelta(days=days - 1)
 
-    # Lấy tổng số bài nhắc theo từng cặp (location, disease_name)
-    raw = (
+    rows = (
         db.query(
-            models.DiseaseCase.location,
-            models.DiseaseCase.disease_name,
-            func.count(func.distinct(models.DiseaseCase.article_id)).label("mentions"),
-            func.sum(models.DiseaseCase.case_count).label("total_cases"),
+            models.NewsEvent.location,
+            models.NewsEvent.disease_name,
+            func.count(func.distinct(models.ArticleIdentity.id)).label("mentions"),
         )
-        .join(models.ArticleIdentity, models.DiseaseCase.article_id == models.ArticleIdentity.id)
-        .filter(
-            models.DiseaseCase.report_date >= start_date,
-            models.DiseaseCase.report_date <= end_date,
-            models.DiseaseCase.location.isnot(None),
-            models.DiseaseCase.location != "",
-            models.DiseaseCase.location != "Việt Nam",
-            models.DiseaseCase.location.notin_(["unknown", "Unknown", "UNKNOWN"]),
-            models.DiseaseCase.disease_name.isnot(None),
-            models.DiseaseCase.disease_name != "",
-            models.ArticleIdentity.is_excluded != True,
-        )
-        .group_by(models.DiseaseCase.location, models.DiseaseCase.disease_name)
+        .join(models.ArticleIdentity, models.ArticleIdentity.event_id == models.NewsEvent.id)
+        .filter(models.ArticleIdentity.published_date >= start_date)
+        .filter(models.ArticleIdentity.published_date <= end_date)
+        .filter(models.ArticleIdentity.is_excluded.isnot(True))
+        .filter(models.NewsEvent.status.notin_(["rejected", "closed"]))
+        .filter(models.NewsEvent.location.isnot(None))
+        .filter(models.NewsEvent.location.notin_(["", "Việt Nam", "unknown", "Unknown", "UNKNOWN"]))
+        .group_by(models.NewsEvent.location, models.NewsEvent.disease_name)
         .all()
     )
-
-    # Gom nhóm theo location
     location_map: dict = {}
-    for row in raw:
-        loc = row.location
-        if loc not in location_map:
-            location_map[loc] = {"location": loc, "total_mentions": 0, "total_cases": 0, "diseases": []}
-        location_map[loc]["total_mentions"] += row.mentions
-        location_map[loc]["total_cases"] += (row.total_cases or 0)
-        location_map[loc]["diseases"].append({
-            "disease_name": row.disease_name,
-            "mentions": row.mentions,
-            "cases": row.total_cases or 0,
+    for row in rows:
+        item = location_map.setdefault(row.location, {
+            "location": row.location, "total_mentions": 0, "total_cases": None, "diseases": [],
+        })
+        item["total_mentions"] += row.mentions
+        item["diseases"].append({
+            "disease_name": row.disease_name, "mentions": row.mentions, "cases": None,
         })
 
-    # Tính toán Risk Score dựa trên Time-series (Z-Score đơn giản)
-    sorted_locations = sorted(location_map.values(), key=lambda x: x["total_mentions"], reverse=True)[:20]
-    for loc in sorted_locations:
-        loc["diseases"] = sorted(loc["diseases"], key=lambda d: d["mentions"], reverse=True)[:5]
-        risk_score = loc["total_mentions"]
-        for d in loc["diseases"]:
-            if d["disease_name"].lower() in ["h5n1", "bạch hầu", "cúm a/h5n1"]:
-                risk_score += 50
-        loc["risk_score"] = risk_score
-
-    sorted_locations = sorted(sorted_locations, key=lambda x: x["risk_score"], reverse=True)
-    return sorted_locations
-
+    locations = sorted(location_map.values(), key=lambda item: item["total_mentions"], reverse=True)[:20]
+    for item in locations:
+        item["diseases"] = sorted(item["diseases"], key=lambda disease: disease["mentions"], reverse=True)[:5]
+        item["risk_score"] = item["total_mentions"] + sum(
+            50 for disease in item["diseases"]
+            if disease["disease_name"].lower() in {"h5n1", "bạch hầu", "cúm a/h5n1"}
+        )
+    return sorted(locations, key=lambda item: item["risk_score"], reverse=True)
 
 def get_stacked_trend_data(db: Session, days: int = 30):
-    """
-    Trả về dữ liệu cột chồng theo ngày × top N bệnh.
-    Shape: [{ date: "2026-03-30", "Tay chân miệng": 5, "Covid-19": 2, ... }]
-    """
-    start_date = datetime.utcnow() - timedelta(days=days - 1)
-
-    # Lấy top 7 bệnh trong khoảng thời gian dựa trên ArticleDetails.keywords_matched
-    all_mentions = disease_mention_counts(db, days=days)
-    top_disease_names = [m["disease_name"] for m in all_mentions[:7]]
-
-    if not top_disease_names:
-        return {"dates": [], "diseases": [], "data": []}
-
-    # Lấy số ca mỗi bệnh mỗi ngày (Vẫn lấy từ DiseaseCase vì đây là biểu đồ số ca)
-    raw = (
-        db.query(
-            func.date_format(models.DiseaseCase.report_date, "%Y-%m-%d").label("date_str"),
-            models.DiseaseCase.disease_name,
-            func.sum(models.DiseaseCase.case_count).label("total_cases"),
-        )
-        .filter(
-            models.DiseaseCase.report_date >= start_date,
-            models.DiseaseCase.disease_name.in_(top_disease_names),
-        )
-        .group_by(
-            func.date_format(models.DiseaseCase.report_date, "%Y-%m-%d"),
-            models.DiseaseCase.disease_name,
-        )
-        .all()
-    )
-
-    day_map: dict = defaultdict(lambda: {d: 0 for d in top_disease_names})
-    for row in raw:
-        day_map[row.date_str][row.disease_name.lower()] = int(row.total_cases or 0)
-
-    target_dates = [(start_date + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(days)]
-    result = []
-    for d in target_dates:
-        entry = {"date": d}
-        entry.update(day_map[d])
-        result.append(entry)
-
-    return {"dates": target_dates, "diseases": top_disease_names, "data": result}
-
+    """Stacked chart uses article mentions, never summed source claims."""
+    return get_interest_trends(db, days)
 
 def get_interest_trends(db: Session, days: int = 30):
     """
@@ -349,7 +272,7 @@ def get_zscore_spikes(db, disease_name=None, window=14, days=60):
         spike_level = 'danger' if zscore >= 3.0 else ('alert' if zscore >= 2.0 else 'normal')
         result.append({
             'date': d, 
-            'count': cnt, 
+            'count': cnt, 'mention_count': cnt, 'metric_type': 'mention_count',
             'ma': round(ma, 2), 
             'std': round(std, 2),
             'zscore': round(zscore, 2), 
@@ -393,7 +316,7 @@ def get_prophet_forecast(db, disease_name=None, horizon_days=7):
     
     if len([h for h in historical if h["y"] > 0]) < 5:
         return {"historical": historical, "forecast": [], "disease": disease_name,
-                "horizon_days": horizon_days, "error": "Chưa đủ dữ liệu để dự báo"}
+                "horizon_days": horizon_days, "metric_type": "mention_count", "error": "Chưa đủ dữ liệu để dự báo"}
     try:
         import pandas as pd
         from prophet import Prophet
@@ -441,11 +364,11 @@ def get_prophet_forecast(db, disease_name=None, horizon_days=7):
             rmse = 0
 
         return {"historical": historical, "forecast": forecast,
-                "disease": disease_name, "horizon_days": horizon_days,
+                "disease": disease_name, "horizon_days": horizon_days, "metric_type": "mention_count",
                 "metrics": {"mae": round(mae, 2), "rmse": round(rmse, 2), "eval_method": "Train 80% / Test 20%"}}
     except Exception as e:
         return {"historical": historical, "forecast": [], "disease": disease_name,
-                "horizon_days": horizon_days, "error": str(e)}
+                "horizon_days": horizon_days, "metric_type": "mention_count", "error": str(e)}
 
 def get_keyword_timeseries(db: Session, days: int = 30):
     """

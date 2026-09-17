@@ -559,9 +559,9 @@ const KeywordMonitoring = () => {
                             
                             {article.cases && article.cases.length > 0 && (
                               <span className="ml-2 flex items-center gap-2 flex-wrap">
-                                {article.cases.filter(c => c.case_count > 0).map((c, i) => (
+                                {article.cases.filter(c => (c.reported_value ?? 0) > 0).map((c, i) => (
                                   <span key={i} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300 border border-red-200 dark:border-red-800">
-                                    {c.disease_name}: {c.case_count.toLocaleString()} ca
+                                    {c.disease_name}: {c.reported_value?.toLocaleString()} ca bài báo nêu ({c.case_type || "chưa phân loại"})
                                     {c.location && c.location.toLowerCase() !== "unknown" ? ` (${c.location})` : ''}
                                   </span>
                                 ))}
@@ -680,7 +680,7 @@ const KeywordMonitoring = () => {
                       <span>• {new Date(event.event_date).toLocaleDateString()}</span>
                       <span>• {event.article_count} bài</span>
                       <span>• {event.source_count} nguồn</span>
-                      {event.case_count > 0 && <span>• {event.case_count} ca</span>}
+                      {event.case_count != null && event.case_count > 0 && <span>• {event.case_count} ca</span>}
                     </div>
                     <div className="flex flex-wrap gap-2">
                       {event.sources_preview.map((source) => (

@@ -8,7 +8,7 @@ const ACTIVITY_EVENTS: Array<keyof WindowEventMap> = ['pointerdown', 'keydown', 
 export interface User {
   id: number;
   username: string;
-  role: 'user' | 'admin';
+  role: 'user' | 'analyst' | 'admin';
   is_active: string;
   created_at: string;
 }
@@ -16,7 +16,7 @@ export interface User {
 interface AuthContextType {
   user: User | null;
   token: string | null;
-  role: 'guest' | 'user' | 'admin';
+  role: 'guest' | 'user' | 'analyst' | 'admin';
   isGuest: boolean;
   isAuthenticated: boolean;
   isLoading: boolean;

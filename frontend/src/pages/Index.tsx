@@ -158,7 +158,7 @@ const Index = () => {
                   <DropdownMenuContent align="end" className="w-56 mt-2">
                     <DropdownMenuLabel>
                       <p className="text-sm font-medium">{user?.username}</p>
-                      <p className="text-[10px] text-muted-foreground uppercase">{user?.role === 'admin' ? 'Quản trị viên' : 'Người dùng'}</p>
+                      <p className="text-[10px] text-muted-foreground uppercase">{user?.role === 'admin' ? 'Quản trị viên' : user?.role === 'analyst' ? 'Chuyên viên dịch tễ' : 'Người dùng'}</p>
                     </DropdownMenuLabel>
                     <DropdownMenuSeparator />
                     {user?.role === "admin" && (
@@ -166,7 +166,11 @@ const Index = () => {
                         Trang quản trị
                       </DropdownMenuItem>
                     )}
-                    <DropdownMenuItem onClick={() => setActiveTab("bookmarks")} className="cursor-pointer">
+                    {(user?.role === "analyst" || user?.role === "admin") && (
+                      <DropdownMenuItem onClick={() => navigate("/signals")} className="cursor-pointer">
+                        Hàng đợi tín hiệu
+                      </DropdownMenuItem>
+                    )}                    <DropdownMenuItem onClick={() => setActiveTab("bookmarks")} className="cursor-pointer">
                       <Bookmark className="mr-2 h-4 w-4" /> Bookmark đã lưu
                     </DropdownMenuItem>
                     <UserSettingsModal>

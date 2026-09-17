@@ -7,8 +7,9 @@ import Index from "./pages/Index";
 import NotFound from "./pages/NotFound";
 import LoginPage from "./pages/LoginPage";
 import AdminInterface from "./pages/AdminInterface";
+import SignalsPage from "./pages/SignalsPage";
 import { AuthProvider } from "./contexts/AuthContext";
-import { PublicRoute, AdminRoute } from "./components/auth/AuthGuard";
+import { PublicRoute, AdminRoute, AnalystRoute } from "./components/auth/AuthGuard";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -39,7 +40,7 @@ const App = () => (
               <Route path="/admin/*" element={<AdminInterface />} />
             </Route>
 
-            {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
+            <Route element={<AnalystRoute />}><Route path="/signals" element={<SignalsPage />} /></Route>
             <Route path="*" element={<NotFound />} />
           </Routes>
         </BrowserRouter>

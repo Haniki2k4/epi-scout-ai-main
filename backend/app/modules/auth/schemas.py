@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, Literal
 from datetime import datetime
 
 class UserBase(BaseModel):
@@ -7,11 +7,11 @@ class UserBase(BaseModel):
 
 class UserCreate(UserBase):
     password: str
-    role: Optional[str] = "user"
+    role: Literal["user", "analyst", "admin"] = "user"
 
 class UserUpdate(BaseModel):
     password: Optional[str] = None
-    role: Optional[str] = None
+    role: Optional[Literal["user", "analyst", "admin"]] = None
     is_active: Optional[bool] = None
     email: Optional[str] = None
     report_schedule_type: Optional[str] = None
@@ -47,7 +47,7 @@ class Token(BaseModel):
 
 class TokenData(BaseModel):
     username: Optional[str] = None
-    role: Optional[str] = None
+    role: Optional[Literal["user", "analyst", "admin"]] = None
     
 class LoginInput(BaseModel):
     username: str

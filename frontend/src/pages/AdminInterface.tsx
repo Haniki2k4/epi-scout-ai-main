@@ -8,6 +8,7 @@ import EvaluationManagement from "@/components/admin/EvaluationManagement";
 import ArticleManagement from "@/components/admin/ArticleManagement";
 import ResourceManagement from "@/components/admin/ResourceManagement";
 import SchedulerConfig from "@/components/admin/SchedulerConfig";
+import QualityReview from "@/components/admin/QualityReview";
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
@@ -124,10 +125,11 @@ export default function AdminInterface() {
         {/* Content Tabs */}
         <div className="mt-8">
           <Tabs defaultValue="users" className="w-full">
-            <TabsList className="grid w-full grid-cols-5 max-w-[850px] mb-6">
+            <TabsList className="grid w-full grid-cols-6 max-w-[1000px] mb-6">
               <TabsTrigger value="users">Tài Khoản</TabsTrigger>
               <TabsTrigger value="evaluation" className="gap-1.5"><CheckCircle className="h-3.5 w-3.5" /> Đánh giá LLM</TabsTrigger>
               <TabsTrigger value="articles">Bài Báo</TabsTrigger>
+              <TabsTrigger value="quality">Chất lượng Scout</TabsTrigger>
               <TabsTrigger value="resources">Từ Khóa &amp; RSS</TabsTrigger>
               <TabsTrigger value="scheduler" className="gap-1.5">
                 <Clock className="h-3.5 w-3.5" />Lịch Quét
@@ -139,6 +141,7 @@ export default function AdminInterface() {
             <TabsContent value="evaluation" className="mt-0">
               <EvaluationManagement />
             </TabsContent>
+            <TabsContent value="quality" className="mt-0"><QualityReview /></TabsContent>
             <TabsContent value="articles" className="mt-0">
               <ArticleManagement />
             </TabsContent>

@@ -190,7 +190,7 @@ def build_ebs_excel(report_data: dict, username: str = "Epi Scout AI") -> bytes:
     for event in top_events:
         location_str = event.location or ""
         desc = event.canonical_title
-        case_info = f"Số ca: {event.case_count}" if event.case_count else "Chưa rõ số ca"
+        case_info = f"Số ca đã xác minh: {event.case_count}" if event.case_count is not None else "Chưa có số ca xác minh"
 
         rows_data.append({
             "date": event.event_date,
@@ -200,7 +200,7 @@ def build_ebs_excel(report_data: dict, username: str = "Epi Scout AI") -> bytes:
             "location": location_str,
             "case_info": case_info,
             "screening": "",
-            "verification": "",
+            "verification": event.status,
             "assessment": event.severity or "Đang theo dõi",
             "time_reported": "",
             "response": "",
@@ -219,7 +219,7 @@ def build_ebs_excel(report_data: dict, username: str = "Epi Scout AI") -> bytes:
                 "location": "",
                 "case_info": "Chưa rõ",
                 "screening": "",
-                "verification": "",
+                "verification": event.status,
                 "assessment": "Cảnh báo",
                 "time_reported": "",
                 "response": "",
@@ -238,7 +238,7 @@ def build_ebs_excel(report_data: dict, username: str = "Epi Scout AI") -> bytes:
                     "location": "",
                     "case_info": "Chưa rõ",
                     "screening": "",
-                    "verification": "",
+                    "verification": event.status,
                     "assessment": "Theo dõi",
                     "time_reported": "",
                     "response": "",
