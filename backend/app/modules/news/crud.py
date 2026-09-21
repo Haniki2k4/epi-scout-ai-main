@@ -325,13 +325,20 @@ def add_keyword(db: Session, text: str):
 
 def seed_default_keywords(db: Session):
     defaults = [
-        "cúm A", "cúm B", "cúm mùa", 
-        "não mô cầu", "bạch hầu", "sốt xuất huyết", 
-        "covid-19", "sởi", "tay chân miệng"
+        "cúm A", "cúm B", "cúm mùa",
+        "não mô cầu", "bạch hầu", "sốt xuất huyết",
+        "covid-19", "sởi", "tay chân miệng",
+        "bệnh dại", "quai bị", "rubella", "thương hàn", "phó thương hàn",
+        "uốn ván", "sốt rét", "bệnh than", "liên cầu lợn",
+        "lỵ amip", "lỵ trực trùng", "xoắn khuẩn vàng da", "adenovirus",
+        "H5N6", "H9N2", "Nipah", "Lassa", "Marburg",
+        "sốt Tây sông Nin", "sốt vàng",
+        "Haemophilus influenzae", "bệnh do phế cầu", "nhiễm RSV",
+        "Legionella", "nhiễm HPV", "Whitmore", "Chikungunya",
+        "Listeria",
     ]
     for text in defaults:
         add_keyword(db, text)
-
 
 # --- RSS Sources ---
 

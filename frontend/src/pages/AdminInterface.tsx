@@ -125,7 +125,7 @@ export default function AdminInterface() {
         {/* Content Tabs */}
         <div className="mt-8">
           <Tabs defaultValue="users" className="w-full">
-            <TabsList className="grid w-full grid-cols-6 max-w-[1000px] mb-6">
+            <div className="mb-6 overflow-x-auto pb-1"><TabsList className="flex h-auto min-w-max w-full justify-start gap-1 lg:grid lg:grid-cols-6">
               <TabsTrigger value="users">Tài Khoản</TabsTrigger>
               <TabsTrigger value="evaluation" className="gap-1.5"><CheckCircle className="h-3.5 w-3.5" /> Đánh giá LLM</TabsTrigger>
               <TabsTrigger value="articles">Bài Báo</TabsTrigger>
@@ -134,7 +134,7 @@ export default function AdminInterface() {
               <TabsTrigger value="scheduler" className="gap-1.5">
                 <Clock className="h-3.5 w-3.5" />Lịch Quét
               </TabsTrigger>
-            </TabsList>
+            </TabsList></div>
             <TabsContent value="users" className="mt-0">
               <UserManagement />
             </TabsContent>

@@ -172,10 +172,10 @@ export default function SignalsPage() {
     <main className="max-w-7xl mx-auto p-6 space-y-5">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold">Hàng đợi tín hiệu dịch tễ</h1>
-          <p className="text-sm text-muted-foreground">Thông tin báo chí chưa được xác minh là sự kiện bệnh truyền nhiễm.</p>
+          <h1 className="text-2xl font-semibold">Tín hiệu theo bệnh</h1>
+          <p className="text-sm text-muted-foreground">Các sự kiện từ bài báo khớp từ khóa bệnh, chờ xác minh và xử lý.</p>
         </div>
-        <Link to="/" className="text-primary underline">Về trang chính</Link>
+        <div className="flex gap-4"><Link to="/signals/gate-b" className="text-primary underline">Tín hiệu theo ngữ cảnh</Link><Link to="/" className="text-primary underline">Về trang chính</Link></div>
       </div>
       {error && <p role="alert" className="text-red-600">{error}</p>}
       <div className="grid gap-5 md:grid-cols-[320px_1fr]">

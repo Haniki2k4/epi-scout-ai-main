@@ -48,6 +48,7 @@ const SchedulerConfig = () => {
   const [scanElapsedTime, setScanElapsedTime] = useState(0);
   const [scanStartedAt, setScanStartedAt] = useState<number | null>(null);
   const scanTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const serverPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [showResultModal, setShowResultModal] = useState(false);
 
   const fetchStatus = async () => {
@@ -65,18 +66,30 @@ const SchedulerConfig = () => {
 
   useEffect(() => {
     fetchStatus();
-    // Sync scan state from sessionStorage
+    // Restore scan state from sessionStorage, but verify with server first
     const saved = sessionStorage.getItem(ADMIN_SCAN_STATE_KEY);
     if (saved) {
       const state = JSON.parse(saved);
       if (state.isScanning && state.startedAt) {
-        setRunning(true);
-        setScanStartedAt(state.startedAt);
-        setScanElapsedTime(Math.floor((Date.now() - state.startedAt) / 1000));
+        // Cross-check with server: only restore if server also says scanning
+        fetch("/api/scan-status", { headers: authHeaders() })
+          .then((r) => r.json())
+          .then((data) => {
+            if (data.is_scanning) {
+              setRunning(true);
+              setScanStartedAt(state.startedAt);
+              setScanElapsedTime(Math.floor((Date.now() - state.startedAt) / 1000));
+            } else {
+              // Server already done — clear stale state
+              sessionStorage.removeItem(ADMIN_SCAN_STATE_KEY);
+            }
+          })
+          .catch(() => sessionStorage.removeItem(ADMIN_SCAN_STATE_KEY));
       }
     }
   }, []);
 
+  // Elapsed-time ticker
   useEffect(() => {
     if (running && scanStartedAt) {
       scanTimerRef.current = setInterval(() => {
@@ -89,6 +102,31 @@ const SchedulerConfig = () => {
     }
     return () => { if (scanTimerRef.current) clearInterval(scanTimerRef.current); };
   }, [running, scanStartedAt]);
+
+  // Poll server every 5s while running — auto-clear if backend finishes unexpectedly
+  useEffect(() => {
+    if (!running) {
+      if (serverPollRef.current) clearInterval(serverPollRef.current);
+      return;
+    }
+    serverPollRef.current = setInterval(async () => {
+      try {
+        const res = await fetch("/api/scan-status", { headers: authHeaders() });
+        if (res.ok) {
+          const data = await res.json();
+          if (!data.is_scanning) {
+            // Backend done but handleRunNow hasn't returned yet (e.g. reload)
+            setRunning(false);
+            setScanStartedAt(null);
+            sessionStorage.removeItem(ADMIN_SCAN_STATE_KEY);
+            fetchStatus();
+            if (serverPollRef.current) clearInterval(serverPollRef.current);
+          }
+        }
+      } catch { /* ignore */ }
+    }, 5000);
+    return () => { if (serverPollRef.current) clearInterval(serverPollRef.current); };
+  }, [running]);
 
   const handleToggleEnabled = async (enabled: boolean) => {
     setSaving(true);

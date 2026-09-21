@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useRef, ReactNode } from 'react';
 import { toast } from 'sonner';
 
-const INACTIVITY_TIMEOUT_MS = 15 * 60 * 1000;
+const INACTIVITY_TIMEOUT_MS = 2 * 60 * 60 * 1000; // 2 giờ
 const LAST_ACTIVITY_STORAGE_KEY = 'epi_scout_last_activity_at';
 const ACTIVITY_EVENTS: Array<keyof WindowEventMap> = ['pointerdown', 'keydown', 'scroll', 'touchstart'];
 
@@ -77,7 +77,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       sessionStorage.removeItem('epi_scout_scan_state');
       setToken(null);
       setUser(null);
-      toast.success('Phiên đăng nhập đã hết hạn do không hoạt động trong 15 phút');
+      toast.info('Phiên đăng nhập đã hết hạn do không hoạt động trong 2 giờ');
       window.location.href = '/';
     };
 

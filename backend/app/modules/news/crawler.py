@@ -1,6 +1,10 @@
 import feedparser
 from sqlalchemy.orm import Session
 from . import crud, models, schemas
+from .html_utils import decode_html_entities
+from .google_news import resolve_google_news_url
+from .stage1_context import is_advisory_without_outbreak_evidence
+from .signal_detector import DETECTOR_VERSION, detect_context_signal
 from datetime import datetime, timedelta
 from urllib.parse import urlparse, quote, unquote
 from email.utils import parsedate_to_datetime
@@ -12,6 +16,7 @@ import time
 import unicodedata
 import base64
 import hashlib
+import uuid
 from dateutil import parser
 import pytz
 from bs4 import BeautifulSoup
@@ -52,27 +57,24 @@ def parse_date_advanced(entry) -> datetime:
         return datetime.now(hcm_tz)
 
 def get_source_url(source_url: str) -> str:
-    """Decode Google News Base64 link thành link báo nguyên bản."""
-    try:
-        url = urlparse(source_url)
-        path = url.path.split('/')
-        if url.hostname == "news.google.com" and len(path) > 1 and path[-2] == "articles":
-            base64_str = path[-1]
-            decoded_bytes = base64.urlsafe_b64decode(base64_str + '==')
-            decoded_str = decoded_bytes.decode('latin1')
-            prefix = bytes([0x08, 0x13, 0x22]).decode('latin1')
-            if decoded_str.startswith(prefix):
-                decoded_str = decoded_str[len(prefix):]
-            suffix = bytes([0xd2, 0x01, 0x00]).decode('latin1')
-            if decoded_str.endswith(suffix):
-                decoded_str = decoded_str[:-len(suffix)]
-            bytes_array = bytearray(decoded_str, 'latin1')
-            length = bytes_array[0]
-            decoded_str = decoded_str[2:length+1] if length >= 0x80 else decoded_str[1:length+1]
-            return decoded_str
-    except Exception:
-        pass
-    return source_url
+    """Return the publisher URL when Google News can be resolved."""
+    source_url = source_url.strip()
+    if re.fullmatch(r"AU_[A-Za-z0-9_-]+", source_url):
+        article_id = source_url.encode("ascii")
+        size = len(article_id)
+        length = bytearray()
+        while size >= 0x80:
+            length.append((size & 0x7F) | 0x80)
+            size >>= 7
+        length.append(size)
+        token = base64.urlsafe_b64encode(b"\x08\x13\x22" + bytes(length) + article_id).decode("ascii").rstrip("=")
+        source_url = f"https://news.google.com/rss/articles/{token}?oc=5"
+
+    parsed = urlparse(source_url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return ""
+    return resolve_google_news_url(source_url)
+
 # --------------------------------
 
 import requests
@@ -175,6 +177,7 @@ HARD_EXCLUDE_TITLE_TERMS = [
     "clip", "nổ súng", "lao sang", "lao ra", "lao thẳng", "lao về phía",
     "lao tới", "kết thúc ", "nâng cao", "lao khỏi", "video", "lao qua",
     "mô tả", "miêu tả", "buôn lậu", "gây sốt", "nhập lậu", "vàng lậu",
+    "sốt ruột", "sốt mạng"
 ]
 
 # Context terms that raise the epidemiological signal score
@@ -204,6 +207,13 @@ MATCH_THRESHOLD_EXTENDED = 0.8  # Tự động lọc các bài báo mở rộng 
 # LLM re-check config
 # ---------------------------------------------------------------------------
 LLM_RECHECK_ENABLED = os.getenv("LLM_RECHECK_ENABLED", "false").lower() == "true"
+GATE_B_ENABLED = os.getenv("GATE_B_ENABLED", "true").lower() == "true"
+GATE_B_LLM_ENABLED = os.getenv("GATE_B_LLM_ENABLED", "false").lower() == "true"
+_gate_b_allowlist_raw = os.getenv("GATE_B_LLM_FEED_ALLOWLIST", "").strip()
+GATE_B_LLM_FEED_ALLOWLIST = (
+    {"*"} if _gate_b_allowlist_raw == "*"
+    else {feed.strip() for feed in _gate_b_allowlist_raw.split(",") if feed.strip()}
+)
 LLM_RECHECK_MODEL = os.getenv("LLM_RECHECK_MODEL", "").strip()
 LLM_FALLBACK_MODEL = os.getenv("LLM_FALLBACK_MODEL", "").strip()
 LLM_RECHECK_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
@@ -376,6 +386,30 @@ _SCHEMA_BLOCK = """
 - Mỗi phần tử PHẢI có trường 'disease_name' khớp với một keyword.
 """.strip()
 
+_GATE_B_CRITERIA = """
+Phân loại tin y tế thực địa không có từ khóa bệnh đã cấu hình.
+Relevant: chùm ca bệnh hoặc triệu chứng bất thường, động vật chết/nghi nhiễm,
+nguồn nước/thực phẩm gây nhiều ca, hay phản ứng chống dịch tại địa phương.
+Noise/irrelevant: lời khuyên sức khỏe, dịch vụ, quảng cáo, hội thảo chung,
+ẩn dụ, thiên tai hoặc sự việc không có tín hiệu y tế thực địa.
+Không suy đoán tên bệnh; khi chưa rõ bệnh trả diseases=[].
+""".strip()
+
+_SCHEMA_BLOCK_GATE_B = """
+Chỉ trả một object JSON hợp lệ. Ví dụ khi chưa xác định bệnh:
+{"label":"relevant","normalized_title":"Chùm ca sốt tại trường X",
+ "matched_keywords":[],"location":"Hà Nội","diseases":[],
+ "severity":null,"reason":"Có chùm ca bất thường tại địa phương"}
+
+label phải là một trong relevant, noise, irrelevant, unsure.
+matched_keywords luôn là mảng rỗng vì bài không qua cửa từ khóa.
+Nếu bài nêu rõ tên bệnh, diseases có thể gồm object với disease_name,
+cumulative_cases, new_cases, suspected_cases, case_status,
+event_start_date, event_end_date và observations như luồng cửa A.
+Nếu chưa xác định bệnh, diseases phải là mảng rỗng. Không bịa bệnh hoặc số ca.
+Relevant cũng có thể là tín hiệu thực địa chưa xác định bệnh.
+""".strip()
+
 # ---------------------------------------------------------------------------
 # LLM preflight cache
 # ---------------------------------------------------------------------------
@@ -512,7 +546,7 @@ def normalize_text(text: str) -> str:
         return ""
     from bs4 import BeautifulSoup
 
-    decoded = html.unescape(text)
+    decoded = decode_html_entities(text)
 
     # Nếu không có HTML tag → trả luôn, không cần parse
     if "<" not in decoded:
@@ -1001,9 +1035,10 @@ def resolve_event_for_article(
     severity: str | None,
     suspected_cases: int = 0,
     event_date: datetime | None = None,
+    override_disease_name: str | None = None,
 ) -> tuple[models.NewsEvent | None, float | None, str | None, int]:
     MATCH_SCORE_THRESHOLD = 0.75
-    primary_keyword = extract_primary_keyword(matched_keywords)
+    primary_keyword = override_disease_name or extract_primary_keyword(matched_keywords)
     if not primary_keyword:
         return None, None, None, 0
 
@@ -1247,10 +1282,16 @@ def log_llm_preflight_status(force_refresh: bool = False) -> dict[str, str | boo
 # LLM prompt builder
 # ===========================================================================
 
-def build_llm_recheck_prompt(title: str, summary: str, keywords: list[str], suggestions: list[str] = []) -> str:
+def build_llm_recheck_prompt(title: str, summary: str, keywords: list[str], suggestions: list[str] = [], is_context: bool = False) -> str:
     """
     Assemble the user-turn prompt for the LLM classifier.
     """
+    if is_context:
+        return "\n\n".join([
+            _GATE_B_CRITERIA,
+            _SCHEMA_BLOCK_GATE_B,
+            f"Tiêu đề: {title}\nTóm tắt: {summary}",
+        ])
     few_shot_blocks = [_FEW_SHOT_BLOCK]
     labeled_dataset_block = get_labeled_dataset_few_shot_block()
     if labeled_dataset_block:
@@ -1525,6 +1566,7 @@ def llm_recheck_article(
     summary: str,
     candidate_keywords: list[str],
     suggestions: list[str] = [],
+    is_context: bool = False,
 ) -> tuple[str, list[str], str, dict]:
     """
     Call the LLM to classify an article and extract structured metadata.
@@ -1544,7 +1586,7 @@ def llm_recheck_article(
     """
     EMPTY_META: dict = {"location": None, "cumulative_cases": 0, "new_cases": 0, "severity": None}
 
-    if not candidate_keywords:
+    if not candidate_keywords and not is_context:
         return "irrelevant", [], "No candidate keywords", EMPTY_META
 
     if not LLM_RECHECK_ENABLED:
@@ -1561,7 +1603,7 @@ def llm_recheck_article(
         logger.warning("LLM re-check skipped | reason={}", preflight.get("message"))
         return "unsure", candidate_keywords, str(preflight.get("message")), EMPTY_META
 
-    prompt = build_llm_recheck_prompt(title, summary, candidate_keywords, suggestions)
+    prompt = build_llm_recheck_prompt(title, summary, candidate_keywords, suggestions, is_context=is_context)
 
     try:
         global _llm_circuit_failures, _llm_circuit_state
@@ -1683,6 +1725,10 @@ def matches_keywords(title: str, summary: str, keywords: list[str]) -> str | Non
     title_lower = normalize_text(title).lower()
     summary_lower = normalize_text(summary).lower()
 
+    # Advice/FAQ content is not an epidemiological signal unless concrete outbreak evidence exists.
+    if is_advisory_without_outbreak_evidence(title_lower, summary_lower):
+        return None
+
     # Hard-exclude on title only
     if any(ex in title_lower for ex in HARD_EXCLUDE_TITLE_TERMS):
         return None
@@ -1723,8 +1769,6 @@ def matches_keywords(title: str, summary: str, keywords: list[str]) -> str | Non
 # ===========================================================================
 # Main scan entry-point
 # ===========================================================================
-
-is_scanning_flag = False
 
 def _parse_report_date(value: object) -> datetime | None:
     if not value:
@@ -1816,6 +1860,10 @@ def _persist_crawl_run(
     error_count: int,
     error_sample: str | None,
     samples: list[dict],
+    scan_run_id: str,
+    eligible_entries_total: int,
+    gate_b_counts: dict[str, int],
+    gate_b_active_total: int,
 ) -> None:
     """Persist feed health separately from per-article transactions."""
     from ...core.database import SessionLocal
@@ -1836,17 +1884,61 @@ def _persist_crawl_run(
                 entries_saved=entries_saved,
                 error_count=error_count,
                 error_sample=(error_sample or "")[:500] or None,
+                scan_run_id=scan_run_id,
+                eligible_entries_total=eligible_entries_total,
+                gate_b_candidates_total=sum(gate_b_counts.values()),
+                gate_b_active_total=gate_b_active_total,
+                gate_b_unexplained_cluster=gate_b_counts["unexplained_cluster"],
+                gate_b_animal_signal=gate_b_counts["animal_signal"],
+                gate_b_environment_signal=gate_b_counts["environment_signal"],
+                gate_b_field_response=gate_b_counts["field_response"],
             ))
             for sample in samples:
-                existing = run_db.query(models.RssEntrySample.id).filter(
+                existing = run_db.query(models.RssEntrySample).filter(
                     models.RssEntrySample.link == sample["link"],
+                    models.RssEntrySample.gate_b_mode == sample["gate_b_mode"],
+                    models.RssEntrySample.detector_version == sample["detector_version"],
                     models.RssEntrySample.expires_at >= now,
                 ).first()
                 if existing is None:
                     run_db.add(models.RssEntrySample(**sample))
+                elif sample.get("article_id") and existing.article_id is None:
+                    existing.article_id = sample["article_id"]
+                    existing.predicted_disease = sample.get("predicted_disease")
+                    existing.predicted_location = sample.get("predicted_location")
+                    existing.predicted_event_date = sample.get("predicted_event_date")
+                    existing.predicted_case_values = sample.get("predicted_case_values")
             run_db.commit()
     except Exception:
         logger.exception("Could not record crawl health | feed_url={}", feed_url)
+        raise
+
+
+def _create_scan_run(scan_run_id: str) -> None:
+    from ...core.database import SessionLocal
+    with SessionLocal() as run_db:
+        run_db.add(models.ScanRun(scan_run_id=scan_run_id, started_at=datetime.utcnow(), status="running"))
+        run_db.commit()
+
+
+def _finalize_scan_run(scan_run_id: str, status: str, feed_count: int | None = None) -> None:
+    from ...core.database import SessionLocal
+    with SessionLocal() as run_db:
+        row = run_db.get(models.ScanRun, scan_run_id)
+        if row is None:
+            raise RuntimeError(f"ScanRun missing: {scan_run_id}")
+        if status == "completed":
+            persisted = run_db.query(models.CrawlRun).filter(models.CrawlRun.scan_run_id == scan_run_id).count()
+            if persisted != feed_count:
+                raise RuntimeError(f"ScanRun feed count mismatch: {persisted}/{feed_count}")
+            row.completed_at = datetime.utcnow()
+        else:
+            row.completed_at = None
+        row.status = status
+        row.feed_count = feed_count
+        row.error_count = sum(value or 0 for (value,) in run_db.query(models.CrawlRun.error_count).filter(models.CrawlRun.scan_run_id == scan_run_id))
+        run_db.commit()
+
 
 def scan_news(
     db: Session,
@@ -1870,6 +1962,7 @@ def scan_news(
     global is_scanning_flag
     is_scanning_flag = True
     _start_llm_session()
+    scan_run_id = None
     try:
         # ------------------------------------------------------------------
         # 1. Bootstrap: keywords + whitelist
@@ -1902,7 +1995,7 @@ def scan_news(
             len(keywords),
         )
 
-        if not keywords:
+        if not keywords and not GATE_B_ENABLED:
             logger.warning("Scan crawl skipped | reason=no_keywords")
             return schemas.ScanResult(saved_trusted_count=0, execution_time=0, disease_counts={})
 
@@ -1961,6 +2054,8 @@ def scan_news(
                 all_feeds.append(f"https://news.google.com/rss/search?q={encoded_trusted}&hl=vi&gl=VN&ceid=VN:vi")
 
         source_ids = {source.url: source.id for source in rss_sources}
+        scan_run_id = str(uuid.uuid4())
+        _create_scan_run(scan_run_id)
         for feed_url in all_feeds:
             feed_started_at = datetime.utcnow()
             feed_entries_fetched = 0
@@ -1969,6 +2064,9 @@ def scan_news(
             feed_errors = 0
             feed_error_sample = None
             feed_samples: list[dict] = []
+            feed_eligible_entries = 0
+            feed_gate_b_active = 0
+            gate_b_counts = {key: 0 for key in ("unexplained_cluster", "animal_signal", "environment_signal", "field_response")}
             try:
                 logger.info("Parsing feed | feed_url={}", feed_url)
                 feed = feedparser.parse(feed_url)
@@ -2008,6 +2106,7 @@ def scan_news(
                         entry.get("summary", "") or entry.get("description", "")
                     )
 
+                    feed_eligible_entries += 1
                     sample = None
                     # Sample every eligible RSS entry before video and keyword filters.
                     if int(hashlib.sha256(link.encode("utf-8")).hexdigest()[:8], 16) % 10 == 0:
@@ -2016,7 +2115,9 @@ def scan_news(
                             "title": title[:500], "summary": summary[:2000],
                             "published_date": pub_date, "sampled_at": datetime.utcnow(),
                             "expires_at": datetime.utcnow() + timedelta(days=30),
-                            "passed_stage1": False,
+                            "passed_stage1": False, "stage1_route": "none",
+                            "gate_b_mode": None, "gate_b_evaluated": False,
+                            "detector_matched": False, "detector_version": None,
                         }
                         feed_samples.append(sample)
 
@@ -2026,10 +2127,35 @@ def scan_news(
                     total_checked += 1
                     # ---- Stage 1: regex keyword filter (wide net) ----
                     matched_kw_str = matches_keywords(title, summary, keywords)
-                    if not matched_kw_str:
+                    stage1_route = "keyword" if matched_kw_str else "none"
+                    signal_match = None
+                    can_use_gate_b_llm = False
+                    if stage1_route == "keyword":
+                        if sample is not None:
+                            sample["stage1_route"] = "keyword"
+                    elif GATE_B_ENABLED:
+                        signal_match = detect_context_signal(title, summary)
+                        if sample is not None:
+                            sample["gate_b_evaluated"] = True
+                            sample["detector_version"] = DETECTOR_VERSION
+                        if signal_match:
+                            stage1_route = "context"
+                            gate_b_counts[signal_match.signal_type] += 1
+                            can_use_gate_b_llm = (
+                                GATE_B_LLM_ENABLED and LLM_RECHECK_ENABLED
+                                and ("*" in GATE_B_LLM_FEED_ALLOWLIST or feed_url in GATE_B_LLM_FEED_ALLOWLIST)
+                            )
+                            if sample is not None:
+                                sample["stage1_route"] = "context"
+                                sample["gate_b_mode"] = "active" if can_use_gate_b_llm else "shadow"
+                                sample["detector_matched"] = True
+                                sample["context_signal_type"] = signal_match.signal_type
+                    if stage1_route == "none" or (stage1_route == "context" and not can_use_gate_b_llm):
                         continue
 
                     feed_passed_stage1 += 1
+                    if stage1_route == "context":
+                        feed_gate_b_active += 1
                     if sample is not None:
                         sample["passed_stage1"] = True
                     candidate_keywords = [
@@ -2045,10 +2171,11 @@ def scan_news(
                     suggestions = extract_potential_numbers(title + " " + effective_summary)
                     
                     llm_label, llm_keywords, llm_reason, llm_meta = llm_recheck_article(
-                        title, effective_summary, candidate_keywords, suggestions
+                        title, effective_summary, candidate_keywords, suggestions, is_context=stage1_route == "context"
                     )
                     if sample is not None:
                         sample["llm_label"] = llm_label
+                        sample["llm_reason"] = llm_reason[:500]
 
                     # Count LLM labels for scan stats
                     if llm_label == "irrelevant":
@@ -2060,24 +2187,27 @@ def scan_news(
 
                     if llm_label == "irrelevant":
                         logger.info(
-                            "LLM filtered article as irrelevant | title={} reason={}",
+                            "LLM classified article as irrelevant; persisting as excluded | title={} reason={}",
                             title,
                             llm_reason,
                         )
-                        continue
 
                     if llm_label == "relevant" and llm_keywords:
                         matched_kw_str = ", ".join(llm_keywords)
 
                     # ---- Parse mảng diseases từ LLM ----
                     # Mỗi bệnh là 1 phần tử, cho phép xử lý bài đề cập nhiều bệnh cùng lúc
-                    diseases_list = [
-                        item for item in (llm_meta.get("diseases") or [])
-                        if isinstance(item, dict)
-                    ]
+                    diseases_list = (
+                        [
+                            item for item in (llm_meta.get("diseases") or [])
+                            if isinstance(item, dict)
+                        ]
+                        if llm_label == "relevant"
+                        else []
+                    )
                     
                     # Fallback backward compat: nếu LLM cũ trả về field cũ (không phải mảng)
-                    if not diseases_list:
+                    if llm_label == "relevant" and not diseases_list and stage1_route == "keyword":
                         llm_cumulative = llm_meta.get("cumulative_cases", 0)
                         llm_new = llm_meta.get("new_cases", 0)
                         
@@ -2107,7 +2237,7 @@ def scan_news(
                             disease[field] = _normalize_llm_case_count(disease.get(field))
                     # Cập nhật keywords_matched cho bài nhiều bệnh
                     # Chỉ lấy bệnh có số ca > 0 (confirmed hoặc suspected) để tránh match ngữ cảnh rộng
-                    if llm_label == "relevant" and diseases_list:
+                    if llm_label == "relevant" and diseases_list and stage1_route == "keyword":
                         disease_names_from_llm = [
                             d.get("disease_name") for d in diseases_list
                             if d.get("disease_name")
@@ -2168,14 +2298,29 @@ def scan_news(
                     # Sync logic: Kiểm tra link trùng lặp cho tất cả các nguồn
                     existing = crud.get_article_by_link(db, link)
                     if existing:
-                        logger.debug("Article link already exists | link={}", link)
+                        if sample is not None:
+                            sample["article_id"] = existing.id
+                            sample["predicted_disease"] = (
+                                existing.details.keywords_matched[:500]
+                                if existing.details and existing.details.keywords_matched else None
+                            )
+                            sample["predicted_location"] = (
+                                existing.details.location[:255]
+                                if existing.details and existing.details.location else None
+                            )
+                            sample["predicted_event_date"] = existing.event.event_date if existing.event else None
+                            sample["predicted_case_values"] = json.dumps([
+                                case.reported_value for case in existing.cases
+                                if case.reported_value is not None
+                            ])
+                        logger.debug("Article link already exists | link={} article_id={}", link, existing.id)
                         continue
 
                     try:
-                        if llm_label in {"noise", "irrelevant", "unsure"}:
+                        if stage1_route == "context" or llm_label in {"noise", "irrelevant", "unsure"}:
                             event = None
                             event_match_score = None
-                            dedupe_reason = f"Excluded by LLM label: {llm_label}"
+                            dedupe_reason = "gate_b_pending_analyst_review" if stage1_route == "context" else f"Excluded by LLM label: {llm_label}"
                         else:
                             event, event_match_score, dedupe_reason, _ = resolve_event_for_article(
                                 db=db,
@@ -2220,7 +2365,13 @@ def scan_news(
                             elif total_confirmed:
                                 article_dto.tags = f"cases:{total_confirmed}"
                         saved_article = crud.create_article(db, article_dto)
-                        saved_article.is_excluded = llm_label in {"noise", "irrelevant", "unsure"}
+                        saved_article.is_excluded = stage1_route == "context" or llm_label in {"noise", "irrelevant", "unsure"}
+                        saved_article.details.stage1_route = stage1_route
+                        saved_article.details.llm_reason = llm_reason[:500]
+                        if signal_match:
+                            saved_article.details.context_signal_type = signal_match.signal_type
+                            saved_article.details.context_matched_phrases = json.dumps(signal_match.matched_phrases, ensure_ascii=False)[:1000]
+                            saved_article.details.context_evidence_text = signal_match.evidence_text
 
                         from ..evaluation.models import ArticleEvaluation as EvalModel
                         db.add(EvalModel(article_id=saved_article.id, llm_label=llm_label))
@@ -2252,7 +2403,7 @@ def scan_news(
                         logger.exception("Article skipped due to error | link={} err={}", link, exc)
                         continue
                     # Theo dõi số bài theo từng bệnh (disease_counts)
-                    for d_entry in diseases_list:
+                    for d_entry in diseases_list if stage1_route == "keyword" and llm_label == "relevant" else []:
                         d_name_key = d_entry.get("disease_name") or matched_kw_str.split(", ")[0]
                         d_name_key = d_name_key.strip().lower()
                         disease_counts[d_name_key] = disease_counts.get(d_name_key, 0) + 1
@@ -2267,8 +2418,10 @@ def scan_news(
                     feed_url, source_ids.get(feed_url), feed_started_at,
                     feed_entries_fetched, feed_passed_stage1, feed_saved,
                     feed_errors, feed_error_sample, feed_samples,
+                    scan_run_id, feed_eligible_entries, gate_b_counts, feed_gate_b_active,
                 )
 
+        _finalize_scan_run(scan_run_id, "completed", len(all_feeds))
         execution_time = (datetime.now() - start_time).total_seconds()
         logger.info(
             "Scan crawl completed | saved_trusted_count={} seen_links={} duration={:.2f}s",
@@ -2288,6 +2441,13 @@ def scan_news(
             started_at=start_time,
         )
         return result
+    except Exception:
+        if scan_run_id is not None:
+            try:
+                _finalize_scan_run(scan_run_id, "failed")
+            except Exception:
+                logger.exception("Could not mark scan failed | scan_run_id={}", scan_run_id)
+        raise
     finally:
         _finish_llm_session()
         is_scanning_flag = False

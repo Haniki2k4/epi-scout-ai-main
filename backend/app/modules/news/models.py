@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Unicode, UnicodeText, Float, UniqueConstraint, inspect, text
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Unicode, UnicodeText, JSON, Float, UniqueConstraint, Index, inspect, text
 from sqlalchemy.orm import relationship
 from datetime import datetime
 
@@ -145,7 +145,13 @@ class ArticleDetails(Base):
     is_whitelisted = Column(Boolean, default=False)
     outbreak_relevance_score = Column(Float, default=0.0)
     is_suspected_false_positive = Column(Boolean, default=False)
-    
+    stage1_route = Column(String(20), nullable=True)
+    context_signal_type = Column(String(50), nullable=True)
+    context_matched_phrases = Column(Unicode(1000), nullable=True)
+    context_evidence_text = Column(UnicodeText, nullable=True)
+    llm_reason = Column(Unicode(500), nullable=True)
+    review_version = Column(Integer, nullable=False, default=0)
+
     identity = relationship("ArticleIdentity", back_populates="details")
 
 class DiseaseCase(Base):
@@ -203,6 +209,26 @@ class CrawlRun(Base):
     entries_saved = Column(Integer, default=0)
     error_count = Column(Integer, default=0)
     error_sample = Column(Unicode(500), nullable=True)
+    scan_run_id = Column(String(36), ForeignKey("scan_runs.scan_run_id"), nullable=True)
+    eligible_entries_total = Column(Integer, nullable=True)
+    gate_b_candidates_total = Column(Integer, nullable=True)
+    gate_b_active_total = Column(Integer, nullable=True)
+    gate_b_unexplained_cluster = Column(Integer, nullable=True)
+    gate_b_animal_signal = Column(Integer, nullable=True)
+    gate_b_environment_signal = Column(Integer, nullable=True)
+    gate_b_field_response = Column(Integer, nullable=True)
+
+
+class ScanRun(Base):
+    __tablename__ = "scan_runs"
+    __table_args__ = (Index("ix_scan_runs_status_completed", "status", "completed_at"),)
+
+    scan_run_id = Column(String(36), primary_key=True)
+    started_at = Column(DateTime, nullable=False)
+    completed_at = Column(DateTime, nullable=True)
+    status = Column(String(20), nullable=False, default="running")
+    feed_count = Column(Integer, nullable=True)
+    error_count = Column(Integer, nullable=False, default=0)
 
 
 class RssEntrySample(Base):
@@ -227,9 +253,39 @@ class RssEntrySample(Base):
     labeled_by = Column(Integer, ForeignKey("users.id"), nullable=True)
     labeled_at = Column(DateTime, nullable=True)
     human_disease = Column(Unicode(255), nullable=True)
+    human_diseases = Column(JSON, nullable=True)
     human_location = Column(Unicode(255), nullable=True)
     human_event_date = Column(DateTime, nullable=True)
     human_case_value = Column(Integer, nullable=True)
+    stage1_route = Column(String(20), nullable=True)
+    gate_b_mode = Column(String(10), nullable=True)
+    gate_b_evaluated = Column(Boolean, nullable=True)
+    detector_matched = Column(Boolean, nullable=True)
+    detector_version = Column(String(30), nullable=True)
+    context_signal_type = Column(String(50), nullable=True)
+    human_signal_label = Column(String(30), nullable=True)
+    llm_reason = Column(Unicode(500), nullable=True)
+
+
+class ContextSignalReview(Base):
+    __tablename__ = "context_signal_reviews"
+    __table_args__ = (Index("ix_context_signal_reviews_article_current", "article_id", "is_superseded"),)
+
+    id = Column(Integer, primary_key=True)
+    article_id = Column(Integer, ForeignKey("article_identity.id", ondelete="CASCADE"), nullable=False)
+    reviewer_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    reviewed_at = Column(DateTime, nullable=False)
+    version = Column(Integer, nullable=False, default=1)
+    request_id = Column(String(36), unique=True, nullable=True)
+    decision = Column(String(30), nullable=False)
+    is_superseded = Column(Boolean, nullable=False, default=False)
+    signal_evidence = Column(UnicodeText, nullable=True)
+    reason = Column(Unicode(500), nullable=False)
+    disease_name = Column(Unicode(255), nullable=True)
+    disease_source = Column(Unicode(500), nullable=True)
+    location = Column(Unicode(255), nullable=True)
+    event_id = Column(Integer, ForeignKey("news_events.id", ondelete="SET NULL"), nullable=True)
+
 
 class EventPairLabel(Base):
     __tablename__ = "event_pair_labels"
@@ -260,6 +316,3 @@ class SchedulerConfig(Base):
     last_scan_started_at = Column(DateTime, nullable=True) # Thời điểm bắt đầu quét
     last_scan_duration_seconds = Column(Integer, default=0) # Tổng thời gian quét (giây)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-
-

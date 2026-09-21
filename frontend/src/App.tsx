@@ -8,6 +8,7 @@ import NotFound from "./pages/NotFound";
 import LoginPage from "./pages/LoginPage";
 import AdminInterface from "./pages/AdminInterface";
 import SignalsPage from "./pages/SignalsPage";
+import SignalQueue from "./components/analyst/SignalQueue";
 import { AuthProvider } from "./contexts/AuthContext";
 import { PublicRoute, AdminRoute, AnalystRoute } from "./components/auth/AuthGuard";
 
@@ -40,7 +41,7 @@ const App = () => (
               <Route path="/admin/*" element={<AdminInterface />} />
             </Route>
 
-            <Route element={<AnalystRoute />}><Route path="/signals" element={<SignalsPage />} /></Route>
+            <Route element={<AnalystRoute />}><Route path="/signals" element={<SignalsPage />} /><Route path="/signals/gate-b" element={<SignalQueue />} /></Route>
             <Route path="*" element={<NotFound />} />
           </Routes>
         </BrowserRouter>

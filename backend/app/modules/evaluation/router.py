@@ -261,16 +261,15 @@ def update_human_label(
     db: Session = Depends(get_db),
     current_admin=Depends(security.require_admin_role)
 ):
-    eval_record = crud.update_human_label(
-        db, 
-        article_id, 
-        body.human_label, 
-        current_admin.id,
-        keyword_is_correct=body.keyword_is_correct,
-        corrected_keyword=body.corrected_keyword,
-        update_article_keyword=body.update_article_keyword
-    )
-    return eval_record
+    try:
+        return crud.update_human_label(
+            db, article_id, body.human_label, current_admin.id,
+            keyword_is_correct=body.keyword_is_correct,
+            corrected_keyword=body.corrected_keyword,
+            update_article_keyword=body.update_article_keyword,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.post("/import-excel")
@@ -380,6 +379,11 @@ async def import_evaluations_excel(
             if not article:
                 summary["not_found"] += 1
                 details.append({"row": excel_row_number, "status": "not_found"})
+                continue
+
+            if article.details and article.details.stage1_route == "context":
+                summary["skipped"] += 1
+                details.append({"row": excel_row_number, "status": "requires_context_review", "article_id": article.id})
                 continue
 
             imported_llm_label = _normalize_label(_get_cell(row, columns.get("llm_label")))

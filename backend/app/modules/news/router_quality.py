@@ -4,22 +4,43 @@ from datetime import datetime, timedelta
 from statistics import median
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 
 from ...core.database import get_db
 from ..auth.security import require_admin_role
 from . import models
+from .crawler import get_source_url
+from .signal_detector import DETECTOR_VERSION
 
 router = APIRouter(prefix="/api/quality", tags=["quality"])
 
 
 class SampleLabel(BaseModel):
-    human_relevant: bool
+    human_relevant: bool | None = None
+    human_signal_label: str | None = Field(default=None, pattern="^(confirmed_event|early_signal|noise|irrelevant)$")
     human_disease: str | None = Field(default=None, max_length=255)
+    human_diseases: list[str] | None = Field(default=None, max_length=20)
     human_location: str | None = Field(default=None, max_length=255)
     human_event_date: datetime | None = None
     human_case_value: int | None = Field(default=None, ge=0)
+
+    @field_validator("human_diseases")
+    @classmethod
+    def validate_diseases(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        result = []
+        seen = set()
+        for name in value:
+            normalized = name.strip()
+            if not normalized or len(normalized) > 255:
+                raise ValueError("Each disease name must contain 1-255 characters")
+            key = normalized.casefold()
+            if key not in seen:
+                result.append(normalized)
+                seen.add(key)
+        return result
 
 
 @router.get("/samples")
@@ -34,9 +55,16 @@ def list_samples(
         query = query.filter(models.RssEntrySample.human_relevant.is_(None))
     rows = query.order_by(models.RssEntrySample.sampled_at.desc()).limit(min(max(limit, 1), 200)).all()
     return [{
-        "id": row.id, "link": row.link, "title": row.title, "summary": row.summary,
+        "id": row.id, "link": get_source_url(row.link), "title": row.title, "summary": row.summary,
         "published_date": row.published_date, "sampled_at": row.sampled_at,
         "passed_stage1": row.passed_stage1, "human_relevant": row.human_relevant,
+        "stage1_route": row.stage1_route, "gate_b_mode": row.gate_b_mode,
+        "gate_b_evaluated": row.gate_b_evaluated,
+        "detector_matched": row.detector_matched,
+        "detector_version": row.detector_version,
+        "context_signal_type": row.context_signal_type,
+        "human_signal_label": row.human_signal_label,
+        "human_diseases": row.human_diseases if row.human_diseases is not None else ([row.human_disease] if row.human_disease else []),
     } for row in rows]
 
 
@@ -50,8 +78,27 @@ def label_sample(
     row = db.get(models.RssEntrySample, sample_id)
     if row is None or row.expires_at < datetime.utcnow():
         raise HTTPException(status_code=404, detail="Sample not found or expired")
-    row.human_relevant = body.human_relevant
-    row.human_disease = body.human_disease
+    is_context_sample = row.stage1_route == "context" or (row.stage1_route == "none" and row.gate_b_evaluated is True)
+    if is_context_sample:
+        if body.human_signal_label is None:
+            raise HTTPException(status_code=422, detail="Gate B samples require human_signal_label")
+        inferred = body.human_signal_label in {"confirmed_event", "early_signal"}
+        if body.human_relevant is not None and body.human_relevant != inferred:
+            raise HTTPException(status_code=422, detail="human_relevant conflicts with human_signal_label")
+        row.human_relevant = inferred
+        row.human_signal_label = body.human_signal_label
+    else:
+        if body.human_relevant is None:
+            raise HTTPException(status_code=422, detail="human_relevant is required")
+        row.human_relevant = body.human_relevant
+        row.human_signal_label = None
+    if body.human_diseases is not None and body.human_disease is not None:
+        raise HTTPException(status_code=422, detail="Use human_diseases or legacy human_disease, not both")
+    diseases = body.human_diseases if body.human_diseases is not None else (
+        [body.human_disease.strip()] if body.human_disease and body.human_disease.strip() else []
+    )
+    row.human_diseases = diseases
+    row.human_disease = diseases[0] if len(diseases) == 1 else None
     row.human_location = body.human_location
     row.human_event_date = body.human_event_date
     row.human_case_value = body.human_case_value
@@ -76,14 +123,15 @@ def get_quality_metrics(
         .filter(models.RssEntrySample.expires_at >= datetime.utcnow())
         .all()
     )
-    tp = sum(row.passed_stage1 and row.human_relevant for row in rows)
-    fp = sum(row.passed_stage1 and not row.human_relevant for row in rows)
-    fn = sum(not row.passed_stage1 and row.human_relevant for row in rows)
+    gate_a_rows = [row for row in rows if row.human_signal_label is None]
+    tp = sum(row.passed_stage1 and row.human_relevant for row in gate_a_rows)
+    fp = sum(row.passed_stage1 and not row.human_relevant for row in gate_a_rows)
+    fn = sum(not row.passed_stage1 and row.human_relevant for row in gate_a_rows)
     precision = tp / (tp + fp) if tp + fp else None
     recall = tp / (tp + fn) if tp + fn else None
     f1 = 2 * precision * recall / (precision + recall) if precision is not None and recall is not None and precision + recall else (0.0 if precision is not None and recall is not None else None)
     # LLM scores are conditional on reaching Stage 2; Stage 1 misses remain in its own recall.
-    llm_rows = [row for row in rows if row.llm_label in {"relevant", "irrelevant", "noise", "unsure"}]
+    llm_rows = [row for row in gate_a_rows if row.llm_label in {"relevant", "irrelevant", "noise", "unsure"}]
     llm_tp = sum(row.llm_label == "relevant" and row.human_relevant for row in llm_rows)
     llm_fp = sum(row.llm_label == "relevant" and not row.human_relevant for row in llm_rows)
     llm_fn = sum(row.llm_label != "relevant" and row.human_relevant for row in llm_rows)
@@ -103,15 +151,20 @@ def get_quality_metrics(
             predicted_values = json.loads(row.predicted_case_values or "[]")
         except (TypeError, ValueError):
             predicted_values = []
+        diseases = row.human_diseases if row.human_diseases is not None else (
+            [row.human_disease] if row.human_disease else []
+        )
         expected = {
-            "disease": row.human_disease,
+            "disease": diseases or None,
             "location": row.human_location,
             "event_date": row.human_event_date,
             "case_value": row.human_case_value,
         }
         predicted = {
-            "disease": bool(row.human_disease and row.human_disease.casefold() in {
-                disease.strip().casefold() for disease in (row.predicted_disease or "").split(",")
+            "disease": bool(diseases and {
+                disease.strip().casefold() for disease in diseases
+            } == {
+                disease.strip().casefold() for disease in (row.predicted_disease or "").split(",") if disease.strip()
             }),
             "location": bool(row.human_location and
                 row.human_location.casefold() == (row.predicted_location or "").casefold()),
@@ -127,6 +180,31 @@ def get_quality_metrics(
     for item in fields.values():
         item["accuracy"] = item["correct"] / item["labeled_count"] if item["labeled_count"] else None
 
+    b_rows = [
+        row for row in rows
+        if row.gate_b_evaluated is True and row.detector_version == DETECTOR_VERSION and row.human_signal_label in {"confirmed_event", "early_signal", "noise", "irrelevant"}
+        and row.stage1_route in {"context", "none"}
+    ]
+    b_tp = sum(bool(row.detector_matched and row.human_relevant) for row in b_rows)
+    b_fp = sum(bool(row.detector_matched and not row.human_relevant) for row in b_rows)
+    b_fn = sum(bool(not row.detector_matched and row.human_relevant) for row in b_rows)
+    b_precision = b_tp / (b_tp + b_fp) if b_tp + b_fp else None
+    b_unmatched_labeled = sum(not row.detector_matched for row in b_rows)
+    b_recall = b_tp / (b_tp + b_fn) if b_tp + b_fn and b_unmatched_labeled else None
+    active_rows = [row for row in b_rows if row.gate_b_mode == "active"]
+    active_tp = sum(row.llm_label == "relevant" and row.human_relevant for row in active_rows)
+    active_fp = sum(row.llm_label == "relevant" and not row.human_relevant for row in active_rows)
+    current_scan = db.query(models.ScanRun).order_by(models.ScanRun.started_at.desc()).first()
+    completed_scan = (
+        db.query(models.ScanRun)
+        .filter(models.ScanRun.status == "completed")
+        .order_by(models.ScanRun.completed_at.desc())
+        .first()
+    )
+    completed_feeds = (
+        db.query(models.CrawlRun).filter(models.CrawlRun.scan_run_id == completed_scan.scan_run_id).all()
+        if completed_scan else []
+    )
     event_rows = db.query(models.NewsEvent).filter(models.NewsEvent.created_at >= since).all()
     latency_hours = []
     for event in event_rows:
@@ -155,9 +233,40 @@ def get_quality_metrics(
         "stage1": {
             "precision": precision, "recall": recall, "f1": f1,
             "true_positive": tp, "false_positive": fp, "false_negative": fn,
-            "labeled_sample_count": len(rows),
+            "labeled_sample_count": len(gate_a_rows),
         },
         "sample_source": "deterministic 10% of eligible RSS entries before Stage 1",
+        "scan_status": {
+            "current": current_scan.status if current_scan else None,
+            "current_scan_run_id": current_scan.scan_run_id if current_scan else None,
+            "current_started_at": current_scan.started_at if current_scan else None,
+            "is_stale": bool(current_scan and current_scan.status == "running" and current_scan.started_at < datetime.utcnow() - timedelta(hours=2)),
+        },
+        "gate_b": {
+            "based_on_scan_run_id": completed_scan.scan_run_id if completed_scan else None,
+            "based_on_completed_at": completed_scan.completed_at if completed_scan else None,
+            "eligible_entries_total": sum(row.eligible_entries_total or 0 for row in completed_feeds),
+            "candidates_total": sum(row.gate_b_candidates_total or 0 for row in completed_feeds),
+            "active_processed_total": sum(row.gate_b_active_total or 0 for row in completed_feeds),
+            "by_type": {
+                signal_type: sum(getattr(row, f"gate_b_{signal_type}") or 0 for row in completed_feeds)
+                for signal_type in ("unexplained_cluster", "animal_signal", "environment_signal", "field_response")
+            },
+            "detector": {
+                "true_positive": b_tp, "false_positive": b_fp, "false_negative": b_fn,
+                "precision": b_precision, "recall": b_recall,
+                "matched_labeled": b_tp + b_fp,
+                "unmatched_labeled": b_unmatched_labeled,
+                "detector_version": DETECTOR_VERSION,
+                "definition": "Among A-failed entries where B was evaluated; labels positive = confirmed_event or early_signal.",
+                "sampling_note": "Deterministic URL sample is 10% in both groups. Precision/recall remain provisional if manual labeling is selective.",
+            },
+            "active_llm": {
+                "true_positive": active_tp, "false_positive": active_fp,
+                "precision": active_tp / (active_tp + active_fp) if active_tp + active_fp else None,
+                "labeled_count": len(active_rows),
+            },
+        },
         "period_start": since,
         "period_end": datetime.utcnow(),
         "llm": {
@@ -176,7 +285,7 @@ def get_quality_metrics(
             "event_count": len(latency_hours),
             "definition": "Event creation time minus earliest source article publication time",
         },
-        "note": "Stage 1 uses sampled RSS; LLM and extraction are conditional on prior stages; event-pair scores cover labeled candidates only. Missing denominators remain null.",
+        "note": "Legacy Stage 1 binary scores exclude four-label Gate B samples and are not hybrid-system recall. Gate B detector and active LLM scores are separate; missing denominators remain null.",
     }
 
 
@@ -283,4 +392,3 @@ def label_pair(
     db.add(row)
     db.commit()
     return {"id": row.id}
-

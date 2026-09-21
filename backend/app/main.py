@@ -28,7 +28,7 @@ from .modules.report import router as report_router
 from .modules.report import router_ai_summary
 from .modules.admin import router_llm_status
 from .modules.evaluation import router as evaluation_router
-from .modules.news import router_articles, router_resources, router_stats, router_signals, router_quality
+from .modules.news import router_articles, router_resources, router_stats, router_signals, router_quality, router_context_signals
 from . import scheduler as app_scheduler
 
 logger = get_logger("backend.main")
@@ -105,6 +105,7 @@ app.include_router(router_resources.router)
 app.include_router(router_stats.router)
 app.include_router(router_signals.router)
 app.include_router(router_quality.router)
+app.include_router(router_context_signals.router)
 
 
 # ---------------------------------------------------------------------------
