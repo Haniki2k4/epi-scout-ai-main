@@ -218,7 +218,7 @@ const AlertsPage = () => {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="text-2xl font-bold text-foreground flex items-center gap-2">
             <Bell className="h-6 w-6 text-primary" />
@@ -234,9 +234,9 @@ const AlertsPage = () => {
         </Button>
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-[360px_1fr]">
+      <div className="space-y-6">
         {/* Danh sách bộ lọc */}
-        <div className="space-y-3">
+        <div className="alert-rule-grid">
           {loadingAlerts ? (
             <div className="text-center text-muted-foreground py-8">Đang tải...</div>
           ) : alerts.length === 0 ? (
@@ -252,7 +252,7 @@ const AlertsPage = () => {
             alerts.map(alert => (
               <Card
                 key={alert.id}
-                className={`cursor-pointer transition-all hover:shadow-md ${
+                className={`transition-colors hover:border-primary/40 ${
                   selectedAlert?.id === alert.id ? "ring-2 ring-primary" : ""
                 } ${!alert.is_active ? "opacity-60" : ""}`}
               >
@@ -284,12 +284,14 @@ const AlertsPage = () => {
                       </Button>
                       <Button
                         variant="ghost" size="icon" className="h-7 w-7"
+                        aria-label={`Sửa cảnh báo ${alert.name}`}
                         onClick={(e) => { e.stopPropagation(); openEditDialog(alert); }}
                       >
                         <Edit2 className="h-3.5 w-3.5" />
                       </Button>
                       <Button
                         variant="ghost" size="icon" className="h-7 w-7 text-destructive hover:bg-destructive/10"
+                        aria-label={`Xóa cảnh báo ${alert.name}`}
                         onClick={(e) => { e.stopPropagation(); handleDeleteAlert(alert); }}
                       >
                         <Trash2 className="h-3.5 w-3.5" />

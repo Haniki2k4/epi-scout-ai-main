@@ -1,3 +1,4 @@
+import { Input } from "@/components/ui/input";
 import { useEffect, useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -16,6 +17,7 @@ const BookmarksPage = () => {
   const [bookmarks, setBookmarks] = useState<Article[]>([]);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
+  const [search, setSearch] = useState("");
 
   const fetchBookmarks = async () => {
     setLoading(true);
@@ -54,8 +56,10 @@ const BookmarksPage = () => {
     }
   };
 
-  const totalPages = Math.max(1, Math.ceil(bookmarks.length / PAGE_SIZE));
-  const paginated = bookmarks.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  const filteredBookmarks = bookmarks.filter((article) => `${article.title} ${article.source ?? ""} ${article.keywords_matched ?? ""}`.toLocaleLowerCase("vi").includes(search.toLocaleLowerCase("vi")));
+  const totalPages = Math.max(1, Math.ceil(filteredBookmarks.length / PAGE_SIZE));
+  const currentPage = Math.min(page, totalPages);
+  const paginated = filteredBookmarks.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
 
   return (
     <div className="space-y-6">
@@ -92,6 +96,7 @@ const BookmarksPage = () => {
           <CardDescription>Nhấn nút xóa để bỏ đánh dấu bài viết</CardDescription>
         </CardHeader>
         <CardContent>
+          <div className="bookmark-toolbar"><Input aria-label="Tìm trong bài viết đã lưu" placeholder="Tìm theo tiêu đề, nguồn hoặc bệnh..." value={search} onChange={(event) => { setSearch(event.target.value); setPage(1); }} /><span className="text-sm text-muted-foreground">{filteredBookmarks.length} bài viết</span></div>
           {loading ? (
             <div className="flex items-center justify-center h-48 text-muted-foreground gap-2">
               <Loader2 className="h-5 w-5 animate-spin" />
@@ -105,6 +110,7 @@ const BookmarksPage = () => {
             </div>
           ) : (
             <div className="space-y-3">
+              {filteredBookmarks.length === 0 && <p role="status" className="py-8 text-center text-sm text-muted-foreground">Không tìm thấy bài viết phù hợp.</p>}
               {paginated.map((article) => (
                 <div
                   key={article.id}
@@ -153,24 +159,24 @@ const BookmarksPage = () => {
                 </div>
               ))}
 
-              {bookmarks.length > PAGE_SIZE && (
+              {filteredBookmarks.length > PAGE_SIZE && (
                 <div className="flex items-center justify-end gap-2 pt-2">
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={() => setPage(p => Math.max(1, p - 1))}
-                    disabled={page === 1}
+                    onClick={() => setPage(Math.max(1, currentPage - 1))}
+                    disabled={currentPage === 1}
                   >
                     <ChevronLeft className="h-4 w-4 mr-1" /> Trước
                   </Button>
                   <span className="text-sm text-muted-foreground">
-                    Trang {page} / {totalPages}
+                    Trang {currentPage} / {totalPages}
                   </span>
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={() => setPage(p => Math.min(totalPages, p + 1))}
-                    disabled={page === totalPages}
+                    onClick={() => setPage(Math.min(totalPages, currentPage + 1))}
+                    disabled={currentPage === totalPages}
                   >
                     Sau <ChevronRight className="h-4 w-4 ml-1" />
                   </Button>

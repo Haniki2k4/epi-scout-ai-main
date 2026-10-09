@@ -39,7 +39,17 @@ class PaginatedArticles(BaseModel):
 
 class DiseaseCaseDTO(BaseModel):
     disease_name: str
-    case_count: int
+    case_count: Optional[int] = None
+    id: Optional[int] = None
+    reported_value: Optional[int] = None
+    case_type: Optional[str] = None
+    count_scope: Optional[str] = None
+    report_period_start: Optional[datetime] = None
+    report_period_end: Optional[datetime] = None
+    evidence_quote: Optional[str] = None
+    time_allocation: Optional[str] = None
+    location_allocation: Optional[str] = None
+    data_quality: Optional[str] = None
     location: Optional[str] = None
     class Config:
         from_attributes = True
@@ -78,9 +88,17 @@ class NewsEventBase(BaseModel):
     disease_name: str
     location: Optional[str] = None
     event_date: Optional[datetime] = None
-    case_count: int = 0
+    case_count: Optional[int] = None
     severity: Optional[str] = None
     status: Optional[str] = None
+    verified_at: Optional[datetime] = None
+    verified_by: Optional[int] = None
+    analyst_reviewed_at: Optional[datetime] = None
+    analyst_reviewed_by: Optional[int] = None
+    rejection_reason: Optional[str] = None
+    verification_notes: Optional[str] = None
+    verification_source: Optional[str] = None
+    verified_case_source_id: Optional[int] = None
     fingerprint: str
 
 

@@ -61,7 +61,7 @@ export default function LoginPage() {
 
   return (
     <div className="min-h-screen bg-background flex items-center justify-center p-4">
-      <Card className="w-full max-w-md bg-card/50 backdrop-blur-sm border-border shadow-2xl">
+      <Card className="w-full max-w-md bg-card border-border shadow-sm">
         <CardHeader className="space-y-4 text-center pb-6">
           <div className="mx-auto h-16 w-16 rounded-2xl bg-primary/10 flex items-center justify-center">
             <div className="h-12 w-12 rounded-xl bg-primary flex items-center justify-center shadow-lg">
@@ -81,7 +81,7 @@ export default function LoginPage() {
               <div className="relative">
                 <User className="absolute left-3 top-3 h-5 w-5 text-muted-foreground" />
                 <Input
-                  placeholder="Tên đăng nhập"
+                  aria-label="Tên đăng nhập" autoComplete="username" placeholder="Tên đăng nhập"
                   className={`pl-10 h-12 bg-background/50 ${errorDetails ? "border-destructive focus-visible:ring-destructive" : ""}`}
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
@@ -94,7 +94,7 @@ export default function LoginPage() {
                 <LockKeyhole className="absolute left-3 top-3 h-5 w-5 text-muted-foreground" />
                 <Input
                   type={showPassword ? "text" : "password"}
-                  placeholder="Mật khẩu"
+                  aria-label="Mật khẩu" autoComplete="current-password" placeholder="Mật khẩu"
                   className={`pl-10 pr-10 h-12 bg-background/50 ${errorDetails ? "border-destructive focus-visible:ring-destructive" : ""}`}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
@@ -102,6 +102,7 @@ export default function LoginPage() {
                 />
                 <button
                   type="button"
+                  aria-label={showPassword ? "Ẩn mật khẩu" : "Hiện mật khẩu"}
                   onClick={() => setShowPassword(!showPassword)}
                   className="absolute right-3 top-3.5 text-muted-foreground hover:text-foreground transition-colors"
                   disabled={isLoading}

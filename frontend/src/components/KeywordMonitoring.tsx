@@ -278,7 +278,7 @@ const KeywordMonitoring = () => {
   };
 
   return (
-    <div className="space-y-6">
+    <div className="news-layout">
 
 
       <Dialog open={eventDialogOpen} onOpenChange={setEventDialogOpen}>
@@ -338,22 +338,24 @@ const KeywordMonitoring = () => {
       </Dialog>
 
       {/* Danh sách từ khóa giám sát (chỉ đọc) */}
-      <Card>
+      <Card className="news-keywords">
         <CardHeader>
           <CardTitle>Từ khóa giám sát</CardTitle>
-          <CardDescription>Danh sách các từ khóa hệ thống đang theo dõi. Liên hệ quản trị viên để thay đổi.</CardDescription>
+          <CardDescription>Chọn bệnh để lọc tin tức. Liên hệ quản trị viên để thay đổi từ khóa.</CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="flex flex-wrap gap-2">
+          <Input aria-label="Tìm từ khóa giám sát" placeholder="Tìm bệnh / từ khóa..." value={keywordFilter} onChange={(event) => setKeywordFilter(event.target.value)} className="mb-3" />
+          <button type="button" className="keyword-option" aria-pressed={articleKeywordFilter === "all"} onClick={() => setArticleKeywordFilter("all")}>Tất cả bệnh</button>
+          <div className="keyword-list">
             {isPageDataLoading ? (
               <div className="text-sm text-muted-foreground animate-pulse">Đang tải danh sách từ khóa...</div>
             ) : activeKeywords.length === 0 ? (
               <div className="text-sm text-muted-foreground">Chưa có từ khóa nào.</div>
             ) : (
-              activeKeywords.map((keyword) => (
-                <Badge key={keyword.id} variant="secondary" className="px-3 py-1.5 text-sm">
+              activeKeywords.filter((keyword) => keyword.text.toLocaleLowerCase("vi").includes(keywordFilter.toLocaleLowerCase("vi"))).map((keyword) => (
+                <button key={keyword.id} type="button" className="keyword-option" aria-pressed={articleKeywordFilter === keyword.text} onClick={() => setArticleKeywordFilter(keyword.text)}>
                   {keyword.text}
-                </Badge>
+                </button>
               ))
             )}
           </div>
@@ -364,7 +366,7 @@ const KeywordMonitoring = () => {
       </Card>
 
       {/* Recent Articles */}
-      <Card>
+      <Card className="news-articles">
         <CardHeader>
           <CardTitle>Tin tức đã lưu</CardTitle>
           <CardDescription>Danh sách bài viết trong cơ sở dữ liệu</CardDescription>
@@ -559,9 +561,9 @@ const KeywordMonitoring = () => {
                             
                             {article.cases && article.cases.length > 0 && (
                               <span className="ml-2 flex items-center gap-2 flex-wrap">
-                                {article.cases.filter(c => c.case_count > 0).map((c, i) => (
+                                {article.cases.filter(c => (c.reported_value ?? 0) > 0).map((c, i) => (
                                   <span key={i} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300 border border-red-200 dark:border-red-800">
-                                    {c.disease_name}: {c.case_count.toLocaleString()} ca
+                                    {c.disease_name}: {c.reported_value?.toLocaleString()} ca bài báo nêu ({c.case_type || "chưa phân loại"})
                                     {c.location && c.location.toLowerCase() !== "unknown" ? ` (${c.location})` : ''}
                                   </span>
                                 ))}
@@ -648,7 +650,7 @@ const KeywordMonitoring = () => {
         </CardContent>
       </Card>
 
-      <Card>
+      <Card className="news-events">
         <CardHeader>
           <CardTitle>Sự kiện đã gom</CardTitle>
           <CardDescription>Mỗi sự kiện có thể gồm nhiều bài viết từ nhiều nguồn khác nhau</CardDescription>
@@ -680,7 +682,7 @@ const KeywordMonitoring = () => {
                       <span>• {new Date(event.event_date).toLocaleDateString()}</span>
                       <span>• {event.article_count} bài</span>
                       <span>• {event.source_count} nguồn</span>
-                      {event.case_count > 0 && <span>• {event.case_count} ca</span>}
+                      {event.case_count != null && event.case_count > 0 && <span>• {event.case_count} ca</span>}
                     </div>
                     <div className="flex flex-wrap gap-2">
                       {event.sources_preview.map((source) => (

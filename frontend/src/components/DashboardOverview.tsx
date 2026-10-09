@@ -26,8 +26,8 @@ interface TopDisease { disease_name: string; article_count: number }
 interface LocationItem {
   location: string;
   total_mentions: number;
-  total_cases: number;
-  diseases: { disease_name: string; mentions: number; cases: number }[];
+  total_cases: number | null;
+  diseases: { disease_name: string; mentions: number; cases: number | null }[];
 }
 interface StackedTrend { date: string;[disease: string]: number | string }
 interface StackedResult { dates: string[]; diseases: string[]; data: StackedTrend[] }
@@ -221,10 +221,26 @@ const DashboardOverview = () => {
   // ── Render ───────────────────────────────────────────────────────────────────
 
   return (
-    <div className="space-y-6">
-      <div className="grid gap-4 md:grid-cols-4">
+    <div className="overview-layout">
+      <div className="overview-heading space-y-4">
+        <div>
+          <p className="text-sm font-medium text-primary">EpiScout AI · Giám sát dịch bệnh</p>
+          <h1 className="mt-1 text-2xl font-semibold tracking-tight text-foreground">Tổng quan dịch tễ</h1>
+          <p className="mt-1 text-sm text-muted-foreground">Các chỉ số và xu hướng được sắp xếp để xem nhanh từ trên xuống.</p>
+        </div>
+        <nav aria-label="Đi nhanh đến nội dung tổng quan" className="sticky top-16 z-20 -mx-4 flex gap-2 overflow-x-auto border-y border-border bg-background/95 px-4 py-2 backdrop-blur md:mx-0 md:rounded-lg md:border md:px-3">
+          <a href="#overview-summary" className="shrink-0 rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">Tóm tắt</a>
+          <a href="#overview-trends" className="shrink-0 rounded-md px-3 py-2 text-sm text-foreground transition-colors hover:bg-accent/10 hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">Xu hướng</a>
+          <a href="#overview-diseases" className="shrink-0 rounded-md px-3 py-2 text-sm text-foreground transition-colors hover:bg-accent/10 hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">Bệnh nổi bật</a>
+          <a href="#overview-map" className="shrink-0 rounded-md px-3 py-2 text-sm text-foreground transition-colors hover:bg-accent/10 hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">Bản đồ</a>
+          <a href="#overview-interest" className="shrink-0 rounded-md px-3 py-2 text-sm text-foreground transition-colors hover:bg-accent/10 hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">Quan tâm truyền thông</a>
+        </nav>
+      </div>
+
+      <section id="overview-summary" aria-label="Tóm tắt tình hình" className="scroll-mt-36 space-y-4">
+      <div className="metric-grid">
         <Card className="border-l-4 border-l-primary">
-          <CardHeader className="pb-3">
+          <CardHeader className="pb-2">
             <CardDescription>Sự kiện cảnh báo (7 ngày)</CardDescription>
             <CardTitle className="text-3xl">{stats?.total_events_7d?.toLocaleString() ?? 0}</CardTitle>
           </CardHeader>
@@ -237,7 +253,7 @@ const DashboardOverview = () => {
         </Card>
 
         <Card className="border-l-4 border-l-destructive">
-          <CardHeader className="pb-3">
+          <CardHeader className="pb-2">
             <CardDescription>Bệnh được quan tâm nhất (30d)</CardDescription>
             <CardTitle className="text-xl leading-tight truncate" title={stats?.top_disease ?? "—"}>
               {stats?.top_disease ?? "—"}
@@ -254,7 +270,7 @@ const DashboardOverview = () => {
         </Card>
 
         <Card className="border-l-4 border-l-amber-500">
-          <CardHeader className="pb-3">
+          <CardHeader className="pb-2">
             <CardDescription>Bệnh có tin mới (Hôm nay)</CardDescription>
             <CardTitle className="text-3xl">{stats?.keywords_today?.toLocaleString() ?? 0}</CardTitle>
           </CardHeader>
@@ -267,7 +283,7 @@ const DashboardOverview = () => {
         </Card>
 
         <Card className="border-l-4 border-l-emerald-500">
-          <CardHeader className="pb-3">
+          <CardHeader className="pb-2">
             <CardDescription>Bệnh có tin mới (7 ngày)</CardDescription>
             <CardTitle className="text-3xl">{stats?.keywords_7d?.toLocaleString() ?? 0}</CardTitle>
           </CardHeader>
@@ -281,14 +297,15 @@ const DashboardOverview = () => {
       </div>
 
       <AISummaryCard />
+      </section>
 
-      <div className="grid gap-6 md:grid-cols-2">
-        <Card className="border-t-4 border-t-primary">
+      <section id="overview-trends" aria-label="Xu hướng theo bệnh" className="scroll-mt-36">
+        <Card>
           <CardHeader>
             <div className="flex items-center justify-between flex-wrap gap-2">
               <div>
-                <CardTitle>Xu hướng ca bệnh theo loại</CardTitle>
-                <CardDescription>Số ca từng bệnh theo ngày</CardDescription>
+                <CardTitle>Xu hướng lượt nhắc trên báo theo bệnh</CardTitle>
+                <CardDescription>Số bài báo nhắc đến từng bệnh theo ngày</CardDescription>
               </div>
               <div className="flex gap-2">
                 {stackedResult && Array.isArray(stackedResult.diseases) && stackedResult.diseases.length > 0 && (
@@ -348,6 +365,9 @@ const DashboardOverview = () => {
           </CardContent>
         </Card>
 
+      </section>
+
+      <section id="overview-diseases" aria-label="Bệnh được nhắc đến nhiều" className="scroll-mt-36">
         <Card>
           <CardHeader>
             <div className="flex items-center justify-between flex-wrap gap-2">
@@ -395,10 +415,10 @@ const DashboardOverview = () => {
             )}
           </CardContent>
         </Card>
-      </div>
+      </section>
 
-      <div className="grid gap-6 md:grid-cols-2">
-        <Card className="border-t-4 border-t-amber-500">
+      <section id="overview-map" aria-label="Điểm nóng theo địa danh" className="scroll-mt-36">
+        <Card>
           <CardHeader>
             <div className="flex items-center justify-between flex-wrap gap-2">
               <div>
@@ -423,7 +443,7 @@ const DashboardOverview = () => {
             <div className="relative w-full h-[400px]">
               <MapShell ref={mapRef} className="absolute inset-0 rounded-b-xl overflow-hidden" />
               {(Array.isArray(locationData) && locationData.length === 0) && (
-                <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-yellow-400/60 backdrop-blur-md text-yellow-950 px-6 py-2 text-center text-sm font-medium z-10 rounded-full border border-yellow-500/30 shadow-md shadow-yellow-500/10 whitespace-nowrap">
+                <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-yellow-400/60 backdrop-blur-md text-yellow-950 px-6 py-2 text-center text-sm font-medium z-10 rounded-full border border-yellow-500/30 shadow-md shadow-yellow-500/10 w-max max-w-[calc(100%-2rem)]">
                   Chưa có dữ liệu địa danh cụ thể trong khoảng thời gian này
                 </div>
               )}
@@ -434,7 +454,7 @@ const DashboardOverview = () => {
                 >
                   <p className="font-semibold text-foreground mb-1">📍 {hoveredLocation.name}</p>
                   <p className="text-muted-foreground text-xs mb-2">
-                    {hoveredLocation.mentions} lượt nhắc · {hoveredLocation.cases.toLocaleString()} ca
+                    {hoveredLocation.mentions} lượt nhắc · số ca chưa xác minh
                   </p>
                   <div className="space-y-1">
                     {Array.isArray(hoveredLocation.diseases) && hoveredLocation.diseases.map((d) => (
@@ -450,7 +470,10 @@ const DashboardOverview = () => {
           </CardContent>
         </Card>
 
-        <Card className="border-t-4 border-t-emerald-500">
+      </section>
+
+      <section id="overview-interest" aria-label="Sự quan tâm truyền thông" className="scroll-mt-36">
+        <Card>
           <CardHeader>
             <div className="flex items-center justify-between flex-wrap gap-2">
               <div>
@@ -515,7 +538,7 @@ const DashboardOverview = () => {
             )}
           </CardContent>
         </Card>
-      </div>
+      </section>
     </div>
   );
 };

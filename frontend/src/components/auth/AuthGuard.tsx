@@ -36,6 +36,12 @@ export const AdminRoute = () => {
   return <Outlet />;
 };
 
+export const AnalystRoute = () => {
+  const { user, isAuthenticated, isLoading } = useAuth();
+  if (isLoading) return <div className="min-h-screen flex items-center justify-center"><Loader2 className="h-8 w-8 animate-spin" /></div>;
+  if (!isAuthenticated) return <Navigate to="/login" replace />;
+  return user?.role === 'analyst' || user?.role === 'admin' ? <Outlet /> : <Navigate to="/" replace />;
+};
 export const PublicRoute = () => {
   const { isAuthenticated, isLoading } = useAuth();
 

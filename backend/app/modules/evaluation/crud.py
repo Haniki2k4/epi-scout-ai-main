@@ -10,6 +10,9 @@ def get_evaluation_by_article(db: Session, article_id: int):
     return db.query(models.ArticleEvaluation).filter(models.ArticleEvaluation.article_id == article_id).first()
 
 def update_human_label(db: Session, article_id: int, human_label: str | None, user_id: int, llm_label: str | None = None, keyword_is_correct: bool | None = None, corrected_keyword: str | None = None, update_article_keyword: bool = False):
+    article = db.get(ArticleIdentity, article_id)
+    if human_label is not None and article and article.details and article.details.stage1_route == "context":
+        raise ValueError("Bài cửa B phải được duyệt tín hiệu và bệnh qua /api/context-signals")
     eval_record = get_evaluation_by_article(db, article_id)
     if not eval_record:
         eval_record = models.ArticleEvaluation(article_id=article_id)
@@ -36,7 +39,7 @@ def update_human_label(db: Session, article_id: int, human_label: str | None, us
                 article.is_excluded = False
                 if article.event_id is None:
                     try:
-                        from ..news.crawler import resolve_event_for_article
+                        from ..news.event_service import resolve_event_for_article
                         case_count = 0
                         location = None
                         if article.cases:

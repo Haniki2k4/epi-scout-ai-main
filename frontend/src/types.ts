@@ -1,6 +1,10 @@
 export interface DiseaseCase {
   disease_name: string;
-  case_count: number;
+  case_count: number | null;
+  reported_value?: number | null;
+  case_type?: string | null;
+  count_scope?: string | null;
+  evidence_quote?: string | null;
   location?: string | null;
 }
 
@@ -49,7 +53,11 @@ export interface NewsEvent {
   disease_name: string;
   location?: string | null;
   event_date: string;
-  case_count: number;
+  case_count: number | null;
+  reported_value?: number | null;
+  case_type?: string | null;
+  count_scope?: string | null;
+  evidence_quote?: string | null;
   severity?: string | null;
   status?: string | null;
   fingerprint: string;

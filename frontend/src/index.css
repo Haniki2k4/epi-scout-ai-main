@@ -44,21 +44,21 @@ All colors MUST be HSL.
     --chart-4: 0 84% 60%;
     --chart-5: 280 65% 55%;
 
-    --sidebar-background: 0 0% 98%;
+    --sidebar-background: var(--card);
 
-    --sidebar-foreground: 240 5.3% 26.1%;
+    --sidebar-foreground: var(--card-foreground);
 
-    --sidebar-primary: 240 5.9% 10%;
+    --sidebar-primary: var(--primary);
 
-    --sidebar-primary-foreground: 0 0% 98%;
+    --sidebar-primary-foreground: var(--primary-foreground);
 
-    --sidebar-accent: 240 4.8% 95.9%;
+    --sidebar-accent: var(--secondary);
 
-    --sidebar-accent-foreground: 240 5.9% 10%;
+    --sidebar-accent-foreground: var(--secondary-foreground);
 
-    --sidebar-border: 220 13% 91%;
+    --sidebar-border: var(--border);
 
-    --sidebar-ring: 217.2 91.2% 59.8%;
+    --sidebar-ring: var(--ring);
   }
 
   .dark {
@@ -95,14 +95,14 @@ All colors MUST be HSL.
     --chart-3: 45 93% 47%;
     --chart-4: 0 84% 60%;
     --chart-5: 280 65% 55%;
-    --sidebar-background: 240 5.9% 10%;
-    --sidebar-foreground: 240 4.8% 95.9%;
-    --sidebar-primary: 224.3 76.3% 48%;
-    --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 240 3.7% 15.9%;
-    --sidebar-accent-foreground: 240 4.8% 95.9%;
-    --sidebar-border: 240 3.7% 15.9%;
-    --sidebar-ring: 217.2 91.2% 59.8%;
+    --sidebar-background: var(--card);
+    --sidebar-foreground: var(--card-foreground);
+    --sidebar-primary: var(--primary);
+    --sidebar-primary-foreground: var(--primary-foreground);
+    --sidebar-accent: var(--secondary);
+    --sidebar-accent-foreground: var(--secondary-foreground);
+    --sidebar-border: var(--border);
+    --sidebar-ring: var(--ring);
   }
 }
 
