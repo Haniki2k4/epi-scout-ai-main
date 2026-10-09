@@ -138,3 +138,12 @@ def require_admin_role(current_user: User = Depends(get_current_active_user)) ->
             status_code=status.HTTP_403_FORBIDDEN, detail="Không có quyền truy cập (yêu cầu Admin)"
         )
     return current_user
+
+
+def require_reviewer_role(current_user: User = Depends(get_current_active_user)) -> User:
+    if current_user.role not in {"analyst", "admin"}:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Không có quyền truy cập (yêu cầu Chuyên viên hoặc Admin)",
+        )
+    return current_user

@@ -410,7 +410,7 @@ async def import_evaluations_excel(
                 article.is_excluded = False
                 if article.event_id is None:
                     try:
-                        from ..news.crawler import resolve_event_for_article
+                        from ..news.event_service import resolve_event_for_article
                         case_count = 0
                         location = None
                         if article.cases:

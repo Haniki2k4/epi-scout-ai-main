@@ -28,6 +28,7 @@ from .modules.report import router as report_router
 from .modules.report import router_ai_summary
 from .modules.admin import router_llm_status
 from .modules.evaluation import router as evaluation_router
+from .modules.evaluation import router_llm as llm_evaluation_router
 from .modules.news import router_articles, router_resources, router_stats, router_signals, router_quality, router_context_signals
 from . import scheduler as app_scheduler
 
@@ -98,6 +99,7 @@ app.include_router(router_llm_status.router)
 app.include_router(report_router.router)
 app.include_router(router_ai_summary.router)
 app.include_router(evaluation_router.router)
+app.include_router(llm_evaluation_router.router)
 
 # New routers (Issue #12 refactor)
 app.include_router(router_articles.router)
@@ -142,18 +144,39 @@ def scan_news(
     return result
 
 
-@app.get("/api/scan-status")
-def get_scan_status(db: Session = Depends(get_db)):
-    """Lấy trạng thái scan hiện tại cho tất cả người dùng (hiển thị banner)."""
+def _get_scan_status_payload(db: Session) -> dict:
     config = app_scheduler._get_or_create_config(db)
     sched = app_scheduler.get_scheduler()
+    latest_run = db.query(models.ScanRun).order_by(models.ScanRun.started_at.desc()).first()
+    memory_scanning = bool(getattr(crawler, "is_scanning_flag", False))
+    latest_is_running = latest_run is None or latest_run.status == "running"
+    is_scanning = memory_scanning and latest_is_running
+
+    # A completed/failed ScanRun is the durable source of truth. Repair a stale
+    # process-local flag so the banner cannot remain orange after finalization.
+    if memory_scanning and latest_run is not None and latest_run.status != "running":
+        crawler.is_scanning_flag = False
+        logger.warning(
+            "Repaired stale scan flag | latest_scan_run={} status={}",
+            latest_run.scan_run_id,
+            latest_run.status,
+        )
+
     return {
         "scheduler_running": sched.running,
-        "is_scanning": getattr(crawler, "is_scanning_flag", False),
+        "is_scanning": is_scanning,
         "last_run_at": config.last_run_at,
         "last_run_saved_count": config.last_run_saved_count,
         "next_run_at": config.next_run_at,
+        "active_scan_run_id": latest_run.scan_run_id if is_scanning and latest_run else None,
+        "active_scan_started_at": latest_run.started_at if is_scanning and latest_run else None,
     }
+
+
+@app.get("/api/scan-status")
+def get_scan_status(db: Session = Depends(get_db)):
+    """Lấy trạng thái scan hiện tại cho tất cả người dùng (hiển thị banner)."""
+    return _get_scan_status_payload(db)
 
 
 @app.get("/api/page-data", response_model=schemas.PageDataResponse)
@@ -198,15 +221,7 @@ def get_page_data(
     keywords_list = crud.get_active_keywords(db)
 
     # 4. Scan status
-    config = app_scheduler._get_or_create_config(db)
-    sched = app_scheduler.get_scheduler()
-    scan_status = {
-        "scheduler_running": sched.running,
-        "is_scanning": getattr(crawler, "is_scanning_flag", False),
-        "last_run_at": config.last_run_at.isoformat() if config.last_run_at else None,
-        "last_run_saved_count": config.last_run_saved_count,
-        "next_run_at": config.next_run_at.isoformat() if config.next_run_at else None,
-    }
+    scan_status = _get_scan_status_payload(db)
 
     logger.info(
         "Page data completed | articles={} events={} keywords={}",

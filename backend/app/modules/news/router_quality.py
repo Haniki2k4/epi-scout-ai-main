@@ -130,56 +130,6 @@ def get_quality_metrics(
     precision = tp / (tp + fp) if tp + fp else None
     recall = tp / (tp + fn) if tp + fn else None
     f1 = 2 * precision * recall / (precision + recall) if precision is not None and recall is not None and precision + recall else (0.0 if precision is not None and recall is not None else None)
-    # LLM scores are conditional on reaching Stage 2; Stage 1 misses remain in its own recall.
-    llm_rows = [row for row in gate_a_rows if row.llm_label in {"relevant", "irrelevant", "noise", "unsure"}]
-    llm_tp = sum(row.llm_label == "relevant" and row.human_relevant for row in llm_rows)
-    llm_fp = sum(row.llm_label == "relevant" and not row.human_relevant for row in llm_rows)
-    llm_fn = sum(row.llm_label != "relevant" and row.human_relevant for row in llm_rows)
-    llm_precision = llm_tp / (llm_tp + llm_fp) if llm_tp + llm_fp else None
-    llm_recall = llm_tp / (llm_tp + llm_fn) if llm_tp + llm_fn else None
-    llm_f1 = (
-        2 * llm_precision * llm_recall / (llm_precision + llm_recall)
-        if llm_precision is not None and llm_recall is not None and llm_precision + llm_recall
-        else (0.0 if llm_precision is not None and llm_recall is not None else None)
-    )
-
-    fields = {name: {"correct": 0, "labeled_count": 0} for name in ("disease", "location", "event_date", "case_value")}
-    for row in rows:
-        if row.predicted_case_values is None or not row.human_relevant:
-            continue
-        try:
-            predicted_values = json.loads(row.predicted_case_values or "[]")
-        except (TypeError, ValueError):
-            predicted_values = []
-        diseases = row.human_diseases if row.human_diseases is not None else (
-            [row.human_disease] if row.human_disease else []
-        )
-        expected = {
-            "disease": diseases or None,
-            "location": row.human_location,
-            "event_date": row.human_event_date,
-            "case_value": row.human_case_value,
-        }
-        predicted = {
-            "disease": bool(diseases and {
-                disease.strip().casefold() for disease in diseases
-            } == {
-                disease.strip().casefold() for disease in (row.predicted_disease or "").split(",") if disease.strip()
-            }),
-            "location": bool(row.human_location and
-                row.human_location.casefold() == (row.predicted_location or "").casefold()),
-            "event_date": bool(row.human_event_date and row.predicted_event_date and
-                row.human_event_date.date() == row.predicted_event_date.date()),
-            "case_value": row.human_case_value in predicted_values,
-        }
-        for name, human_value in expected.items():
-            if human_value is None or (isinstance(human_value, str) and not human_value.strip()):
-                continue
-            fields[name]["labeled_count"] += 1
-            fields[name]["correct"] += int(predicted[name])
-    for item in fields.values():
-        item["accuracy"] = item["correct"] / item["labeled_count"] if item["labeled_count"] else None
-
     b_rows = [
         row for row in rows
         if row.gate_b_evaluated is True and row.detector_version == DETECTOR_VERSION and row.human_signal_label in {"confirmed_event", "early_signal", "noise", "irrelevant"}
@@ -269,17 +219,12 @@ def get_quality_metrics(
         },
         "period_start": since,
         "period_end": datetime.utcnow(),
-        "llm": {
-            "precision": llm_precision, "recall": llm_recall, "f1": llm_f1,
-            "true_positive": llm_tp, "false_positive": llm_fp, "false_negative": llm_fn,
-            "labeled_sample_count": len(llm_rows),
-        },
+        "llm_evaluation_url": "/api/llm-evaluations/metrics",
         "event_pair": {
             "precision": pair_precision, "recall": pair_recall, "f1": pair_f1,
             "true_positive": pair_tp, "false_positive": pair_fp,
             "false_negative": pair_fn, "labeled_pair_count": len(pair_rows),
         },
-        "field_accuracy": fields,
         "article_to_signal_latency": {
             "median_hours": median(latency_hours) if latency_hours else None,
             "event_count": len(latency_hours),

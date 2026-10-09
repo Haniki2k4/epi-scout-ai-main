@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from ...core.database import get_db
 from ..evaluation.models import ArticleEvaluation
 from . import models
-from .crawler import resolve_event_for_article
+from .event_service import resolve_event_for_article
 from .router_signals import require_analyst
 
 router = APIRouter(prefix="/api/context-signals", tags=["context-signals"])

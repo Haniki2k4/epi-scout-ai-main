@@ -1,7 +1,7 @@
 import feedparser
 from sqlalchemy.orm import Session
-from . import crud, models, schemas
-from .html_utils import decode_html_entities
+from . import crud, models, schemas, event_service
+from .html_utils import decode_html_entities, trim_feed_related_titles
 from .google_news import resolve_google_news_url
 from .stage1_context import is_advisory_without_outbreak_evidence
 from .signal_detector import DETECTOR_VERSION, detect_context_signal
@@ -98,62 +98,94 @@ def get_embedding_model() -> SentenceTransformer:
     return _embedding_model
 
 def fetch_sapo(url: str) -> str | None:
-    """
-    Fetch URL bài báo và trả về đoạn sapo thực sự.
-    Ưu tiên: class .sapo / .lead / .article-sapo / .article_sapo > <p> đầu trong content
-    Trả về None nếu lỗi (network / timeout / parse fail)
-    """
+    """Fetch and return a clean article lead, or ``None`` when unavailable."""
     try:
-        resp = requests.get(url, timeout=5, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"})
+        resp = requests.get(
+            url,
+            timeout=5,
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/121.0.0.0 Safari/537.36"
+                )
+            },
+        )
         resp.raise_for_status()
-        soup = BeautifulSoup(resp.text, "html.parser")
-        
-        # Xóa các script, style, header, footer và các thành phần không mong muốn
-        for el in soup(["script", "style", "noscript", "header", "footer", "nav", "aside"]):
-            el.decompose()
+
+        # Some publishers redirect missing articles to their home page. Its
+        # description and forms must not be treated as the article lead.
+        requested_path = urlparse(url).path.rstrip("/")
+        final_path = urlparse(resp.url).path.rstrip("/")
+        if requested_path and requested_path != final_path:
+            return None
+
+        soup = BeautifulSoup(resp.content, "html.parser")
+
+        def valid_candidate(value: str | None) -> str | None:
+            candidate = normalize_text(value or "")
+            if not 30 <= len(candidate) <= 1000:
+                return None
+            normalized = candidate.casefold()
+            boilerplate = (
+                "vui lòng điền đầy đủ thông tin",
+                "đăng ký để nhận bản tin",
+                "nội dung đang được cập nhật",
+                "trình duyệt của bạn không hỗ trợ",
+            )
+            if any(marker in normalized for marker in boilerplate):
+                return None
+            return candidate[:500]
+
+        # Metadata is usually cleaner than the page body and does not include
+        # related-story blocks nested beside the visible lead.
+        for selector in (
+            'meta[property="og:description"]',
+            'meta[name="description"]',
+            'meta[name="twitter:description"]',
+        ):
+            element = soup.select_one(selector)
+            candidate = valid_candidate(element.get("content") if element else None)
+            if candidate:
+                return candidate
+
+        for element in soup(["script", "style", "noscript", "header", "footer", "nav", "aside"]):
+            element.decompose()
         _strip_structural_noise(soup)
-        
-        # Xóa các khối tin liên quan, quảng cáo, bình luận thường gặp
-        NOISY_SELECTORS = [
+
+        for selector in (
             ".article_footer", ".article-footer", ".related-news", ".related_news",
             ".article_tag", ".article-tag", "#comment", "#ads", ".ads",
             "div[id*='adsweb']", "div[class*='related']", "div[class*='relate']",
-            "[class*='article-related']", "[class*='article_related']",
-            "[class*='article-relate']", "[class*='article_relate']",
-            "[class*='related-new']", "[class*='related_news']",
-            "[class*='related-news']", "[class*='related_post']",
-            "[class*='relatedpost']", "[class*='relat-']", "[class*='relate-']",
             "[data-source*='related']", "[data-tag*='related']",
             ".box_comment_vne", ".box-tinlienquanv2", ".box-item-vne",
-            "article.story", ".story"
-        ]
-        for selector in NOISY_SELECTORS:
-            for el in soup.select(selector):
-                el.decompose()
+            "article.story", ".story",
+        ):
+            for element in soup.select(selector):
+                element.decompose()
 
-        # Ưu tiên 1: sapo class phổ biến của các báo VN
-        SAPO_CLASSES = ["sapo", "lead", "article-sapo", "article_sapo",
-                        "article-desc", "article_description", "description", "detail-sapo"]
-        for cls in SAPO_CLASSES:
-            # Match element nào có class chứa tên hoặc khớp toàn bộ tên class
-            for el in soup.find_all(class_=lambda x: x and cls in x.lower() if isinstance(x, str) else x and [c for c in x if cls in c.lower()]):
-                text = el.get_text(separator=" ", strip=True)
-                if len(text) > 30:
-                    return text[:500]
+        # Exact selectors avoid generic containers such as ``description`` or
+        # ``content`` that often wrap forms, recommendations, or the whole page.
+        for selector in (
+            ".sapo", ".lead", ".article-sapo", ".article_sapo",
+            ".article-desc", ".article_description", ".detail-sapo",
+        ):
+            for element in soup.select(selector):
+                candidate = valid_candidate(element.get_text(separator=" ", strip=True))
+                if candidate:
+                    return candidate
 
-        # Ưu tiên 2: <p> đầu tiên trong content block
-        CONTENT_CLASSES = ["article-body", "article_body", "article-content",
-                           "content", "post-content", "entry-content", "detail-content"]
-        for cls in CONTENT_CLASSES:
-            for block in soup.find_all(class_=lambda x: x and cls in x.lower() if isinstance(x, str) else x and [c for c in x if cls in c.lower()]):
-                p = block.find("p")
-                if p:
-                    text = p.get_text(separator=" ", strip=True)
-                    if len(text) > 30:
-                        return text[:500]
+        for selector in (
+            ".article-body p", ".article_body p", ".article-content p",
+            ".post-content p", ".entry-content p", ".detail-content p",
+        ):
+            for element in soup.select(selector):
+                candidate = valid_candidate(element.get_text(separator=" ", strip=True))
+                if candidate:
+                    return candidate
         return None
-    except Exception as e:
-        logger.debug(f"Failed to fetch sapo for {url}: {e}")
+    except Exception as exc:
+        logger.debug(f"Failed to fetch sapo for {url}: {exc}")
         return None
 
 # ---------------------------------------------------------------------------
@@ -1022,166 +1054,6 @@ def format_dedupe_reason(breakdown: dict[str, float], matched: bool) -> str:
     return f"{status}: {parts}"
 
 
-def resolve_event_for_article(
-    db: Session,
-    title: str,
-    normalized_title: str,
-    summary: str,
-    matched_keywords: str,
-    pub_date: datetime,
-    location: str | None,
-    cumulative_cases: int,
-    new_cases: int,
-    severity: str | None,
-    suspected_cases: int = 0,
-    event_date: datetime | None = None,
-    override_disease_name: str | None = None,
-) -> tuple[models.NewsEvent | None, float | None, str | None, int]:
-    MATCH_SCORE_THRESHOLD = 0.75
-    primary_keyword = override_disease_name or extract_primary_keyword(matched_keywords)
-    if not primary_keyword:
-        return None, None, None, 0
-
-    normalized_location = normalize_text(location or "") or None
-
-    # Dùng normalized_title để so sánh embedding (giúp gom event tốt hơn)
-    compare_title = (normalized_title or "").strip()
-    if not compare_title:
-        compare_title = title
-
-    event_time = event_date or pub_date
-    start_date = event_time - timedelta(days=3)
-    end_date = event_time + timedelta(days=3)
-    recent_events = crud.get_recent_events(
-        db,
-        disease_name=primary_keyword,
-        location=normalized_location,
-        start_date=start_date,
-        end_date=end_date,
-    )
-    if not recent_events and normalized_location not in {None, "Việt Nam"}:
-        recent_events = crud.get_recent_events(
-            db,
-            disease_name=primary_keyword,
-            location=None,
-            start_date=start_date,
-            end_date=end_date,
-        )
-
-    best_match = None
-    best_score = 0.0
-    best_breakdown: dict[str, float] | None = None
-    search_cases = max(cumulative_cases, new_cases, suspected_cases)
-    for event in recent_events:
-        score, breakdown = compute_event_similarity_score(
-            title=compare_title,
-            summary=summary,
-            pub_date=event_time,
-            location=normalized_location,
-            case_count=search_cases,
-            event=event,
-        )
-        if score > best_score:
-            best_match = event
-            best_score = score
-            best_breakdown = breakdown
-
-    if best_match and best_score >= MATCH_SCORE_THRESHOLD:
-        logger.debug(
-            "Event matched | event_id={} score={} breakdown={} title={}",
-            best_match.id, best_score, best_breakdown, title,
-        )
-        updated_event = crud.update_news_event(
-            db, best_match, canonical_title=compare_title, severity=severity,
-        )
-        return updated_event, best_score, format_dedupe_reason(best_breakdown or {}, True), 0
-    if best_match:
-        logger.debug(
-            "Event below threshold | candidate_event_id={} score={} threshold={} breakdown={} title={}",
-            best_match.id,
-            best_score,
-            MATCH_SCORE_THRESHOLD,
-            best_breakdown,
-            title,
-        )
-
-    
-    created_event = crud.create_news_event(
-        db,
-        canonical_title=compare_title,
-        disease_name=primary_keyword,
-        location=normalized_location,
-        event_date=event_time,
-        case_count=None,
-        severity=severity,
-        fingerprint=build_event_fingerprint(primary_keyword, normalized_location, event_time),
-    )
-    
-    return created_event, None, format_dedupe_reason(best_breakdown or {}, False), 0
-
-
-def find_similar_event(
-    db: Session,
-    title: str,
-    summary: str,
-    matched_keywords: str,
-    pub_date: datetime,
-    location: str | None,
-    case_count: int,
-) -> tuple[models.NewsEvent | None, float | None, dict | None]:
-
-    primary_keyword = extract_primary_keyword(matched_keywords)
-    if not primary_keyword:
-        return None, None, None
-
-    normalized_location = normalize_text(location or "") or None
-
-    start_date = pub_date - timedelta(days=3)
-    end_date = pub_date + timedelta(days=3)
-
-    # Tìm kiếm lần 1: theo bệnh + địa điểm + khoảng thời gian
-    recent_events = crud.get_recent_events(
-        db,
-        disease_name=primary_keyword,
-        location=normalized_location,
-        start_date=start_date,
-        end_date=end_date,
-    )
-
-    # Tìm kiếm lần 2 (fallback): bỏ location nếu không tìm thấy
-    if not recent_events and normalized_location not in {None, "Việt Nam"}:
-        recent_events = crud.get_recent_events(
-            db,
-            disease_name=primary_keyword,
-            location=None,
-            start_date=start_date,
-            end_date=end_date,
-        )
-
-    best_match = None
-    best_score = 0.0
-    best_breakdown: dict | None = None
-
-    for event in recent_events:
-        score, breakdown = compute_event_similarity_score(
-            title=title,
-            summary=summary,
-            pub_date=pub_date,
-            location=normalized_location,
-            case_count=case_count,
-            event=event,
-        )
-        if score > best_score:
-            best_match = event
-            best_score = score
-            best_breakdown = breakdown
-
-    if best_match:
-        return best_match, best_score, best_breakdown
-
-    return None, None, None
-
-
 # ===========================================================================
 # LLM preflight
 # ===========================================================================
@@ -1320,6 +1192,19 @@ def build_llm_recheck_prompt(title: str, summary: str, keywords: list[str], sugg
         _SCHEMA_BLOCK,
         article_block,
     ])
+
+
+def get_llm_prompt_tracking(is_context: bool) -> tuple[str, str | None]:
+    if is_context:
+        template = LLM_SYSTEM_PROMPT + _GATE_B_CRITERIA + _SCHEMA_BLOCK_GATE_B
+        return hashlib.sha256(template.encode("utf-8")).hexdigest(), None
+    template = LLM_SYSTEM_PROMPT + _CRITERIA_BLOCK + _SCHEMA_BLOCK
+    dynamic_examples = get_labeled_dataset_few_shot_block()
+    exact_examples = _FEW_SHOT_BLOCK + ("\n\n" + dynamic_examples if dynamic_examples else "")
+    return (
+        hashlib.sha256(template.encode("utf-8")).hexdigest(),
+        hashlib.sha256(exact_examples.encode("utf-8")).hexdigest(),
+    )
 
 
 # ===========================================================================
@@ -1488,6 +1373,21 @@ def _activate_llm_fallback(reason: str) -> None:
     )
 
 
+def _build_llm_request_payload(model: str, prompt: str) -> dict:
+    payload = {
+        "model": model,
+        "temperature": 0,
+        "messages": [
+            {"role": "system", "content": LLM_SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ],
+    }
+    # Ling 3.0 Sante rejects OpenAI's response_format parameter. The prompt
+    # still requires JSON; schema-capable fallback models keep JSON mode.
+    if "ling" not in model.casefold():
+        payload["response_format"] = {"type": "json_object"}
+    return payload
+
 def _call_llm_api(model: str, api_key: str, base_url: str, prompt: str) -> dict:
     last_error: Exception | None = None
     for attempt in range(1, LLM_MAX_RETRIES + 1):
@@ -1500,15 +1400,7 @@ def _call_llm_api(model: str, api_key: str, base_url: str, prompt: str) -> dict:
                     "HTTP-Referer": "https://epi-scout-ai-main.vercel.app",
                     "X-Title": "EpiScout AI",
                 },
-                json={
-                    "model": model,
-                    "temperature": 0,
-                    "response_format": {"type": "json_object"},
-                    "messages": [
-                        {"role": "system", "content": LLM_SYSTEM_PROMPT},
-                        {"role": "user", "content": prompt},
-                    ],
-                },
+                json=_build_llm_request_payload(model, prompt),
                 timeout=LLM_RECHECK_TIMEOUT_SECONDS,
             )
             response.raise_for_status()
@@ -1567,7 +1459,7 @@ def llm_recheck_article(
     candidate_keywords: list[str],
     suggestions: list[str] = [],
     is_context: bool = False,
-) -> tuple[str, list[str], str, dict]:
+) -> tuple[str | None, list[str], str, dict]:
     """
     Call the LLM to classify an article and extract structured metadata.
 
@@ -1581,29 +1473,33 @@ def llm_recheck_article(
                              "severity"             : "low"|"medium"|"high"|None,
                            }
 
-    On any failure the function returns ("unsure", candidate_keywords, <reason>, EMPTY_META)
-    so the article is not silently dropped.
+    Provider failures return label=None and an internal inference status in meta.
+    This keeps technical failures separate from the business label "unsure".
     """
     EMPTY_META: dict = {"location": None, "cumulative_cases": 0, "new_cases": 0, "severity": None}
 
+    def failure_meta(status: str, model_id: str | None = None) -> dict:
+        return {**EMPTY_META, "_inference_status": status, "_model_id": model_id}
+
     if not candidate_keywords and not is_context:
-        return "irrelevant", [], "No candidate keywords", EMPTY_META
+        return "irrelevant", [], "No candidate keywords", {**EMPTY_META, "_inference_status": "success", "_model_id": "rule"}
 
     if not LLM_RECHECK_ENABLED:
-        return "unsure", candidate_keywords, "LLM re-check disabled", EMPTY_META
+        return None, candidate_keywords, "LLM re-check disabled", failure_meta("disabled")
 
     in_cooldown, cooldown_reason = _get_llm_cooldown_status()
     if in_cooldown:
         if not LLM_FALLBACK_MODEL:
-            return "unsure", candidate_keywords, f"LLM cooldown active: {cooldown_reason}", EMPTY_META
+            return None, candidate_keywords, f"LLM cooldown active: {cooldown_reason}", failure_meta("provider_error")
         _activate_llm_fallback(cooldown_reason)
 
     preflight = get_llm_preflight_status()
     if not preflight.get("ok"):
         logger.warning("LLM re-check skipped | reason={}", preflight.get("message"))
-        return "unsure", candidate_keywords, str(preflight.get("message")), EMPTY_META
+        return None, candidate_keywords, str(preflight.get("message")), failure_meta("model_unavailable")
 
     prompt = build_llm_recheck_prompt(title, summary, candidate_keywords, suggestions, is_context=is_context)
+    fallback_from_status = None
 
     try:
         global _llm_circuit_failures, _llm_circuit_state
@@ -1620,7 +1516,13 @@ def llm_recheck_article(
                 parsed = _call_llm_api(LLM_RECHECK_MODEL, LLM_RECHECK_API_KEY, LLM_RECHECK_BASE_URL, prompt)
                 _llm_circuit_failures = 0
                 used_model = LLM_RECHECK_MODEL
-            except (LLMRateLimitError, LLMTimeoutError) as exc:
+            except LLMError as exc:
+                if isinstance(exc, LLMRateLimitError):
+                    fallback_from_status = "rate_limited"
+                elif isinstance(exc, LLMTimeoutError):
+                    fallback_from_status = "timeout"
+                else:
+                    fallback_from_status = "provider_error"
                 _llm_primary_failures_today += 1
                 _llm_circuit_failures += 1
                 if _llm_circuit_failures >= LLM_CIRCUIT_BREAKER_THRESHOLD:
@@ -1630,21 +1532,18 @@ def llm_recheck_article(
                 _activate_llm_fallback(str(exc))
                 parsed = _call_llm_api(LLM_FALLBACK_MODEL, LLM_RECHECK_API_KEY, LLM_RECHECK_BASE_URL, prompt)
                 used_model = LLM_FALLBACK_MODEL
-            except LLMError as exc:
-                _llm_primary_failures_today += 1
-                raise exc
     except LLMTimeoutError as exc:
         logger.warning("LLM re-check failed | error={}", exc)
-        return "unsure", candidate_keywords, f"LLM timeout: {exc}", EMPTY_META
+        return None, candidate_keywords, f"LLM timeout: {exc}", failure_meta("timeout")
     except LLMRateLimitError as exc:
         logger.warning("LLM re-check failed | error={}", exc)
-        return "unsure", candidate_keywords, f"LLM rate limit: {exc}", EMPTY_META
+        return None, candidate_keywords, f"LLM rate limit: {exc}", failure_meta("rate_limited")
     except LLMError as exc:
         logger.warning("LLM re-check failed | error={}", exc)
-        return "unsure", candidate_keywords, f"LLM error: {exc}", EMPTY_META
+        return None, candidate_keywords, f"LLM error: {exc}", failure_meta("provider_error")
     except Exception as exc:
         logger.warning("LLM re-check failed | error={}", exc)
-        return "unsure", candidate_keywords, f"LLM error: {exc}", EMPTY_META
+        return None, candidate_keywords, f"LLM error: {exc}", failure_meta("provider_error")
 
     # --- label ---
     label = str(parsed.get("label", "unsure")).strip().lower()
@@ -1678,6 +1577,9 @@ def llm_recheck_article(
         "event_start_date": str(parsed.get("event_start_date", ""))[:10] if parsed.get("event_start_date") else None,
         "event_end_date": str(parsed.get("event_end_date", ""))[:10] if parsed.get("event_end_date") else None,
         "severity": _normalize_llm_severity(parsed.get("severity")),
+        "_inference_status": "success",
+        "_model_id": used_model,
+        "_fallback_from_status": fallback_from_status,
     }
 
     # Extract suspected_cases from diseases array for logging
@@ -2102,8 +2004,11 @@ def scan_news(
                             continue
 
                     title = normalize_text(entry.get("title", ""))
-                    summary = normalize_text(
-                        entry.get("summary", "") or entry.get("description", "")
+                    summary = trim_feed_related_titles(
+                        normalize_text(
+                            entry.get("summary", "") or entry.get("description", "")
+                        ),
+                        feed_url,
                     )
 
                     feed_eligible_entries += 1
@@ -2111,6 +2016,7 @@ def scan_news(
                     # Sample every eligible RSS entry before video and keyword filters.
                     if int(hashlib.sha256(link.encode("utf-8")).hexdigest()[:8], 16) % 10 == 0:
                         sample = {
+                            "sample_uuid": str(uuid.uuid4()),
                             "source_id": source_ids.get(feed_url), "link": link[:767],
                             "title": title[:500], "summary": summary[:2000],
                             "published_date": pub_date, "sampled_at": datetime.utcnow(),
@@ -2170,9 +2076,65 @@ def scan_news(
                     # ---- Stage 2: LLM classifier with Regex context ----
                     suggestions = extract_potential_numbers(title + " " + effective_summary)
                     
+                    from ..evaluation.writer import EvaluationWriter
+                    inference_writer = EvaluationWriter()
+                    eval_item_id = None
+                    eval_run_id = None
+                    inference_started_at = datetime.utcnow()
+                    try:
+                        prompt_template_hash, few_shot_dataset_hash = get_llm_prompt_tracking(stage1_route == "context")
+                        eval_item_id, eval_run_id = inference_writer.start_run(
+                            canonical_url=target_url or link,
+                            title=title,
+                            summary=effective_summary,
+                            source_domain=get_domain(target_url or link),
+                            published_date=pub_date,
+                            keywords=candidate_keywords,
+                            stage1_route=stage1_route,
+                            signal_type=signal_match.signal_type if signal_match else None,
+                            model_id=_llm_active_model or LLM_RECHECK_MODEL or "disabled",
+                            provider="openai_compatible",
+                            scan_run_id=scan_run_id,
+                            rss_sample_uuid=sample.get("sample_uuid") if sample else None,
+                            prompt_template_hash=prompt_template_hash,
+                            few_shot_dataset_hash=few_shot_dataset_hash,
+                        )
+                    except Exception:
+                        logger.exception("Could not create LLM evaluation run | link={}", link)
+
                     llm_label, llm_keywords, llm_reason, llm_meta = llm_recheck_article(
                         title, effective_summary, candidate_keywords, suggestions, is_context=stage1_route == "context"
                     )
+                    if eval_run_id is not None:
+                        inference_status = llm_meta.get("_inference_status", "success")
+                        completion_run_id = eval_run_id
+                        fallback_status = llm_meta.get("_fallback_from_status")
+                        if inference_status == "success" and fallback_status:
+                            inference_writer.complete(
+                                eval_run_id, status=fallback_status, label=None, reason="Primary provider failed before fallback",
+                                error_code=fallback_status, error_message="Fallback provider was used",
+                            )
+                            try:
+                                completion_run_id = inference_writer.start_followup_run(
+                                    eval_run_id,
+                                    model_id=llm_meta.get("_model_id") or LLM_FALLBACK_MODEL,
+                                    provider="openai_compatible",
+                                )
+                            except Exception:
+                                completion_run_id = None
+                                logger.exception("Could not create fallback inference attempt | link={}", link)
+                        if completion_run_id is not None:
+                            inference_writer.complete(
+                                completion_run_id,
+                                status=inference_status,
+                                label=llm_label,
+                                reason=llm_reason,
+                                parsed_response={key: value for key, value in llm_meta.items() if not key.startswith("_")},
+                                latency_ms=max(round((datetime.utcnow() - inference_started_at).total_seconds() * 1000), 0),
+                                error_code=None if inference_status == "success" else inference_status,
+                                error_message=None if inference_status == "success" else llm_reason,
+                                actual_model_id=llm_meta.get("_model_id"),
+                            )
                     if sample is not None:
                         sample["llm_label"] = llm_label
                         sample["llm_reason"] = llm_reason[:500]
@@ -2298,6 +2260,11 @@ def scan_news(
                     # Sync logic: Kiểm tra link trùng lặp cho tất cả các nguồn
                     existing = crud.get_article_by_link(db, link)
                     if existing:
+                        if eval_item_id is not None:
+                            try:
+                                inference_writer.attach_article(eval_item_id, existing.id)
+                            except Exception:
+                                logger.exception("Could not attach existing article to LLM evaluation item | article_id={}", existing.id)
                         if sample is not None:
                             sample["article_id"] = existing.id
                             sample["predicted_disease"] = (
@@ -2317,12 +2284,12 @@ def scan_news(
                         continue
 
                     try:
-                        if stage1_route == "context" or llm_label in {"noise", "irrelevant", "unsure"}:
+                        if stage1_route == "context" or llm_label is None or llm_label in {"noise", "irrelevant", "unsure"}:
                             event = None
                             event_match_score = None
-                            dedupe_reason = "gate_b_pending_analyst_review" if stage1_route == "context" else f"Excluded by LLM label: {llm_label}"
+                            dedupe_reason = "gate_b_pending_analyst_review" if stage1_route == "context" else f"Excluded by LLM status/label: {llm_meta.get('_inference_status')}/{llm_label}"
                         else:
-                            event, event_match_score, dedupe_reason, _ = resolve_event_for_article(
+                            event, event_match_score, dedupe_reason, _ = event_service.resolve_event_for_article(
                                 db=db,
                                 title=title,
                                 normalized_title=llm_normalized_title,
@@ -2365,7 +2332,7 @@ def scan_news(
                             elif total_confirmed:
                                 article_dto.tags = f"cases:{total_confirmed}"
                         saved_article = crud.create_article(db, article_dto)
-                        saved_article.is_excluded = stage1_route == "context" or llm_label in {"noise", "irrelevant", "unsure"}
+                        saved_article.is_excluded = stage1_route == "context" or llm_label is None or llm_label in {"noise", "irrelevant", "unsure"}
                         saved_article.details.stage1_route = stage1_route
                         saved_article.details.llm_reason = llm_reason[:500]
                         if signal_match:
@@ -2392,6 +2359,11 @@ def scan_news(
                             sample["predicted_event_date"] = event.event_date if event else None
                             sample["predicted_case_values"] = json.dumps(observed_values)
                         db.commit()
+                        if eval_item_id is not None:
+                            try:
+                                inference_writer.attach_article(eval_item_id, saved_article.id)
+                            except Exception:
+                                logger.exception("Could not attach article to LLM evaluation item | article_id={}", saved_article.id)
                         if sample is not None:
                             sample["article_id"] = saved_article.id
                         saved_count += 1

@@ -169,17 +169,17 @@ export default function SignalsPage() {
     }
   };
   return (
-    <main className="max-w-7xl mx-auto p-6 space-y-5">
-      <div className="flex items-center justify-between">
+    <div className="space-y-5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-semibold">Tín hiệu theo bệnh</h1>
           <p className="text-sm text-muted-foreground">Các sự kiện từ bài báo khớp từ khóa bệnh, chờ xác minh và xử lý.</p>
         </div>
-        <div className="flex gap-4"><Link to="/signals/gate-b" className="text-primary underline">Tín hiệu theo ngữ cảnh</Link><Link to="/" className="text-primary underline">Về trang chính</Link></div>
+        <div className="flex flex-wrap gap-3"><Link to="/signals/gate-b" className="text-primary underline">Tín hiệu theo ngữ cảnh</Link><Link to="/" className="text-primary underline">Về trang chính</Link></div>
       </div>
       {error && <p role="alert" className="text-red-600">{error}</p>}
-      <div className="grid gap-5 md:grid-cols-[320px_1fr]">
-        <section aria-label="Danh sách tín hiệu" className="space-y-2">
+      <div className="review-layout">
+        <section aria-label="Danh sách tín hiệu" className="review-list space-y-2">
           <label className="block text-sm">Lọc trạng thái
             <select value={queueFilter} onChange={(event) => { setQueueFilter(event.target.value as SignalStatus | "active"); setSelectedId(null); }} className="mt-1 block w-full rounded border p-2">
               <option value="active">Cần xử lý</option>
@@ -194,7 +194,7 @@ export default function SignalsPage() {
               key={item.id}
               type="button"
               onClick={() => { setSelectedId(item.id); setStatus("monitoring"); setReason(""); setNotes(""); setSource(""); setCaseObservationId(""); setSplitIds([]); }}
-              className="block w-full rounded border p-3 text-left hover:bg-accent focus-visible:ring-2 focus-visible:ring-primary"
+              className="queue-option"
               aria-pressed={selectedId === item.id}
             >
               <strong className="block">{item.title}</strong>
@@ -230,7 +230,7 @@ export default function SignalsPage() {
                   </article>
                 ))}
               </div>
-              <div className="rounded border p-4 space-y-3">
+              <div className="decision-panel rounded border bg-card p-4 space-y-3">
                 <h3 className="font-semibold">Ghi quyết định</h3>
                 <label className="block text-sm">Trạng thái
                   <select value={status} onChange={(event) => setStatus(event.target.value as SignalStatus)} className="mt-1 block w-full rounded border p-2">
@@ -300,6 +300,6 @@ export default function SignalsPage() {
           )}
         </section>
       </div>
-    </main>
+    </div>
   );
 }

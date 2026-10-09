@@ -377,13 +377,13 @@ const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
 
 
   const reportTabContent = (
-    <div className="space-y-6">
-      <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+    <div className="report-layout">
+      <div className="report-heading flex flex-wrap items-start justify-between gap-4">
         <div>
           <h3 className="text-lg font-semibold text-foreground">Cấu hình tham số</h3>
           <p className="text-sm text-muted-foreground">Chọn đối tượng và khung thời gian cho báo cáo tự động.</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <Button variant="outline" className="gap-2" onClick={handleExportExcel} disabled={exportingExcel || isGuest} title={isGuest ? "Dang nhap de xuat bao cao" : undefined}>
             {isGuest ? <Lock className="h-4 w-4" /> : <Table2 className="h-4 w-4 text-chart-2" />}
             {exportingExcel ? "Đang xuất báo cáo..." : "Biểu mẫu QĐ 2018"}
@@ -399,7 +399,7 @@ const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
         </div>
       </div>
 
-      <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+      <div className="report-config space-y-5">
         <div className="space-y-2">
           <Label>Loại báo cáo</Label>
           <Select value={reportType} onValueChange={(value) => setReportType(value as "signal" | "verified")}>
@@ -426,7 +426,7 @@ const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
 
       </div>
 
-      <div className="space-y-6">
+      <div className="report-preview min-w-0">
         <Card className="overflow-hidden">
           <CardHeader>
             <CardTitle>Xem nhanh sự kiện</CardTitle>

@@ -177,7 +177,6 @@ def generate_daily_summary(context_data: dict) -> dict:
             json={
                 "model": SUMMARY_MODEL,
                 "temperature": 0,
-                "response_format": {"type": "json_object"},
                 "messages": [
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": f"<context>{json.dumps(safe_context, ensure_ascii=False)}</context>"},
@@ -209,7 +208,6 @@ def generate_daily_summary(context_data: dict) -> dict:
                     json={
                         "model": FALLBACK_MODEL,
                         "temperature": 0,
-                        "response_format": {"type": "json_object"},
                         "messages": [
                             {"role": "system", "content": system_prompt},
                             {"role": "user", "content": f"<context>{json.dumps(safe_context, ensure_ascii=False)}</context>"},

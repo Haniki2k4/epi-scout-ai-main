@@ -194,7 +194,7 @@ export default function UserManagement() {
 
   return (
     <Card className="shadow-sm border-border/50">
-      <CardHeader className="flex flex-row items-center justify-between">
+      <CardHeader className="flex flex-wrap flex-row items-center justify-between gap-3">
         <div>
           <CardTitle>Danh sách Tài khoản</CardTitle>
           <CardDescription>Quản lý quyền truy cập và bảo mật hệ thống</CardDescription>
@@ -204,7 +204,7 @@ export default function UserManagement() {
         </Button>
       </CardHeader>
       <CardContent>
-        <div className="rounded-md border border-border/50 overflow-hidden">
+        <div className="rounded-md border border-border/50 overflow-x-auto">
           <Table>
             <TableHeader className="bg-muted/50">
               <TableRow>

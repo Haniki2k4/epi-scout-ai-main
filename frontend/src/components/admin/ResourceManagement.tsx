@@ -1,3 +1,4 @@
+import { useSearchParams } from "react-router-dom";
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -49,12 +50,15 @@ function authHeaders(): Record<string, string> {
   } : { "Content-Type": "application/json" };
 }
 
-export default function ResourceManagement() {
+export default function ResourceManagement({ section }: { section?: "keywords" | "rss" }) {
   const queryClient = useQueryClient();
+  const [params,setParams]=useSearchParams();
+  const updateSearch=(key:string,value:string)=>setParams(current=>{if(value)current.set(key,value);else current.delete(key);return current;},{replace:true});
 
   // Keyword states
   const [newKeyword, setNewKeyword] = useState("");
-  const [kwSearch, setKwSearch] = useState("");
+  const kwSearch=params.get("keyword_search") ?? "";
+  const setKwSearch=(value:string)=>updateSearch("keyword_search",value);
   const [isEditKwModalOpen, setIsEditKwModalOpen] = useState(false);
   const [editKwItem, setEditKwItem] = useState<KeywordModel | null>(null);
   const [editKwText, setEditKwText] = useState("");
@@ -63,11 +67,13 @@ export default function ResourceManagement() {
   const [newRssUrl, setNewRssUrl] = useState("");
   const [newRssLabel, setNewRssLabel] = useState("");
   const [newRssCategory, setNewRssCategory] = useState("the-gioi");
-  const [rssSearch, setRssSearch] = useState("");
+  const rssSearch=params.get("rss_search") ?? "";
+  const setRssSearch=(value:string)=>updateSearch("rss_search",value);
 
   // Fetch Keywords
-  const { data: keywords = [], isLoading: loadKw } = useQuery<KeywordModel[]>({
+  const { data: keywords = [], isLoading: loadKw, error: kwError, refetch: refetchKw } = useQuery<KeywordModel[]>({
     queryKey: ["admin_keywords"],
+    enabled: section !== "rss",
     queryFn: async () => {
       const res = await fetch("/api/keywords?limit=1000&only_active=false", { headers: authHeaders() });
       if (!res.ok) throw new Error("Failed to fetch keywords");
@@ -76,8 +82,9 @@ export default function ResourceManagement() {
   });
 
   // Fetch RSS Sources
-  const { data: rssSources = [], isLoading: loadRss } = useQuery<RssSourceModel[]>({
+  const { data: rssSources = [], isLoading: loadRss, error: rssError, refetch: refetchRss } = useQuery<RssSourceModel[]>({
     queryKey: ["admin_rss"],
+    enabled: section !== "keywords",
     queryFn: async () => {
       const res = await fetch("/api/rss-sources", { headers: authHeaders() });
       if (!res.ok) throw new Error("Failed to fetch RSS sources");
@@ -250,9 +257,10 @@ export default function ResourceManagement() {
   const rssActiveCount = rssSources.filter(r => r.is_active).length;
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+    <div className={section ? "space-y-6" : "grid grid-cols-1 lg:grid-cols-2 gap-6"}>
+      {(kwError || rssError) && <div role="alert" className="text-destructive">{kwError?.message || rssError?.message}<Button variant="outline" onClick={()=>{if(section!=="rss")void refetchKw();if(section!=="keywords")void refetchRss();}}>Thử lại</Button></div>}
       {/* ---------------- KEYWORD BLOCK ---------------- */}
-      <Card className="shadow-sm border-border/50">
+      {section !== "rss" && <Card className="shadow-sm border-border/50">
         <CardHeader>
           <div className="flex items-center gap-2">
             <Tag className="h-5 w-5 text-primary" />
@@ -261,7 +269,7 @@ export default function ResourceManagement() {
           <CardDescription>Các từ khóa hệ thống dùng để quét tin tức. Tắt để tạm dừng quét từ khóa đó.</CardDescription>
         </CardHeader>
         <CardContent>
-          <form onSubmit={handleAddKeyword} className="flex gap-2 mb-4">
+          <form onSubmit={handleAddKeyword} className="flex flex-wrap gap-2 mb-4">
             <Input
               placeholder="Ví dụ: Cúm gia cầm, Cúm A/H5N1, Bạch hầu..."
               value={newKeyword}
@@ -285,7 +293,7 @@ export default function ResourceManagement() {
             </Badge>
           </div>
 
-          <div className="rounded-md border border-border/50 overflow-auto h-[400px]">
+          <div className="rounded-md border border-border/50 overflow-auto max-h-[65svh]">
             {loadKw ? (
               <div className="flex justify-center p-8"><RefreshCcw className="h-6 w-6 animate-spin text-primary" /></div>
             ) : (
@@ -340,10 +348,10 @@ export default function ResourceManagement() {
             )}
           </div>
         </CardContent>
-      </Card>
+      </Card>}
 
       {/* ---------------- RSS SOURCE BLOCK ---------------- */}
-      <Card className="shadow-sm border-border/50">
+      {section !== "keywords" && <Card className="shadow-sm border-border/50">
         <CardHeader>
           <div className="flex items-center gap-2">
             <Rss className="h-5 w-5 text-primary" />
@@ -353,7 +361,7 @@ export default function ResourceManagement() {
         </CardHeader>
         <CardContent>
           <form onSubmit={handleAddRss} className="space-y-3 mb-6 p-4 rounded-lg border bg-muted/20">
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid gap-3 sm:grid-cols-2">
               <div className="space-y-1">
                 <Label className="text-xs">URL RSS</Label>
                 <Input
@@ -373,7 +381,7 @@ export default function ResourceManagement() {
                 />
               </div>
             </div>
-            <div className="flex items-end gap-3">
+            <div className="flex flex-wrap items-end gap-3">
               <div className="flex-1 space-y-1">
                 <Label className="text-xs">Phân loại (Category)</Label>
                 <select
@@ -405,7 +413,7 @@ export default function ResourceManagement() {
             </Badge>
           </div>
 
-          <div className="rounded-md border border-border/50 overflow-auto h-[350px]">
+          <div className="rounded-md border border-border/50 overflow-auto max-h-[65svh]">
             {loadRss ? (
               <div className="flex justify-center p-8"><RefreshCcw className="h-6 w-6 animate-spin text-primary" /></div>
             ) : (
@@ -456,7 +464,7 @@ export default function ResourceManagement() {
             )}
           </div>
         </CardContent>
-      </Card>
+      </Card>}
 
       {/* Edit Keyword Modal */}
       <Dialog open={isEditKwModalOpen} onOpenChange={setIsEditKwModalOpen}>

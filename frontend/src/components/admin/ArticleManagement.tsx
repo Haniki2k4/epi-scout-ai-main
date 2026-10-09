@@ -1,4 +1,7 @@
-import { useState } from "react";
+import { useSearchParams } from "react-router-dom";
+import { Input } from "@/components/ui/input";
+import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "@/components/ui/sheet";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
@@ -53,7 +56,7 @@ const labelBadge = (label: string | null | undefined) => {
     unsure: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-400",
   };
   return (
-    <span className={`px-2 py-0.5 rounded-full text-[10px] font-medium ${colors[label] || "bg-slate-100 text-slate-700"}`}>
+    <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${colors[label] || "bg-slate-100 text-slate-700"}`}>
       {label}
     </span>
   );
@@ -61,14 +64,21 @@ const labelBadge = (label: string | null | undefined) => {
 
 export default function ArticleManagement() {
   const queryClient = useQueryClient();
-  const [page, setPage] = useState(1);
+  const [params, setParams] = useSearchParams();
+  const page = Math.max(1, Number(params.get("page")) || 1);
+  const keyword = params.get("keyword") ?? "";
+  const includeExcluded = params.get("include_excluded") === "true";
+  const [search, setSearch] = useState(keyword);
+  useEffect(() => setSearch(keyword), [keyword]);
+  const [selected, setSelected] = useState<ArticleModel | null>(null);
+  const setPage = (update: (page: number) => number) => setParams(current => {current.set("page", String(update(page)));return current;});
   const LIMIT = 8;
 
   // Fetch Articles with labels — dùng API lẻ nhẹ hơn thay vì page-data gộp
-  const { data: articlesData, isLoading } = useQuery<PaginatedArticles>({
-    queryKey: ["admin_articles", page],
+  const { data: articlesData, isLoading, error, refetch } = useQuery<PaginatedArticles>({
+    queryKey: ["admin_articles", page, keyword, includeExcluded],
     queryFn: async () => {
-      const res = await fetch(`/api/articles?skip=${(page - 1) * LIMIT}&limit=${LIMIT}&include_label=true`);
+      const res = await fetch(`/api/articles?skip=${(page - 1) * LIMIT}&limit=${LIMIT}&include_label=true&keyword=${encodeURIComponent(keyword)}&include_excluded=${includeExcluded}`);
       if (!res.ok) throw new Error("Failed to fetch articles");
       return res.json();
     },
@@ -89,6 +99,7 @@ export default function ArticleManagement() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["admin_articles"] });
       queryClient.invalidateQueries({ queryKey: ["page-data"] }); // Sync với trang tin tức
+      setSelected(null);
       toast.success("Đã xóa bài báo thành công");
     },
     onError: (e) => toast.error(e.message),
@@ -112,7 +123,14 @@ export default function ArticleManagement() {
       </CardHeader>
 
       <CardContent>
-        <div className="rounded-md border border-border/50 overflow-hidden">
+        <form className="mb-4 flex flex-wrap items-end gap-3" onSubmit={event=>{event.preventDefault();setParams(current=>{current.set("keyword",search.trim());current.delete("page");return current;});}}>
+          <label className="flex-1 min-w-0 space-y-1 text-sm">Tìm theo từ khóa bệnh<Input value={search} onChange={event=>setSearch(event.target.value)} placeholder="Nhập từ khóa bệnh"/></label>
+          <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={includeExcluded} onChange={event=>setParams(current=>{current.set("include_excluded",String(event.target.checked));current.delete("page");return current;})}/>Bao gồm bài đã loại</label>
+          <Button type="submit">Tìm kiếm</Button>
+        </form>
+        {error && <div role="alert" className="mb-4 text-destructive">{error.message}<Button variant="outline" onClick={()=>refetch()}>Thử lại</Button></div>}
+
+        <div className="rounded-md border border-border/50 overflow-x-auto">
           {isLoading ? (
             <div className="flex justify-center p-12">
               <RefreshCcw className="h-8 w-8 animate-spin text-primary" />
@@ -166,7 +184,7 @@ export default function ArticleManagement() {
                             <Badge
                               key={idx}
                               variant="secondary"
-                              className="text-[10px] bg-primary/10 text-primary hover:bg-primary/20"
+                              className="text-xs bg-primary/10 text-primary hover:bg-primary/20"
                             >
                               {kw.trim()}
                             </Badge>
@@ -179,15 +197,15 @@ export default function ArticleManagement() {
                     <TableCell>
                       <div className="flex flex-col gap-1.5 min-w-[110px]">
                         <div className="flex items-center gap-1">
-                          <span className="text-[10px] text-muted-foreground">LLM:</span>
+                          <span className="text-xs text-muted-foreground">LLM:</span>
                           {labelBadge(article.llm_label)}
                         </div>
                         <div className="flex items-center gap-1">
-                          <span className="text-[10px] text-muted-foreground">Xác nhận:</span>
+                          <span className="text-xs text-muted-foreground">Xác nhận:</span>
                           {article.human_label ? (
                             labelBadge(article.human_label)
                           ) : (
-                            <span className="text-[10px] text-muted-foreground">-</span>
+                            <span className="text-xs text-muted-foreground">-</span>
                           )}
                         </div>
                       </div>
@@ -207,11 +225,11 @@ export default function ArticleManagement() {
                         <Button
                           variant="ghost"
                           size="icon"
-                          onClick={() => handleDelete(article.id)}
-                          className="hover:bg-destructive/10 hover:text-destructive text-destructive"
+                          onClick={() => setSelected(article)}
+                          aria-label="Xem chi tiết bài báo"
                           disabled={deleteArticleMutation.isPending}
                         >
-                          <Trash2 className="h-4 w-4" />
+                          <FileText className="h-4 w-4" />
                         </Button>
                       </div>
                     </TableCell>
@@ -257,6 +275,7 @@ export default function ArticleManagement() {
             </Button>
           </div>
         )}
+        <Sheet open={selected !== null} onOpenChange={open=>{if(!open)setSelected(null);}}><SheetContent className="w-full overflow-y-auto sm:max-w-xl"><SheetHeader><SheetTitle>{selected?.title}</SheetTitle><SheetDescription>Chi tiết bài báo đã lưu</SheetDescription></SheetHeader>{selected&&<div className="mt-6 space-y-4 text-sm"><p>{selected.source} · {selected.published_date ? new Date(selected.published_date).toLocaleString("vi-VN") : "Chưa có ngày"}</p><p>{selected.details?.summary || "Chưa có trích đoạn"}</p><p>Từ khóa: {selected.keywords_matched || "Chưa có"}</p><p>Nhãn LLM: {selected.llm_label || "Chưa có"}</p><p>Nhãn người duyệt: {selected.human_label || "Chưa có"}</p><div className="flex flex-wrap gap-2"><Button asChild><a href={selected.link} target="_blank" rel="noreferrer">Mở bài gốc</a></Button><Button variant="destructive" disabled={deleteArticleMutation.isPending} onClick={()=>handleDelete(selected.id)}>Xóa bài báo</Button></div></div>}</SheetContent></Sheet>
       </CardContent>
     </Card>
   );

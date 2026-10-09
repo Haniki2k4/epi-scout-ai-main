@@ -1,0 +1,17 @@
+{
+  "counts": {
+    "migrated": 660,
+    "skipped": 2,
+    "conflicts": 3,
+    "items": 653,
+    "existing": 0,
+    "merged": 0
+  },
+  "label_distribution": {
+    "relevant": 299,
+    "unsure": 6,
+    "irrelevant": 75,
+    "noise": 60
+  },
+  "dry_run": true
+}

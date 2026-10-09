@@ -236,6 +236,32 @@ def _schedule_daily_ai_summary(scheduler: AsyncIOScheduler) -> None:
     logger.info("Daily AI summary scheduled at 00:05 VN_TZ")
 
 
+def sweep_abandoned_inference_runs_job() -> None:
+    """Mark pending LLM runs whose lease expired after a crash."""
+    from .modules.evaluation.writer import sweep_abandoned_runs
+
+    with SessionLocal() as db:
+        try:
+            count = sweep_abandoned_runs(db)
+            if count:
+                logger.info("Swept abandoned inference runs | count={}", count)
+        except Exception as exc:
+            db.rollback()
+            logger.error("Failed to sweep abandoned inference runs | error={}", str(exc))
+
+
+def _schedule_inference_maintenance(scheduler: AsyncIOScheduler) -> None:
+    sweep_abandoned_inference_runs_job()
+    scheduler.add_job(
+        sweep_abandoned_inference_runs_job,
+        trigger=IntervalTrigger(minutes=5, timezone=VN_TZ),
+        id="sweep_abandoned_inference_runs",
+        name="Sweep Abandoned Inference Runs",
+        replace_existing=True,
+        misfire_grace_time=120,
+    )
+
+
 def start_scheduler() -> None:
     """Khởi động scheduler khi FastAPI startup."""
     run_now = False
@@ -276,6 +302,7 @@ def start_scheduler() -> None:
 
     # Đăng ký job AI summary chạy vào 00:05 mỗi ngày
     _schedule_daily_ai_summary(scheduler)
+    _schedule_inference_maintenance(scheduler)
 
     if not scheduler.running:
         scheduler.start()

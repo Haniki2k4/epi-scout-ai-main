@@ -50,15 +50,15 @@ class MultipleDiseaseQualityTests(TestCase):
         self.assertIsNone(row.human_disease)
         listed = list_samples(False, 50, self.db, self.admin)
         self.assertEqual(listed[0]["human_diseases"], ["Sởi", "Thủy đậu"])
-        disease_metric = get_quality_metrics(30, self.db, self.admin)["field_accuracy"]["disease"]
-        self.assertEqual(disease_metric["correct"], 1)
-        self.assertEqual(disease_metric["labeled_count"], 1)
+        metrics = get_quality_metrics(30, self.db, self.admin)
+        self.assertNotIn("field_accuracy", metrics)
+        self.assertEqual(metrics["llm_evaluation_url"], "/api/llm-evaluations/metrics")
 
     def test_extra_prediction_is_incorrect(self):
         row = self.sample("Sởi, Thủy đậu, Cúm A")
         label_sample(row.id, SampleLabel(human_relevant=True, human_diseases=["Sởi", "Thủy đậu"]), self.db, self.admin)
-        disease_metric = get_quality_metrics(30, self.db, self.admin)["field_accuracy"]["disease"]
-        self.assertEqual(disease_metric["correct"], 0)
+        self.db.refresh(row)
+        self.assertEqual(row.human_diseases, ["Sởi", "Thủy đậu"])
 
     def test_legacy_single_disease_is_read_as_list(self):
         row = self.sample("Sởi")
@@ -67,7 +67,6 @@ class MultipleDiseaseQualityTests(TestCase):
         self.db.commit()
         listed = list_samples(False, 50, self.db, self.admin)
         self.assertEqual(listed[0]["human_diseases"], ["Sởi"])
-        self.assertEqual(get_quality_metrics(30, self.db, self.admin)["field_accuracy"]["disease"]["correct"], 1)
 
     def test_reject_empty_disease_name(self):
         with self.assertRaises(ValidationError):

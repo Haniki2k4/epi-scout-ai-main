@@ -43,3 +43,5 @@ backup.sql
 
 # Vite cache artifacts
 vite.config.ts.timestamp-*
+# Local data repair backups
+backups/*.json

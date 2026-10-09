@@ -11,7 +11,7 @@ from ...core.logger import get_logger
 from ..auth import security
 from ..auth.models import UserBookmark
 from ..evaluation.models import ArticleEvaluation
-from . import crawler, crud, models, schemas
+from . import crawler, event_service, crud, models, schemas
 
 logger = get_logger("backend.router.articles")
 router = APIRouter(prefix="/api", tags=["articles"])
@@ -78,7 +78,7 @@ def save_article(
             f"{article.title} {article.summary or ''}",
             [kw.strip() for kw in matched_keywords.split(",") if kw.strip()],
         )
-        inferred_event, event_match_score, dedupe_reason, _ = crawler.resolve_event_for_article(
+        inferred_event, event_match_score, dedupe_reason, _ = event_service.resolve_event_for_article(
             db=db,
             title=article.title,
             summary=article.summary or "",

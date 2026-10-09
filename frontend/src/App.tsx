@@ -1,3 +1,12 @@
+import WorkspaceShell from "./layouts/WorkspaceShell";
+import AdminShell from "./layouts/AdminShell";
+import SystemStatus from "./pages/SystemStatus";
+import UserManagement from "./components/admin/UserManagement";
+import EvaluationManagement from "./components/admin/EvaluationManagement";
+import QualityReview from "./components/admin/QualityReview";
+import ArticleManagement from "./components/admin/ArticleManagement";
+import ResourceManagement from "./components/admin/ResourceManagement";
+import SchedulerConfig from "./components/admin/SchedulerConfig";
 import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -15,10 +24,10 @@ import { PublicRoute, AdminRoute, AnalystRoute } from "./components/auth/AuthGua
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      staleTime: 2 * 60 * 1000,   // 2 phút: data vẫn "fresh", không refetch khi remount
-      gcTime: 5 * 60 * 1000,      // 5 phút: giữ cache trong memory sau unmount
-      refetchOnWindowFocus: false, // Không refetch khi focus lại tab trình duyệt
-      retry: 1,                    // Chỉ retry 1 lần khi lỗi mạng
+      staleTime: 2 * 60 * 1000,
+      gcTime: 5 * 60 * 1000,
+      refetchOnWindowFocus: false,
+      retry: 1,
     },
   },
 });
@@ -35,13 +44,30 @@ const App = () => (
               <Route path="/login" element={<LoginPage />} />
             </Route>
 
-            <Route path="/" element={<Index />} />
+            {["/", "/dashboard", "/news", "/analytics", "/reports", "/alerts", "/bookmarks"].map((path) => (
+              <Route key={path} path={path} element={<Index />} />
+            ))}
 
-            <Route element={<AdminRoute />}>
-              <Route path="/admin/*" element={<AdminInterface />} />
+            <Route element={<AnalystRoute />}>
+              <Route element={<WorkspaceShell />}>
+                <Route path="/signals" element={<SignalsPage />} />
+                <Route path="/signals/gate-b" element={<SignalQueue />} />
+              </Route>
+
+              <Route element={<AdminShell />}>
+                <Route path="/admin/quality/stage-2" element={<EvaluationManagement />} />
+                <Route element={<AdminRoute />}>
+                  <Route path="/admin" element={<AdminInterface />} />
+                  <Route path="/admin/quality/stage-1" element={<QualityReview />} />
+                  <Route path="/admin/data/articles" element={<ArticleManagement />} />
+                  <Route path="/admin/data/keywords" element={<ResourceManagement section="keywords" />} />
+                  <Route path="/admin/data/rss-sources" element={<ResourceManagement section="rss" />} />
+                  <Route path="/admin/operations/scheduler" element={<SchedulerConfig />} />
+                  <Route path="/admin/operations/status" element={<SystemStatus />} />
+                  <Route path="/admin/system/users" element={<UserManagement />} />
+                </Route>
+              </Route>
             </Route>
-
-            <Route element={<AnalystRoute />}><Route path="/signals" element={<SignalsPage />} /><Route path="/signals/gate-b" element={<SignalQueue />} /></Route>
             <Route path="*" element={<NotFound />} />
           </Routes>
         </BrowserRouter>

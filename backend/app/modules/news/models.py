@@ -235,6 +235,7 @@ class RssEntrySample(Base):
     __tablename__ = "rss_entry_samples"
 
     id = Column(Integer, primary_key=True)
+    sample_uuid = Column(String(36), nullable=True, unique=True)
     source_id = Column(Integer, ForeignKey("rss_sources.id"), nullable=True)
     link = Column(String(767), nullable=False)
     title = Column(Unicode(500), nullable=False)

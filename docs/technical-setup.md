@@ -178,12 +178,14 @@ Xem [Rollout Signal Evidence](signal-evidence-rollout.md) và [Rollout Gate B](g
 ### 4. Chạy backend
 
 ```powershell
-.\backend\venv\Scripts\python.exe -m uvicorn backend.main:app --host 127.0.0.1 --port 8000 --reload
+.\backend\venv\Scripts\python.exe -m uvicorn backend.main:app --host 127.0.0.1 --port 8000 --reload --reload-dir backend
 ```
 
 - API: `http://127.0.0.1:8000`
 - Swagger: `http://127.0.0.1:8000/docs`
 - Health: `http://127.0.0.1:8000/api/health`
+
+Dùng `--reload-dir backend` để thay đổi frontend không restart backend giữa lúc crawler đang chạy.
 
 ### 5. Chạy frontend
 
@@ -232,6 +234,4 @@ Dockerfile chỉ khởi động Uvicorn. Migration production phải chạy riê
 ## Tài liệu liên quan
 
 - [README sản phẩm](../README.md)
-- [Rollout Gate B](gate-b-rollout.md)
-- [Rollout Signal Evidence](signal-evidence-rollout.md)
 - [Thiết kế mở rộng nguồn crawl](feature-crawl-data-expansion.md)

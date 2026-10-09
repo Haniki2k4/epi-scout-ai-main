@@ -91,7 +91,7 @@ export default function SignalReviewForm({ signal, onSaved, onStale }: {
         <p className="text-sm text-muted-foreground">Chỉ xác nhận bệnh khi có nguồn xác minh. Bài chưa xác định bệnh vẫn được giữ ẩn.</p>
       </CardHeader>
       <CardContent>
-        <form onSubmit={(event) => { event.preventDefault(); void save(); }} className="space-y-4">
+        <form onSubmit={(event) => { event.preventDefault(); void save(); }} className="decision-form">
           <label className="block space-y-1.5 text-sm font-medium">Kết luận
             <select value={decision} onChange={(event) => update(() => setDecision(event.target.value as Decision))} className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
               <option value="monitoring_unknown">Tiếp tục theo dõi, chưa rõ bệnh</option>

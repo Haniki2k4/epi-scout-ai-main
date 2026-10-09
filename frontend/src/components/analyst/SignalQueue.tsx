@@ -66,7 +66,7 @@ export default function SignalQueue() {
   }, [selectedId, loadSelected]);
 
   return (
-    <main className="mx-auto max-w-7xl space-y-5 p-4 sm:p-6">
+    <div className="space-y-5">
       <header className="flex flex-wrap items-start justify-between gap-3">
         <div className="flex items-start gap-3">
           <Button asChild variant="ghost" size="icon" aria-label="Về hàng đợi tín hiệu"><Link to="/signals"><ArrowLeft className="h-5 w-5" /></Link></Button>
@@ -82,8 +82,8 @@ export default function SignalQueue() {
         <Button type="button" variant={view === "monitoring" ? "default" : "outline"} onClick={() => { setView("monitoring"); setSelectedId(null); }} aria-pressed={view === "monitoring"}>Đang theo dõi</Button>
       </div>
       {error && <p role="alert" className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{error}</p>}
-      <div className="grid gap-5 md:grid-cols-[minmax(250px,350px)_1fr]">
-        <Card aria-label="Danh sách bài" className="h-fit">
+      <div className="review-layout">
+        <Card aria-label="Danh sách bài" className="review-list h-fit">
           <CardHeader><CardTitle className="flex items-center gap-2 text-base">{view === "pending" ? "Bài chờ duyệt" : "Bài đang theo dõi"} <Badge variant="secondary">{items.length}</Badge></CardTitle></CardHeader>
           <CardContent className="space-y-2">
             {loading && <p role="status" className="text-sm text-muted-foreground">Đang tải danh sách...</p>}
@@ -131,7 +131,7 @@ export default function SignalQueue() {
           </>}
         </section>
       </div>
-    </main>
+    </div>
   );
 }
 
