@@ -6,6 +6,7 @@ type LlmStatus = {
   primary_model: string;
   fallback_model: string;
   current_model: string;
+  actual_model?: string | null;
   circuit_state: string;
   fallback_count_today: number;
   primary_error_rate: number;
@@ -50,16 +51,22 @@ export default function SystemStatus() {
             <CardContent>
               {llmStatus ? (
                 <div className="space-y-2">
-                  <div className="flex justify-between items-center text-sm">
-                    <span className="text-muted-foreground">Mô hình chính:</span>
-                    <span className={`font-semibold ${llmStatus.circuit_state === 'CLOSED' ? 'text-green-600' : 'text-muted-foreground'}`} title={llmStatus.primary_model}>
-                      {llmStatus.primary_model?.split('/').pop() || 'N/A'}
+                  <div className="flex justify-between items-center gap-4 text-sm">
+                    <span className="text-muted-foreground">Model phản hồi gần nhất:</span>
+                    <span className="font-semibold text-right break-all" title={llmStatus.actual_model || undefined}>
+                      {llmStatus.actual_model || "Chưa có phản hồi"}
                     </span>
                   </div>
                   <div className="flex justify-between items-center text-sm">
-                    <span className="text-muted-foreground">Mô hình dự phòng:</span>
-                    <span className={`font-semibold ${llmStatus.circuit_state === 'OPEN' ? 'text-amber-600' : 'text-muted-foreground'}`} title={llmStatus.fallback_model}>
-                      {llmStatus.fallback_model?.split('/').pop() || 'N/A'}
+                    <span className="text-muted-foreground">Cấu hình chính:</span>
+                    <span className={`font-semibold text-right break-all ${llmStatus.circuit_state === 'CLOSED' ? 'text-green-600' : 'text-muted-foreground'}`} title={llmStatus.primary_model}>
+                      {llmStatus.primary_model || 'N/A'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center text-sm">
+                    <span className="text-muted-foreground">Cấu hình dự phòng:</span>
+                    <span className={`font-semibold text-right break-all ${llmStatus.circuit_state === 'OPEN' ? 'text-amber-600' : 'text-muted-foreground'}`} title={llmStatus.fallback_model}>
+                      {llmStatus.fallback_model || 'N/A'}
                     </span>
                   </div>
                   <div className="pt-2 mt-2 border-t text-xs text-muted-foreground flex justify-between">

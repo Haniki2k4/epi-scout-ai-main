@@ -31,6 +31,7 @@ from .modules.evaluation import router as evaluation_router
 from .modules.evaluation import router_llm as llm_evaluation_router
 from .modules.news import router_articles, router_resources, router_stats, router_signals, router_quality, router_context_signals
 from . import scheduler as app_scheduler
+import subprocess
 
 logger = get_logger("backend.main")
 
@@ -61,6 +62,17 @@ app = FastAPI(
     description="Hệ thống quét và tự động phân tích tin tức dịch tễ.",
     lifespan=lifespan,
 )
+
+
+@app.get("/api/admin/run-alembic", tags=["admin"])
+def trigger_alembic_upgrade():
+    result = subprocess.run(["alembic", "upgrade", "head"], capture_output=True, text=True)
+    return {
+        "returncode": result.returncode,
+        "stdout": result.stdout,
+        "stderr": result.stderr
+    }
+
 
 
 # ---------------------------------------------------------------------------
