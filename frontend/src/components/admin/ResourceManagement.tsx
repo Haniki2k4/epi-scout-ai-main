@@ -18,6 +18,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -32,6 +33,13 @@ interface KeywordModel {
   id: number;
   text: string;
   is_active: boolean;
+}
+
+interface KeywordSuggestion {
+  text: string;
+  canonical_name: string;
+  aliases: string[];
+  groups: string[];
 }
 
 interface RssSourceModel {
@@ -62,6 +70,9 @@ export default function ResourceManagement({ section }: { section?: "keywords" |
   const [isEditKwModalOpen, setIsEditKwModalOpen] = useState(false);
   const [editKwItem, setEditKwItem] = useState<KeywordModel | null>(null);
   const [editKwText, setEditKwText] = useState("");
+  const [deleteKwItem, setDeleteKwItem] = useState<KeywordModel | null>(null);
+  const [suggestionsOpen, setSuggestionsOpen] = useState(false);
+  const [selectedSuggestions, setSelectedSuggestions] = useState<string[]>([]);
 
   // RSS states
   const [newRssUrl, setNewRssUrl] = useState("");
@@ -93,6 +104,42 @@ export default function ResourceManagement({ section }: { section?: "keywords" |
   });
 
   // ============ KEYWORD MUTATIONS ============
+  const refreshKeywords = () => {
+    void queryClient.invalidateQueries({ queryKey: ["admin_keywords"] });
+    void queryClient.invalidateQueries({ queryKey: ["keyword_suggestions"] });
+    void queryClient.invalidateQueries({ queryKey: ["disease-cause-breakdown"] });
+  };
+
+  const { data: suggestions = [], isLoading: loadingSuggestions, error: suggestionsError, refetch: refetchSuggestions } = useQuery<KeywordSuggestion[]>({
+    queryKey: ["keyword_suggestions"],
+    enabled: suggestionsOpen,
+    queryFn: async () => {
+      const response = await fetch("/api/keywords/suggestions", { headers: authHeaders() });
+      if (!response.ok) throw new Error("Không tải được từ khóa gợi ý");
+      return response.json();
+    },
+  });
+
+  const importSuggestions = useMutation({
+    mutationFn: async () => {
+      const response = await fetch("/api/keywords/import-suggestions", {
+        method: "POST", headers: authHeaders(), body: JSON.stringify({ keywords: selectedSuggestions }),
+      });
+      if (!response.ok) {
+        const body = await response.json();
+        throw new Error(body.detail || "Không thể bổ sung từ khóa");
+      }
+      return response.json() as Promise<{ added_count: number; skipped_count: number }>;
+    },
+    onSuccess: (result) => {
+      refreshKeywords();
+      setSelectedSuggestions([]);
+      setSuggestionsOpen(false);
+      toast.success(`Đã thêm ${result.added_count} từ khóa; giữ nguyên các mục đã có`);
+    },
+    onError: (error) => toast.error(error.message),
+  });
+
   const createKwMutation = useMutation({
     mutationFn: async (text: string) => {
       const res = await fetch("/api/keywords", {
@@ -108,7 +155,7 @@ export default function ResourceManagement({ section }: { section?: "keywords" |
     },
     onSuccess: () => {
       setNewKeyword("");
-      queryClient.invalidateQueries({ queryKey: ["admin_keywords"] });
+      refreshKeywords();
       toast.success("Thêm từ khóa thành công");
     },
     onError: (e) => toast.error(e.message),
@@ -124,7 +171,8 @@ export default function ResourceManagement({ section }: { section?: "keywords" |
       return res.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["admin_keywords"] });
+      setDeleteKwItem(null);
+      refreshKeywords();
       toast.success("Đã xóa từ khóa");
     },
     onError: (e) => toast.error(e.message),
@@ -137,12 +185,15 @@ export default function ResourceManagement({ section }: { section?: "keywords" |
         headers: authHeaders(),
         body: JSON.stringify({ text }),
       });
-      if (!res.ok) throw new Error("Cập nhật thất bại");
+      if (!res.ok) {
+        const error = await res.json();
+        throw new Error(error.detail || "Cập nhật thất bại");
+      }
       return res.json();
     },
     onSuccess: () => {
       setIsEditKwModalOpen(false);
-      queryClient.invalidateQueries({ queryKey: ["admin_keywords"] });
+      refreshKeywords();
       toast.success("Đã cập nhật từ khóa");
     },
     onError: (e) => toast.error(e.message),
@@ -159,7 +210,7 @@ export default function ResourceManagement({ section }: { section?: "keywords" |
       return res.json();
     },
     onSuccess: (_, { is_active }) => {
-      queryClient.invalidateQueries({ queryKey: ["admin_keywords"] });
+      refreshKeywords();
       toast.success(is_active ? "Đã bật từ khóa" : "Đã tắt từ khóa");
     },
     onError: (e) => toast.error(e.message),
@@ -266,7 +317,10 @@ export default function ResourceManagement({ section }: { section?: "keywords" |
             <Tag className="h-5 w-5 text-primary" />
             <CardTitle>Từ Khóa Giám Sát</CardTitle>
           </div>
-          <CardDescription>Các từ khóa hệ thống dùng để quét tin tức. Tắt để tạm dừng quét từ khóa đó.</CardDescription>
+          <CardDescription>
+            Thêm, sửa, bật/tắt hoặc bỏ từ khóa ngay tại đây. Tắt để dừng giám sát và giữ nguyên danh mục.
+            Những thay đổi của bạn được lưu lại sau khi khởi động lại hệ thống.
+          </CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleAddKeyword} className="flex flex-wrap gap-2 mb-4">
@@ -280,6 +334,10 @@ export default function ResourceManagement({ section }: { section?: "keywords" |
               {createKwMutation.isPending ? <RefreshCcw className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4 mr-1" />} Thêm
             </Button>
           </form>
+
+          <Button variant="outline" className="mb-4" onClick={() => { setSelectedSuggestions([]); setSuggestionsOpen(true); }}>
+            <Plus className="h-4 w-4 mr-2" /> Bổ sung từ khóa gợi ý
+          </Button>
 
           <div className="flex items-center justify-between mb-4">
             <Input
@@ -310,6 +368,7 @@ export default function ResourceManagement({ section }: { section?: "keywords" |
                     <TableRow key={kw.id} className={!kw.is_active ? "opacity-50" : ""}>
                       <TableCell className="w-[80px]">
                         <Switch
+                          aria-label={`Giám sát ${kw.text}`}
                           checked={kw.is_active}
                           onCheckedChange={(val) => toggleKwMutation.mutate({ id: kw.id, is_active: val })}
                           disabled={toggleKwMutation.isPending}
@@ -323,6 +382,7 @@ export default function ResourceManagement({ section }: { section?: "keywords" |
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-1">
                           <Button
+                            aria-label={`Sửa ${kw.text}`}
                             variant="ghost"
                             size="sm"
                             onClick={() => openEditKwModal(kw)}
@@ -331,9 +391,10 @@ export default function ResourceManagement({ section }: { section?: "keywords" |
                             <Edit className="h-4 w-4" />
                           </Button>
                           <Button
+                            aria-label={`Bỏ ${kw.text}`}
                             variant="ghost"
                             size="sm"
-                            onClick={() => deleteKwMutation.mutate(kw.id)}
+                            onClick={() => setDeleteKwItem(kw)}
                             className="hover:text-destructive hover:bg-destructive/10"
                             disabled={deleteKwMutation.isPending}
                           >
@@ -349,6 +410,58 @@ export default function ResourceManagement({ section }: { section?: "keywords" |
           </div>
         </CardContent>
       </Card>}
+
+      <Dialog open={suggestionsOpen} onOpenChange={(open) => { if (!importSuggestions.isPending) setSuggestionsOpen(open); }}>
+        <DialogContent className="max-w-2xl max-h-[85svh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Bổ sung từ khóa giám sát</DialogTitle>
+            <DialogDescription>
+              Chỉ thêm những mục bạn chọn. Các từ khóa cũ và mục đã tắt được giữ nguyên.
+              Tên đồng nghĩa được tính chung một bệnh; phân týp khác nhau được thống kê riêng.
+            </DialogDescription>
+          </DialogHeader>
+          {loadingSuggestions ? <p>Đang tải danh mục...</p> : suggestionsError ? (
+            <div role="alert">{suggestionsError.message} <Button variant="outline" onClick={() => void refetchSuggestions()}>Thử lại</Button></div>
+          ) : suggestions.length ? <div className="space-y-4">
+            <Button variant="outline" onClick={() => setSelectedSuggestions(selectedSuggestions.length === suggestions.length ? [] : suggestions.map(item => item.text))}>
+              {selectedSuggestions.length === suggestions.length ? "Bỏ chọn tất cả" : "Chọn tất cả"}
+            </Button>
+            {suggestions.map((item) => <label key={item.text} className="flex gap-3 rounded-md border p-3 cursor-pointer">
+              <Checkbox aria-label={`Thêm ${item.text}`} checked={selectedSuggestions.includes(item.text)} disabled={importSuggestions.isPending}
+                onCheckedChange={(checked) => setSelectedSuggestions(current => checked === true ? [...new Set([...current, item.text])] : current.filter(text => text !== item.text))} />
+              <div className="space-y-1 text-sm">
+                <p className="font-medium">{item.text} {item.groups.map(group => <Badge key={group} variant="secondary" className="ml-1">{group}</Badge>)}</p>
+                <p className="text-muted-foreground">Tên thống kê: {item.canonical_name}</p>
+                <p className="text-muted-foreground">Tên đồng nghĩa: {item.aliases.join(", ")}</p>
+              </div>
+            </label>)}
+          </div> : <p>Danh mục hiện đã có đầy đủ các bệnh được gợi ý. Bạn vẫn có thể thêm từ khóa khác bằng ô nhập trên trang.</p>}
+          <DialogFooter>
+            <Button variant="outline" disabled={importSuggestions.isPending} onClick={() => setSuggestionsOpen(false)}>Đóng</Button>
+            <Button disabled={!selectedSuggestions.length || importSuggestions.isPending || !!suggestionsError} onClick={() => importSuggestions.mutate()}>
+              {importSuggestions.isPending ? "Đang lưu..." : `Thêm ${selectedSuggestions.length} mục đã chọn`}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={deleteKwItem !== null} onOpenChange={(open) => { if (!open && !deleteKwMutation.isPending) setDeleteKwItem(null); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Bỏ từ khóa khỏi danh mục?</DialogTitle>
+            <DialogDescription>
+              Bỏ “{deleteKwItem?.text}” khỏi danh mục quét. Bài báo và số liệu lịch sử vẫn được giữ nguyên.
+              Bạn có thể dùng công tắc tắt nếu chỉ muốn tạm dừng giám sát.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" disabled={deleteKwMutation.isPending} onClick={() => setDeleteKwItem(null)}>Hủy</Button>
+            <Button variant="destructive" disabled={deleteKwMutation.isPending} onClick={() => { if (deleteKwItem) deleteKwMutation.mutate(deleteKwItem.id); }}>
+              {deleteKwMutation.isPending ? "Đang bỏ..." : "Bỏ từ khóa"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* ---------------- RSS SOURCE BLOCK ---------------- */}
       {section !== "keywords" && <Card className="shadow-sm border-border/50">

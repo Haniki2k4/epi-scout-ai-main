@@ -6,7 +6,8 @@ ADVISORY_TITLE_PATTERN = re.compile(
     r"(ai|người lớn|trẻ em|phụ nữ|bà bầu).+(có mắc|có bị|nên|không)|"
     r"(bệnh|triệu chứng).+(là gì|thế nào)|"
     r"(nên ăn gì|kiêng gì|uống gì|phải làm sao|điều trị tại nhà)|"
-    r"(hỏi đáp|chuyên gia giải đáp|bác sĩ giải đáp))\b)",
+    r"(hỏi đáp|chuyên gia giải đáp|bác sĩ giải đáp)|"
+    r"(có giúp|có nên|có hiệu quả|cách nào|làm sao|nhanh khỏi|mẹo hay|món ăn|nấu canh))\b)",
     re.IGNORECASE,
 )
 STRONG_OUTBREAK_EVIDENCE_PATTERN = re.compile(

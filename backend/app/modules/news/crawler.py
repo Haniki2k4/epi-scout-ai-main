@@ -4,7 +4,13 @@ from . import crud, models, schemas, event_service
 from .html_utils import decode_html_entities, trim_feed_related_titles
 from .google_news import resolve_google_news_url
 from .stage1_context import is_advisory_without_outbreak_evidence
+from .article_content import fetch_article_content, valid_relevance_evidence, canonical_relevance_evidence, RELEVANCE_EVIDENCE_RULES
+from .case_evidence import ground_disease_entries, source_date, source_location
 from .signal_detector import DETECTOR_VERSION, detect_context_signal
+from .disease_catalog import (
+    LLM_DISEASE_RULES, canonical_disease, disease_names, keyword_aliases,
+    normalize_disease_entries,
+)
 from datetime import datetime, timedelta
 from urllib.parse import urlparse, quote, unquote
 from email.utils import parsedate_to_datetime
@@ -251,6 +257,8 @@ LLM_FALLBACK_MODEL = os.getenv("LLM_FALLBACK_MODEL", "").strip()
 LLM_RECHECK_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 LLM_RECHECK_BASE_URL = os.getenv("OPENAI_BASE_URL", "").rstrip("/")
 LLM_RECHECK_TIMEOUT_SECONDS = int(os.getenv("LLM_RECHECK_TIMEOUT_SECONDS", "20"))
+LLM_REASONING_EFFORT = os.getenv("LLM_REASONING_EFFORT", "").strip()
+LLM_MAX_INPUT_BYTES = max(0, int(os.getenv("LLM_MAX_INPUT_BYTES", "0")))
 LLM_CIRCUIT_BREAKER_THRESHOLD = max(int(os.getenv("LLM_CIRCUIT_BREAKER_THRESHOLD", "3")), 1)
 LLM_MAX_RETRIES = max(int(os.getenv("LLM_MAX_RETRIES", "2")), 1)
 LLM_RECHECK_RATE_LIMIT_COOLDOWN_SECONDS = int(
@@ -330,13 +338,23 @@ Tóm tắt: Bài viết tổng kết quá trình chống dịch COVID 2020–202
 Tiêu đề: Xuất hiện bệnh lạ tại miền Trung khiến nhiều người lo ngại
 Tóm tắt: Một số người dân phản ánh triệu chứng bất thường, ngành y tế địa phương đang xác minh.
 → {"label":"unsure","normalized_title":"","matched_keywords":["bệnh lạ"],"location":"miền Trung","diseases":[{"disease_name":"bệnh lạ","cumulative_cases":0,"new_cases":0,"event_start_date":null,"event_end_date":null}],"severity":null,"reason":"Chưa có xác nhận chính thức, cần theo dõi thêm."}
+
+### Ví dụ 10 — noise (độc giả hỏi về mẹo ăn uống, tên tuổi và địa chỉ không phải ca bệnh báo cáo)
+Tiêu đề: Canh giá đỗ, huyết heo có giúp nhanh khỏi cúm?
+Tóm tắt: Tôi mắc cúm A, vợ khuyên mua giá đỗ và huyết heo nấu canh để bệnh nhanh khỏi. Cách này có hiệu quả không? (Huy Minh, 45 tuổi, Thanh Hóa)
+→ {"label":"noise","normalized_title":"","matched_keywords":[],"location":"unknown","diseases":[],"severity":null,"reason":"Hỏi đáp dinh dưỡng cá nhân, không có sự kiện dịch tễ."}
+
+### Ví dụ 11 — relevant (báo cáo chùm ca từ cơ quan y tế)
+Tiêu đề: Thanh Hóa ghi nhận thêm 15 ca mắc cúm A phải nhập viện
+Tóm tắt: CDC tỉnh Thanh Hóa cho biết vừa phát hiện chùm 15 ca mắc cúm A tại một trường mầm non.
+→ {"label":"relevant","normalized_title":"Chùm 15 ca cúm A tại trường mầm non ở Thanh Hóa","matched_keywords":["cúm A"],"location":"Thanh Hóa","diseases":[{"disease_name":"cúm A","cumulative_cases":0,"new_cases":15,"suspected_cases":0,"case_status":"confirmed","event_start_date":null,"event_end_date":null}],"severity":"medium","reason":"CDC báo cáo chùm 15 ca cúm A tại trường mầm non."}
 """.strip()
 
 _CRITERIA_BLOCK = """
 ## Tiêu chí phân loại
 
 **relevant** — bài phải có ÍT NHẤT MỘT trong:
-1. Ca bệnh / ổ dịch tại địa điểm + thời gian cụ thể
+1. Ca bệnh / ổ dịch được báo cáo tại địa điểm + thời gian cụ thể, không phải lời kể trong câu hỏi tư vấn cá nhân
 2. Cảnh báo chính thức từ Bộ Y tế / CDC / WHO / chính quyền
 3. Số liệu ca mắc, tử vong, nhập viện được công bố
 4. Bùng phát bệnh truyền nhiễm đang diễn ra
@@ -346,6 +364,9 @@ _CRITERIA_BLOCK = """
 - Bài dịch vụ / quảng cáo / review sản phẩm có nhắc đến bệnh như ngữ cảnh.
 - Bài thảo luận, so sánh hoặc giải thích triệu chứng — bệnh được nhắc để minh họa, không có ca mắc.
 - Bài thuốc dân gian, trị mẹo không có bằng chứng dịch tễ cụ thể.
+- Hỏi đáp độc giả / bác sĩ trả lời: "Tôi mắc cúm A", "Con tôi bị sốt" trong câu hỏi tư vấn KHÔNG phải ca bệnh báo cáo dịch tễ. Tên, tuổi, địa chỉ người hỏi (ví dụ "Huy Minh, 45 tuổi, Thanh Hóa") KHÔNG được dùng làm số ca hoặc địa điểm dịch tễ.
+- Các bài hỏi ăn gì, kiêng gì, nấu canh, xông hơi, có giúp nhanh khỏi bệnh không là noise nếu không có báo cáo dịch tễ độc lập.
+- Với noise hoặc irrelevant: bắt buộc matched_keywords=[], diseases=[], normalized_title="", location="unknown", severity=null; không suy ra 1 ca từ người gửi câu hỏi.
 - **PHÂN BIỆT noise vs irrelevant:** Nếu tên bệnh XUẤT HIỆN trong bài → noise. Nếu bài hoàn toàn không liên quan đến y tế / dịch bệnh → irrelevant.
 
 **irrelevant** — Bài KHÔNG liên quan đến dịch bệnh (PHẢI LOẠI BỎ):
@@ -381,6 +402,7 @@ _SCHEMA_BLOCK = """
 ## Output schema (JSON hợp lệ — không thêm bất kỳ text nào ngoài JSON)
 {
   "label": "relevant" | "noise" | "irrelevant" | "unsure",
+  "relevance_evidence": {"signal_type": "case_report|outbreak|official_alert|field_response", "quote": "Trích nguyên văn 30-1500 ký tự từ thân bài chứng minh relevant; null nếu không relevant"},
   "normalized_title": "<Sinh một tiêu đề CHUẨN HÓA ngắn gọn (tối đa 15 từ) cho sự kiện dịch tễ này. VD: 'Dịch Ebola bùng phát tại CHDC Congo' — dùng để gom các bài báo cùng sự kiện. Nếu không phải relevant, ghi ''>",
   "matched_keywords": [<chỉ chọn từ danh sách keyword bên dưới, mảng rỗng nếu irrelevant>],
   "location": "<Tỉnh/thành phố ghi cách nhau bằng dấu phẩy. Nếu không có địa điểm mắc bệnh, ghi 'unknown'>",
@@ -418,6 +440,28 @@ _SCHEMA_BLOCK = """
 - Mỗi phần tử PHẢI có trường 'disease_name' khớp với một keyword.
 """.strip()
 
+_NUMERIC_EVIDENCE_RULES = """
+## Kiểm tra dữ kiện trước khi trả JSON (áp dụng cả Cửa A và Cửa B)
+- Đọc chẩn đoán/kết luận cuối cùng. Một bệnh chỉ được gia đình nghi ngờ, đã bị
+  bác sĩ loại trừ hoặc nằm trong câu phủ định không phải bệnh thực tế của ca này.
+- disease_name và matched_keywords ở Cửa A phải chọn nguyên tên trong danh sách
+  keyword được phép; không tự đổi thành tên khác dù tên đó xuất hiện trong bài.
+- Với mỗi số, xác định đúng đại lượng trong câu nguồn: ca mắc, nghi nhiễm,
+  tử vong, tuổi, người tiếp xúc hay đại lượng khác. Tuổi, số người tiếp xúc,
+  số ngày điều trị, phần trăm và số thứ tự không được biến thành số ca mắc.
+- Số tử vong chỉ thuộc observation case_type=deaths. Không dùng số tử vong
+  làm new_cases, cumulative_cases hoặc observation confirmed/total_unspecified.
+- new_cases chỉ dành cho ca mắc được nói rõ là mới; cumulative_cases chỉ dành
+  cho số ca mắc lũy kế được nguồn nêu rõ. Số ca trong một kỳ chưa rõ mới/lũy kế
+  giữ trong observations với count_scope=period_total hoặc unknown; không tự
+  cộng số ca mới với lũy kế và không gán cùng một số cho nhiều loại bệnh.
+- Mỗi observation dương phải trích nguyên văn câu chứa số và đại lượng tương
+  ứng. Nếu không có câu chứng minh, bỏ observation đó thay vì đoán hoặc tính.
+- Không tự chọn năm từ kiến thức ngoài bài hoặc từ ngày hiện tại. Ngày chỉ có
+  ngày-tháng, mốc hôm qua/tuần trước hoặc 'năm nay' không đủ căn cứ quy đổi khi
+  chưa có mốc ngày xuất bản đầy đủ; để các trường ngày tương ứng là null.
+""".strip()
+
 _GATE_B_CRITERIA = """
 Phân loại tin y tế thực địa không có từ khóa bệnh đã cấu hình.
 Relevant: chùm ca bệnh hoặc triệu chứng bất thường, động vật chết/nghi nhiễm,
@@ -431,6 +475,7 @@ _SCHEMA_BLOCK_GATE_B = """
 Chỉ trả một object JSON hợp lệ. Ví dụ khi chưa xác định bệnh:
 {"label":"relevant","normalized_title":"Chùm ca sốt tại trường X",
  "matched_keywords":[],"location":"Hà Nội","diseases":[],
+ "relevance_evidence":{"signal_type":"outbreak","quote":"Trích nguyên văn câu từ thân bài chứng minh chùm ca thực tế"},
  "severity":null,"reason":"Có chùm ca bất thường tại địa phương"}
 
 label phải là một trong relevant, noise, irrelevant, unsure.
@@ -1162,7 +1207,9 @@ def build_llm_recheck_prompt(title: str, summary: str, keywords: list[str], sugg
         return "\n\n".join([
             _GATE_B_CRITERIA,
             _SCHEMA_BLOCK_GATE_B,
-            f"Tiêu đề: {title}\nTóm tắt: {summary}",
+            RELEVANCE_EVIDENCE_RULES,
+            _NUMERIC_EVIDENCE_RULES,
+            f"Tiêu đề: {title}\nNội dung bài: {summary}",
         ])
     few_shot_blocks = [_FEW_SHOT_BLOCK]
     labeled_dataset_block = get_labeled_dataset_few_shot_block()
@@ -1170,7 +1217,9 @@ def build_llm_recheck_prompt(title: str, summary: str, keywords: list[str], sugg
         few_shot_blocks.extend(["---", labeled_dataset_block])
     few_shot_section = "\n\n".join(few_shot_blocks)
 
-    keyword_block = "\n".join(f"- {kw}" for kw in keywords)
+    keyword_block = "\n".join(
+        f"- {kw} (tên đồng nghĩa: {', '.join(keyword_aliases(kw))})" for kw in keywords
+    )
     keyword_section = f"## Keyword được phép chọn (CHỈ từ danh sách này)\n{keyword_block}"
 
     suggestion_block = ""
@@ -1180,25 +1229,28 @@ def build_llm_recheck_prompt(title: str, summary: str, keywords: list[str], sugg
     article_block = (
         f"## Bài báo cần phân tích\n"
         f"Tiêu đề: {title}\n"
-        f"Tóm tắt: {summary}"
+        f"Nội dung bài: {summary}"
     )
 
     return "\n\n".join([
         few_shot_section,
         "---",
         _CRITERIA_BLOCK,
+        LLM_DISEASE_RULES,
         keyword_section,
         suggestion_block,
         _SCHEMA_BLOCK,
+        RELEVANCE_EVIDENCE_RULES,
+        _NUMERIC_EVIDENCE_RULES,
         article_block,
     ])
 
 
 def get_llm_prompt_tracking(is_context: bool) -> tuple[str, str | None]:
     if is_context:
-        template = LLM_SYSTEM_PROMPT + _GATE_B_CRITERIA + _SCHEMA_BLOCK_GATE_B
+        template = LLM_SYSTEM_PROMPT + _GATE_B_CRITERIA + _SCHEMA_BLOCK_GATE_B + RELEVANCE_EVIDENCE_RULES + _NUMERIC_EVIDENCE_RULES
         return hashlib.sha256(template.encode("utf-8")).hexdigest(), None
-    template = LLM_SYSTEM_PROMPT + _CRITERIA_BLOCK + _SCHEMA_BLOCK
+    template = LLM_SYSTEM_PROMPT + _CRITERIA_BLOCK + LLM_DISEASE_RULES + _SCHEMA_BLOCK + RELEVANCE_EVIDENCE_RULES + _NUMERIC_EVIDENCE_RULES
     dynamic_examples = get_labeled_dataset_few_shot_block()
     exact_examples = _FEW_SHOT_BLOCK + ("\n\n" + dynamic_examples if dynamic_examples else "")
     return (
@@ -1386,9 +1438,13 @@ def _build_llm_request_payload(model: str, prompt: str) -> dict:
     # still requires JSON; schema-capable fallback models keep JSON mode.
     if "ling" not in model.casefold():
         payload["response_format"] = {"type": "json_object"}
+    if LLM_REASONING_EFFORT:
+        payload["reasoning_effort"] = LLM_REASONING_EFFORT
     return payload
 
 def _call_llm_api(model: str, api_key: str, base_url: str, prompt: str) -> dict:
+    if LLM_MAX_INPUT_BYTES and len((LLM_SYSTEM_PROMPT + prompt).encode("utf-8")) > LLM_MAX_INPUT_BYTES:
+        raise LLMError("Nội dung vượt ngân sách ngữ cảnh local; chưa phân tích, cần thẩm định.")
     last_error: Exception | None = None
     for attempt in range(1, LLM_MAX_RETRIES + 1):
         try:
@@ -1404,7 +1460,10 @@ def _call_llm_api(model: str, api_key: str, base_url: str, prompt: str) -> dict:
                 timeout=LLM_RECHECK_TIMEOUT_SECONDS,
             )
             response.raise_for_status()
-            content = response.json()["choices"][0]["message"]["content"]
+            choice = response.json()["choices"][0]
+            if choice.get("finish_reason") == "length":
+                raise LLMError("LLM response exceeded output budget; review required")
+            content = choice["message"]["content"]
             parsed = extract_json_object(content)
             if not parsed:
                 raise LLMError("LLM returned invalid JSON")
@@ -1459,6 +1518,7 @@ def llm_recheck_article(
     candidate_keywords: list[str],
     suggestions: list[str] = [],
     is_context: bool = False,
+    require_evidence: bool = False,
 ) -> tuple[str | None, list[str], str, dict]:
     """
     Call the LLM to classify an article and extract structured metadata.
@@ -1480,6 +1540,14 @@ def llm_recheck_article(
 
     def failure_meta(status: str, model_id: str | None = None) -> dict:
         return {**EMPTY_META, "_inference_status": status, "_model_id": model_id}
+
+    # Apply the same guard on rechecks and Gate B, before any paid LLM call.
+    if is_advisory_without_outbreak_evidence(title, summary):
+        return "noise", [], "Hỏi đáp/tư vấn cá nhân, không có sự kiện dịch tễ.", {
+            **EMPTY_META, "normalized_title": "", "location": "unknown", "diseases": [],
+            "event_start_date": None, "event_end_date": None,
+            "_inference_status": "success", "_model_id": "rule",
+        }
 
     if not candidate_keywords and not is_context:
         return "irrelevant", [], "No candidate keywords", {**EMPTY_META, "_inference_status": "success", "_model_id": "rule"}
@@ -1505,7 +1573,7 @@ def llm_recheck_article(
         global _llm_circuit_failures, _llm_circuit_state
         global _llm_primary_attempts_today, _llm_primary_failures_today
 
-        if _llm_session_is_fallback or _llm_circuit_state == "OPEN":
+        if LLM_FALLBACK_MODEL and (_llm_session_is_fallback or _llm_circuit_state == "OPEN"):
             _activate_llm_fallback(_llm_session_fallback_reason or "circuit open")
             parsed = _call_llm_api(LLM_FALLBACK_MODEL, LLM_RECHECK_API_KEY, LLM_RECHECK_BASE_URL, prompt)
             used_model = LLM_FALLBACK_MODEL
@@ -1551,36 +1619,67 @@ def llm_recheck_article(
         label = "unsure"
 
     reason = str(parsed.get("reason", "")).strip()
+    evidence = canonical_relevance_evidence(parsed.get("relevance_evidence"), title, summary)
+    if label == "relevant" and require_evidence and not valid_relevance_evidence(evidence, title, summary):
+        label = "unsure"
+        reason = "Chưa có câu bằng chứng hợp lệ từ thân bài; cần thẩm định."
 
     # --- keywords: only keep items that exist in candidate_keywords ---
-    candidate_map = {kw.lower(): kw for kw in candidate_keywords}
+    candidate_map = {canonical_disease(kw): kw for kw in candidate_keywords}
     raw_matched = parsed.get("matched_keywords") or []
     normalized_keywords: list[str] = list(dict.fromkeys(
-        candidate_map[kw.strip().lower()]
+        candidate_map[canonical_disease(kw)]
         for kw in raw_matched
-        if isinstance(kw, str) and kw.strip().lower() in candidate_map
+        if isinstance(kw, str) and canonical_disease(kw) in candidate_map
     ))
     # Safety fallback: if LLM says relevant but returned no valid keywords,
     # keep the full candidate list rather than silently losing context.
     if label == "relevant" and not normalized_keywords:
-        normalized_keywords = candidate_keywords
+        if require_evidence and not is_context:
+            label = "unsure"
+            reason = "Chưa xác định được bệnh hợp lệ trong danh mục; cần thẩm định."
+        elif not require_evidence:
+            normalized_keywords = candidate_keywords
 
     # --- extra metadata ---
+    if label == 'relevant' and require_evidence and not is_context and evidence:
+        quote = str(evidence.get('quote') or '')
+        if not any(text_contains_term(quote.casefold(), alias.casefold())
+                   for keyword in normalized_keywords for alias in keyword_aliases(keyword)):
+            label = 'unsure'
+            reason = 'Câu bằng chứng chưa gắn với bệnh được chọn; cần thẩm định.'
+    grounded_diseases = normalize_disease_entries(parsed.get('diseases'), None if is_context else candidate_keywords)
+    extraction_warnings = []
+    if require_evidence:
+        grounded_diseases, extraction_warnings = ground_disease_entries(grounded_diseases, title, summary, None if is_context else candidate_keywords)
     raw_normalized = parsed.get("normalized_title")
     normalized_title = str(raw_normalized).strip()[:150] if raw_normalized else ""
+    if require_evidence and re.search(r'ổ dịch|bùng phát', normalized_title, re.I) and not re.search(r'ổ dịch|bùng phát', title + '\n' + summary, re.I):
+        normalized_title = title[:150]
     meta: dict = {
         "normalized_title": normalized_title,
-        "location": _normalize_llm_location(parsed.get("location")),
-        "cumulative_cases": _normalize_llm_case_count(parsed.get("cumulative_cases")),
-        "new_cases": _normalize_llm_case_count(parsed.get("new_cases")),
-        "diseases": parsed.get("diseases") if isinstance(parsed.get("diseases"), list) else [],
-        "event_start_date": str(parsed.get("event_start_date", ""))[:10] if parsed.get("event_start_date") else None,
-        "event_end_date": str(parsed.get("event_end_date", ""))[:10] if parsed.get("event_end_date") else None,
+        "location": source_location(parsed.get('location'), title + '\n' + summary) if require_evidence else _normalize_llm_location(parsed.get("location")),
+        "cumulative_cases": 0 if require_evidence else _normalize_llm_case_count(parsed.get("cumulative_cases")),
+        "new_cases": 0 if require_evidence else _normalize_llm_case_count(parsed.get("new_cases")),
+        "diseases": grounded_diseases,
+        "event_start_date": source_date(parsed.get('event_start_date'), title + '\n' + summary) if require_evidence else (str(parsed.get('event_start_date'))[:10] if parsed.get('event_start_date') else None),
+        "event_end_date": source_date(parsed.get('event_end_date'), title + '\n' + summary) if require_evidence else (str(parsed.get('event_end_date'))[:10] if parsed.get('event_end_date') else None),
+        "_extraction_warnings": extraction_warnings,
         "severity": _normalize_llm_severity(parsed.get("severity")),
         "_inference_status": "success",
         "_model_id": used_model,
         "_fallback_from_status": fallback_from_status,
+        "relevance_evidence": evidence if valid_relevance_evidence(evidence, title, summary) else None,
     }
+
+    # Discard epidemiological data even if a noise/irrelevant response contains it.
+    if label in {"noise", "irrelevant"} or (require_evidence and label == "unsure"):
+        normalized_keywords = []
+        meta.update(
+            normalized_title="", location="unknown", diseases=[],
+            cumulative_cases=0, new_cases=0, severity=None,
+            event_start_date=None, event_end_date=None,
+        )
 
     # Extract suspected_cases from diseases array for logging
     _suspected_total = sum(
@@ -1648,14 +1747,14 @@ def matches_keywords(title: str, summary: str, keywords: list[str]) -> str | Non
 
     matched: list[str] = []
     for kw in keywords:
-        kw_lower = kw.lower()
-        if not (
-            text_contains_term(title_lower, kw_lower)
-            or text_contains_term(summary_lower, kw_lower)
-        ):
+        aliases = [alias.lower() for alias in keyword_aliases(kw)]
+        present = [alias for alias in aliases if (
+            text_contains_term(title_lower, alias) or text_contains_term(summary_lower, alias)
+        )]
+        if not present:
             continue
-        title_score = score_keyword_context(title_lower, kw_lower)
-        summary_score = score_keyword_context(summary_lower, kw_lower)
+        title_score = max(score_keyword_context(title_lower, alias) for alias in present)
+        summary_score = max(score_keyword_context(summary_lower, alias) for alias in present)
         combined_score = title_score + summary_score
 
         if not LLM_RECHECK_ENABLED:
@@ -2065,13 +2164,19 @@ def scan_news(
                     if sample is not None:
                         sample["passed_stage1"] = True
                     candidate_keywords = [
-                        kw.strip() for kw in matched_kw_str.split(",") if kw.strip()
+                        kw.strip() for kw in (matched_kw_str or "").split(",") if kw.strip()
                     ]
 
-                    # ---- Fetch Sapo ----
+                    # ---- Read publisher body, never classify a lead as a full article ----
                     target_url = get_domain_and_path(link)
-                    sapo = fetch_sapo(target_url)
-                    effective_summary = sapo if sapo else summary
+                    article_content = fetch_article_content(target_url)
+                    effective_summary = article_content.text or summary
+                    if stage1_route == "keyword":
+                        # A generic RSS headline may reveal the cause only in the lead.
+                        lead_matches = matches_keywords(title, effective_summary, keywords) or ""
+                        candidate_keywords = list(dict.fromkeys([
+                            *candidate_keywords, *(k.strip() for k in lead_matches.split(",") if k.strip()),
+                        ]))
 
                     # ---- Stage 2: LLM classifier with Regex context ----
                     suggestions = extract_potential_numbers(title + " " + effective_summary)
@@ -2102,9 +2207,15 @@ def scan_news(
                     except Exception:
                         logger.exception("Could not create LLM evaluation run | link={}", link)
 
-                    llm_label, llm_keywords, llm_reason, llm_meta = llm_recheck_article(
-                        title, effective_summary, candidate_keywords, suggestions, is_context=stage1_route == "context"
-                    )
+                    if article_content.status == "full_text":
+                        llm_label, llm_keywords, llm_reason, llm_meta = llm_recheck_article(
+                            title, effective_summary, candidate_keywords, suggestions,
+                            is_context=stage1_route == "context", require_evidence=True,
+                        )
+                    else:
+                        llm_label, llm_keywords = "unsure", []
+                        llm_reason = f"Chưa đọc được đầy đủ thân bài ({article_content.status}); cần thẩm định."
+                        llm_meta = {"_inference_status": "success", "_model_id": "content_guard", "diseases": []}
                     if eval_run_id is not None:
                         inference_status = llm_meta.get("_inference_status", "success")
                         completion_run_id = eval_run_id
@@ -2375,9 +2486,10 @@ def scan_news(
                         logger.exception("Article skipped due to error | link={} err={}", link, exc)
                         continue
                     # Theo dõi số bài theo từng bệnh (disease_counts)
-                    for d_entry in diseases_list if stage1_route == "keyword" and llm_label == "relevant" else []:
-                        d_name_key = d_entry.get("disease_name") or matched_kw_str.split(", ")[0]
-                        d_name_key = d_name_key.strip().lower()
+                    for d_name_key in disease_names(
+                        [d.get("disease_name") for d in diseases_list]
+                        if stage1_route == "keyword" and llm_label == "relevant" else []
+                    ):
                         disease_counts[d_name_key] = disease_counts.get(d_name_key, 0) + 1
 
             except Exception as exc:

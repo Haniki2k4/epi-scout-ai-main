@@ -1,0 +1,5 @@
+FROM qwen3.5:4b-q4_K_M
+PARAMETER num_ctx 65536
+PARAMETER num_thread 4
+PARAMETER num_predict 4096
+PARAMETER temperature 0

@@ -76,17 +76,17 @@ export interface ZScoreSpike {
   cases: number;
   rolling_mean: number;
   rolling_std: number;
-  z_score: number;
+  z_score: number | null;
   is_spike: boolean;
-  threshold?: number;
+  threshold?: number | null;
 }
 
 export interface ProphetForecast {
   date: string;
   actual: number | null;
-  forecast: number;
-  forecast_lower: number;
-  forecast_upper: number;
+  forecast: number | null;
+  forecast_lower: number | null;
+  forecast_upper: number | null;
   is_future: boolean;
 }
 
