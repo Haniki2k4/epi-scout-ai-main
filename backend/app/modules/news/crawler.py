@@ -498,6 +498,7 @@ _LLM_PREFLIGHT_STATUS: dict[str, str | bool] = {
 _LLM_COOLDOWN_UNTIL: datetime | None = None
 _LLM_COOLDOWN_REASON = ""
 _llm_active_model: str = LLM_RECHECK_MODEL
+_llm_last_actual_model: str | None = None
 _llm_session_is_fallback = False
 _llm_session_fallback_count = 0
 _llm_session_id: str | None = None
@@ -1467,7 +1468,9 @@ def _call_llm_api(model: str, api_key: str, base_url: str, prompt: str) -> dict:
             parsed = extract_json_object(content)
             if not parsed:
                 raise LLMError("LLM returned invalid JSON")
-            return parsed
+            actual_model = response_data.get("model")
+            _llm_last_actual_model = actual_model.strip() if isinstance(actual_model, str) and actual_model.strip() else None
+            return parsed, model, _llm_last_actual_model
         except requests.exceptions.Timeout as exc:
             last_error = exc
             if attempt >= LLM_MAX_RETRIES:
@@ -1498,6 +1501,7 @@ def get_llm_runtime_status() -> dict:
     )
     return {
         "current_model": _llm_active_model or LLM_RECHECK_MODEL,
+        "actual_model": _llm_last_actual_model,
         "primary_model": LLM_RECHECK_MODEL,
         "fallback_model": LLM_FALLBACK_MODEL,
         "circuit_state": _llm_circuit_state,
@@ -1575,15 +1579,13 @@ def llm_recheck_article(
 
         if LLM_FALLBACK_MODEL and (_llm_session_is_fallback or _llm_circuit_state == "OPEN"):
             _activate_llm_fallback(_llm_session_fallback_reason or "circuit open")
-            parsed = _call_llm_api(LLM_FALLBACK_MODEL, LLM_RECHECK_API_KEY, LLM_RECHECK_BASE_URL, prompt)
-            used_model = LLM_FALLBACK_MODEL
+            parsed, used_model, _ = _call_llm_api(LLM_FALLBACK_MODEL, LLM_RECHECK_API_KEY, LLM_RECHECK_BASE_URL, prompt)
         else:
             _llm_circuit_state = "CLOSED"
             _llm_primary_attempts_today += 1
             try:
-                parsed = _call_llm_api(LLM_RECHECK_MODEL, LLM_RECHECK_API_KEY, LLM_RECHECK_BASE_URL, prompt)
+                parsed, used_model, _ = _call_llm_api(LLM_RECHECK_MODEL, LLM_RECHECK_API_KEY, LLM_RECHECK_BASE_URL, prompt)
                 _llm_circuit_failures = 0
-                used_model = LLM_RECHECK_MODEL
             except LLMError as exc:
                 if isinstance(exc, LLMRateLimitError):
                     fallback_from_status = "rate_limited"
@@ -1598,8 +1600,7 @@ def llm_recheck_article(
                 if not LLM_FALLBACK_MODEL:
                     raise
                 _activate_llm_fallback(str(exc))
-                parsed = _call_llm_api(LLM_FALLBACK_MODEL, LLM_RECHECK_API_KEY, LLM_RECHECK_BASE_URL, prompt)
-                used_model = LLM_FALLBACK_MODEL
+                parsed, used_model, _ = _call_llm_api(LLM_FALLBACK_MODEL, LLM_RECHECK_API_KEY, LLM_RECHECK_BASE_URL, prompt)
     except LLMTimeoutError as exc:
         logger.warning("LLM re-check failed | error={}", exc)
         return None, candidate_keywords, f"LLM timeout: {exc}", failure_meta("timeout")

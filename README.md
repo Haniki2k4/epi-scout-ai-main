@@ -141,7 +141,4 @@ Trang **Chất lượng scout** đo riêng:
 Xem [Cài đặt và kiến trúc kỹ thuật](docs/technical-setup.md) để biết công nghệ, database, API, biến môi trường, cách chạy local và triển khai.
 
 Tài liệu vận hành:
-
-- [Rollout Gate B](docs/gate-b-rollout.md)
-- [Rollout Signal Evidence](docs/signal-evidence-rollout.md)
 - [Thiết kế mở rộng nguồn crawl](docs/feature-crawl-data-expansion.md)

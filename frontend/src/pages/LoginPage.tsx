@@ -44,9 +44,14 @@ export default function LoginPage() {
       const data = await response.json();
 
       if (response.ok) {
-        toast.success("Đăng nhập thành công!");
-        login(data.access_token);
-        navigate("/");
+        const isAuthenticated = await login(data.access_token);
+        if (isAuthenticated) {
+          toast.success("Đăng nhập thành công!");
+          navigate("/");
+        } else {
+          setErrorDetails("Không thể xác thực phiên làm việc. Vui lòng thử lại.");
+          toast.error("Không thể xác thực phiên làm việc. Vui lòng thử lại.");
+        }
       } else {
         // Detailed error from backend (like attempts left, or general 'invalid login')
         setErrorDetails(data.detail || "Đăng nhập thất bại");

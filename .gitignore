@@ -41,6 +41,10 @@ venv/
 scratch/
 docs/draft.ini
 backup.sql
+backups/
+
+scripts/
+backend/scripts/
 
 # Vite cache artifacts
 vite.config.ts.timestamp-*

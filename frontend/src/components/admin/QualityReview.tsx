@@ -1,12 +1,15 @@
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { useSearchParams } from "react-router-dom";
 import { useEffect, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import DiseaseMultiSelect from "@/components/admin/DiseaseMultiSelect";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { apiFetch, fetchDiseaseOptions } from "@/lib/apiClient";
+import { qualityKeys, keywordKeys } from "@/lib/queryKeys";
 
 const signalTypeLabels: Record<string, string> = { unexplained_cluster: "Chùm ca bất thường", animal_signal: "Tín hiệu từ động vật", environment_signal: "Tín hiệu môi trường", field_response: "Ứng phó thực địa" };
 const scanStatusLabels: Record<string, string> = { completed: "Hoàn tất", running: "Đang chạy", failed: "Thất bại" };
@@ -53,78 +56,143 @@ const emptyDraft: LabelDraft = { diseases: [], location: "", eventDate: "", case
 export default function QualityReview() {
   const [params, setParams] = useSearchParams();
   const section = ["review", "results", "sources"].includes(params.get("section") ?? "") ? params.get("section")! : "review";
-  const [samples, setSamples] = useState<Sample[]>([]);
+  const queryClient = useQueryClient();
   const [selectedSampleId, setSelectedSampleId] = useState<number | null>(null);
-  const selectedSample = samples.find((sample) => sample.id === selectedSampleId) ?? samples[0];
-  const [metrics, setMetrics] = useState<Metrics | null>(null);
-  const [sources, setSources] = useState<SourceHealth[]>([]);
-  const [pairs, setPairs] = useState<Pair[]>([]);
-  const [error, setError] = useState("");
-  const [isLoading, setIsLoading] = useState(true);
-  const [savingId, setSavingId] = useState<number | null>(null);
   const [drafts, setDrafts] = useState<Record<number, LabelDraft>>({});
-  const [diseaseOptions, setDiseaseOptions] = useState<string[]>([]);
-  const updateDraft = (id: number, field: Exclude<keyof LabelDraft, "diseases">, value: string) =>
+  const [dirtyDraftIds, setDirtyDraftIds] = useState<Set<number>>(() => new Set());
+  const [savingId, setSavingId] = useState<number | null>(null);
+  const samplesQuery = useQuery({
+    queryKey: qualityKeys.samples(),
+    queryFn: ({ signal }) => apiFetch<Sample[]>("/api/quality/samples?unlabeled=true&limit=30", { signal }),
+    staleTime: 45_000,
+    enabled: section === "review",
+  });
+  const pairsQuery = useQuery({
+    queryKey: qualityKeys.eventPairs(),
+    queryFn: ({ signal }) => apiFetch<Pair[]>("/api/quality/event-pairs/candidates?limit=20", { signal }),
+    staleTime: 45_000,
+    enabled: section === "review",
+  });
+  const diseaseOptionsQuery = useQuery({
+    queryKey: keywordKeys.diseaseOptions(),
+    queryFn: ({ signal }) => fetchDiseaseOptions(signal),
+    staleTime: 600_000,
+    enabled: section === "review",
+  });
+  const metricsQuery = useQuery({
+    queryKey: qualityKeys.metrics(),
+    queryFn: ({ signal }) => apiFetch<Metrics>("/api/quality/metrics", { signal }),
+    staleTime: 120_000,
+    enabled: section === "results" || section === "sources",
+  });
+  const sourcesQuery = useQuery({
+    queryKey: qualityKeys.sources(),
+    queryFn: ({ signal }) => apiFetch<SourceHealth[]>("/api/quality/sources", { signal }),
+    staleTime: 180_000,
+    enabled: section === "sources",
+  });
+  const samples = samplesQuery.data ?? [];
+  const pairs = pairsQuery.data ?? [];
+  const metrics = metricsQuery.data ?? null;
+  const sources = sourcesQuery.data ?? [];
+  const diseaseOptions = diseaseOptionsQuery.data ?? [];
+  const selectedSample = samples.find((sample) => sample.id === selectedSampleId) ?? samples[0];
+  const updateDraft = (id: number, field: Exclude<keyof LabelDraft, "diseases">, value: string) => {
+    setDirtyDraftIds((current) => new Set(current).add(id));
     setDrafts((current) => ({ ...current, [id]: { ...(current[id] ?? emptyDraft), [field]: value } }));
-
-  const updateDiseases = (id: number, diseases: string[]) => setDrafts((current) => ({ ...current, [id]: { ...(current[id] ?? emptyDraft), diseases } }));
-
-  const refresh = async () => {
-    setIsLoading(true);
-    try {
-      const responses = await Promise.all([
-        fetch("/api/quality/samples?unlabeled=true&limit=30"),
-        fetch("/api/quality/metrics"),
-        fetch("/api/quality/sources"),
-        fetch("/api/quality/event-pairs/candidates?limit=20"),
-      ]);
-      if (responses.some((response) => !response.ok)) throw new Error("Không tải được dữ liệu chất lượng");
-      const [sampleData, metricData, sourceData, pairData] = await Promise.all(responses.map((response) => response.json()));
-      setSamples(sampleData);
-      setMetrics(metricData);
-      setSources(sourceData);
-      setPairs(pairData);
-      setError("");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Không tải được dữ liệu");
-    } finally { setIsLoading(false); }
   };
-  useEffect(() => { refresh(); }, []);
+  const updateDiseases = (id: number, diseases: string[]) => {
+    setDirtyDraftIds((current) => new Set(current).add(id));
+    setDrafts((current) => ({ ...current, [id]: { ...(current[id] ?? emptyDraft), diseases } }));
+  };
   useEffect(() => {
-    fetch("/api/keywords?limit=1000&only_active=false")
-      .then((response) => response.ok ? response.json() : Promise.reject(new Error("Could not load disease suggestions")))
-      .then((rows: Array<{ text: string }>) => setDiseaseOptions(rows.map((row) => row.text)))
-      .catch((error: Error) => console.warn(error.message));
-  }, []);
-
-  const label = async (id: number, human_relevant: boolean, human_signal_label?: string) => {
-    const draft = drafts[id];
-    setSavingId(id);
-    try {
-      const response = await fetch(`/api/quality/samples/${id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ human_relevant, human_signal_label, human_diseases: draft?.diseases || [], human_location: draft?.location || null, human_event_date: draft?.eventDate ? `${draft.eventDate}T00:00:00` : null, human_case_value: draft?.caseValue ? Number(draft.caseValue) : null }),
-      });
-      if (!response.ok) throw new Error("Không lưu được nhãn");
-      toast.success("Đã lưu nhãn");
-      await refresh();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Không lưu được nhãn");
-    } finally { setSavingId(null); }
-  };
-  const labelPair = async (pair: Pair, same_event: boolean) => {
-    try {
-      const response = await fetch("/api/quality/event-pairs", {
+    if (!samplesQuery.data) return;
+    setDrafts((current) => {
+      const next = { ...current };
+      for (const sample of samplesQuery.data) {
+        if (!next[sample.id] || !dirtyDraftIds.has(sample.id)) next[sample.id] = emptyDraft;
+      }
+      return next;
+    });
+  }, [samplesQuery.data, dirtyDraftIds]);
+  const sampleMutation = useMutation({
+    mutationFn: ({ id, human_relevant, human_signal_label, draft }: {
+      id: number; human_relevant: boolean; human_signal_label?: string; draft: LabelDraft; tokenAtStart: string | null;
+    }) => apiFetch<unknown>(`/api/quality/samples/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        human_relevant,
+        human_signal_label,
+        human_diseases: draft.diseases,
+        human_location: draft.location || null,
+        human_event_date: draft.eventDate ? `${draft.eventDate}T00:00:00` : null,
+        human_case_value: draft.caseValue ? Number(draft.caseValue) : null,
+      }),
+    }),
+    onSuccess: (_result, variables) => {
+      if (localStorage.getItem("token") !== variables.tokenAtStart) return;
+      queryClient.setQueryData<Sample[]>(qualityKeys.samples(), (current) => current?.filter((sample) => sample.id !== variables.id) ?? []);
+      setDirtyDraftIds((current) => { const next = new Set(current); next.delete(variables.id); return next; });
+      queryClient.invalidateQueries({ queryKey: qualityKeys.metrics() });
+    },
+  });
+  const pairMutation = useMutation({
+    mutationFn: ({ pair, same_event }: { pair: Pair; same_event: boolean; tokenAtStart: string | null }) =>
+      apiFetch<unknown>("/api/quality/event-pairs", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ article_a_id: pair.article_a_id, article_b_id: pair.article_b_id, same_event }),
-      });
-      if (!response.ok) throw new Error("Không lưu được nhãn cặp bài");
-      toast.success("Đã lưu nhãn cặp bài");
-      await refresh();
+      }),
+    onSuccess: (_result, variables) => {
+      if (localStorage.getItem("token") !== variables.tokenAtStart) return;
+      queryClient.setQueryData<Pair[]>(qualityKeys.eventPairs(), (current) => current?.filter((pair) =>
+        pair.article_a_id !== variables.pair.article_a_id || pair.article_b_id !== variables.pair.article_b_id,
+      ) ?? []);
+      queryClient.invalidateQueries({ queryKey: qualityKeys.metrics() });
+    },
+  });
+
+  const label = async (id: number, human_relevant: boolean, human_signal_label?: string) => {
+    const draft = drafts[id] ?? emptyDraft;
+    const tokenAtStart = localStorage.getItem("token");
+    setSavingId(id);
+    try {
+      await sampleMutation.mutateAsync({ id, human_relevant, human_signal_label, draft, tokenAtStart });
+      if (localStorage.getItem("token") === tokenAtStart) toast.success("Đã lưu nhãn");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Không lưu được nhãn");
+      toast.error(err instanceof Error ? err.message : "Không lưu được nhãn");
+    } finally { setSavingId(null); }
+  };
+  const labelPair = async (pair: Pair, same_event: boolean) => {
+    const tokenAtStart = localStorage.getItem("token");
+    try {
+      await pairMutation.mutateAsync({ pair, same_event, tokenAtStart });
+      if (localStorage.getItem("token") === tokenAtStart) toast.success("Đã lưu nhãn cặp bài");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Không lưu được nhãn cặp bài");
+    }
+  };
+  const isLoading = section === "review"
+    ? samplesQuery.isLoading || pairsQuery.isLoading || diseaseOptionsQuery.isLoading
+    : section === "results"
+      ? metricsQuery.isLoading
+      : metricsQuery.isLoading || sourcesQuery.isLoading;
+  const activeError = section === "review"
+    ? samplesQuery.error ?? pairsQuery.error ?? diseaseOptionsQuery.error
+    : section === "results"
+      ? metricsQuery.error
+      : metricsQuery.error ?? sourcesQuery.error;
+  const retryActiveQueries = () => {
+    if (section === "review") {
+      void samplesQuery.refetch();
+      void pairsQuery.refetch();
+      void diseaseOptionsQuery.refetch();
+    } else if (section === "results") {
+      void metricsQuery.refetch();
+    } else {
+      void metricsQuery.refetch();
+      void sourcesQuery.refetch();
     }
   };
   const percent = (value: number | null) => value === null ? "Chưa đủ mẫu" : `${(value * 100).toFixed(1)}%`;
@@ -132,8 +200,8 @@ export default function QualityReview() {
   return (
     <div className="space-y-8 text-sm">
       {isLoading && <p role="status">Đang tải dữ liệu…</p>}
-      {error && <Button variant="outline" onClick={refresh}>Thử lại</Button>}
-      {error && <p role="alert" className="rounded-lg border border-destructive/30 bg-destructive/10 p-4 text-base text-destructive">{error}</p>}
+      {activeError && <Button variant="outline" onClick={retryActiveQueries}>Thử lại</Button>}
+      {activeError && <p role="alert" className="rounded-lg border border-destructive/30 bg-destructive/10 p-4 text-base text-destructive">{activeError instanceof Error ? activeError.message : "Không tải được dữ liệu"}</p>}
 
       <Tabs value={section} onValueChange={value => setParams(current => { current.set("section", value); return current; })}>
       <TabsList className="h-auto flex flex-wrap justify-start"><TabsTrigger value="review">Hàng đợi đánh giá</TabsTrigger><TabsTrigger value="results">Kết quả Stage 1</TabsTrigger><TabsTrigger value="sources">Thống kê và lỗi nguồn</TabsTrigger></TabsList>
