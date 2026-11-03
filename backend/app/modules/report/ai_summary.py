@@ -7,6 +7,10 @@ from sqlalchemy.orm import Session, joinedload
 
 from ...core.logger import get_logger
 from ..news import models, stats
+from ..news.visibility import public_article_condition
+from ..news.disease_catalog import disease_names
+from .analysis import build_analysis_report, validate_summary_prose
+from collections import Counter
 
 logger = get_logger("backend.report.ai_summary")
 
@@ -39,53 +43,68 @@ def _empty_summary(start: datetime, end: datetime) -> dict:
     }
 
 
-def build_daily_summary_context(db: Session) -> dict:
+def build_daily_summary_context(db: Session, scope_hours: int = 24, interval_width: float = 0.8) -> dict:
     end = datetime.utcnow()
-    start = end - timedelta(hours=24)
+    start = end - timedelta(hours=scope_hours)
     articles = (
         db.query(models.ArticleIdentity)
-        .options(joinedload(models.ArticleIdentity.cases))
+        .options(joinedload(models.ArticleIdentity.cases), joinedload(models.ArticleIdentity.details))
         .join(models.ArticleDetails, models.ArticleIdentity.details)
-        .filter(models.ArticleIdentity.published_date >= start)
-        .order_by(models.ArticleIdentity.published_date.desc())
-        .limit(50)
+        .filter(models.ArticleIdentity.published_date >= start, models.ArticleIdentity.published_date <= end,
+                public_article_condition())
+        .order_by(models.ArticleIdentity.published_date.desc(), models.ArticleIdentity.id.desc())
         .all()
     )
     events = (
         db.query(models.NewsEvent)
-        .filter(
-            models.NewsEvent.event_date >= start,
-            models.NewsEvent.severity.in_(["high", "medium"]),
-        )
+        .join(models.ArticleIdentity, models.ArticleIdentity.event_id == models.NewsEvent.id)
+        .filter(models.ArticleIdentity.published_date >= start, models.ArticleIdentity.published_date <= end,
+                public_article_condition(), models.NewsEvent.status != 'rejected')
+        .distinct()
         .order_by(models.NewsEvent.event_date.desc())
         .limit(10)
         .all()
     )
-    zscore_spikes = [item for item in stats.get_zscore_spikes(db, days=30) if item.get("spike_level") in {"alert", "danger"}][:5]
-    top_diseases = stats.disease_mention_counts(db, days=30)[:3]
+    counts = Counter()
+    for article in articles:
+        counts.update(disease_names((article.keywords_matched or '').split(',') + [case.disease_name for case in article.cases]))
+    top_diseases = [{'disease_name': name} for name, _ in counts.most_common(3)]
+    zscore_spikes = []
     forecasts = []
     for item in top_diseases:
-        forecast = stats.get_prophet_forecast(db, disease_name=item["disease_name"], horizon_days=3)
-        if forecast.get("forecast"):
-            forecasts.append({
-                "disease_name": item["disease_name"],
-                "forecast": forecast["forecast"],
-            })
+        forecast = stats.get_prophet_forecast(db, disease_name=item["disease_name"], horizon_days=7, interval_width=interval_width)
+        forecasts.append({**forecast, 'disease_name': item['disease_name']})
+        zscore_spikes.extend({**row, 'disease': item['disease_name']} for row in stats.get_zscore_spikes(db, disease_name=item['disease_name'], days=30)
+                             if row.get('spike_level') in {'alert', 'danger'} and start.date().isoformat() <= row['date'] <= end.date().isoformat())
+    verified_ids = {event.verified_case_source_id for event in events if event.status == 'verified_event' and event.verified_case_source_id}
     return {
         "period_start": start,
         "period_end": end,
         "articles": [
             {
+                "id": article.id, "link": article.link,
                 "title": article.title,
                 "source": article.source,
-                "disease": article.keywords_matched,
+                "disease": ', '.join(sorted(disease_names((article.keywords_matched or '').split(',') + [case.disease_name for case in article.cases]))),
                 "locations": sorted({case.location for case in article.cases if case.location}),
                 "published_date": article.published_date.isoformat() if article.published_date else None,
+                "observations": [{
+                    'id': case.id, 'disease_name': case.disease_name, 'reported_value': case.reported_value,
+                    'case_type': case.case_type, 'count_scope': case.count_scope,
+                    'location': case.location,
+                    'report_period_start': case.report_period_start.isoformat() if case.report_period_start else None,
+                    'report_period_end': case.report_period_end.isoformat() if case.report_period_end else None,
+                    'evidence_quote': case.evidence_quote[:150], 'verified': case.id in verified_ids,
+                } for case in article.cases if case.reported_value is not None and case.reported_value > 0 and case.evidence_quote and case.data_quality is None],
             }
             for article in articles
         ],
         "zscore_spikes": zscore_spikes,
         "forecasts": forecasts,
+        "verified_events": [{'event_id': event.id, 'disease': event.disease_name, 'location': event.location,
+                             'status': event.status, 'verified_case_source_id': event.verified_case_source_id,
+                             'verification_source': event.verification_source}
+                            for event in events if event.status == 'verified_event'],
         "events": [
             {
                 "title": event.canonical_title,
@@ -100,6 +119,10 @@ def build_daily_summary_context(db: Session) -> dict:
 
 
 def _fallback_generate_summary(context_data: dict) -> dict:
+    return build_analysis_report(context_data)
+
+
+def _legacy_fallback_generate_summary(context_data: dict) -> dict:
     start = context_data["period_start"]
     end = context_data["period_end"]
     if not context_data["articles"] and not context_data["events"] and not context_data["zscore_spikes"]:
@@ -164,7 +187,15 @@ def generate_daily_summary(context_data: dict) -> dict:
         "summaries (list, mỗi item có text + evidence_count + confidence high/medium/low), "
         "recommendations (list, 2-3 khuyến nghị ngắn), "
         "has_alert (bool)."
+        " Chỉ chọn nguyên văn text trong allowed_summaries; không viết lại hoặc thêm dữ kiện."
     )
+    safe_context['allowed_summaries'] = build_analysis_report(context_data)['summaries']
+    context_json = json.dumps(safe_context, ensure_ascii=False)
+    max_input_bytes = max(0, int(os.getenv('LLM_MAX_INPUT_BYTES', '0')))
+    if max_input_bytes and len((system_prompt + context_json).encode('utf-8')) > max_input_bytes:
+        return _fallback_generate_summary(context_data)
+    local_options = ({'reasoning_effort': os.getenv('LLM_REASONING_EFFORT')}
+                     if os.getenv('LLM_REASONING_EFFORT') else {})
     try:
         response = requests.post(
             f"{SUMMARY_BASE_URL}/chat/completions",
@@ -177,6 +208,8 @@ def generate_daily_summary(context_data: dict) -> dict:
             json={
                 "model": SUMMARY_MODEL,
                 "temperature": 0,
+                **local_options,
+                'max_tokens': 1024,
                 "messages": [
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": f"<context>{json.dumps(safe_context, ensure_ascii=False)}</context>"},
@@ -190,7 +223,7 @@ def generate_daily_summary(context_data: dict) -> dict:
         if isinstance(parsed, dict):
             parsed.setdefault("period", _period_label(context_data["period_start"], context_data["period_end"]))
             parsed.setdefault("headline", "")
-            return parsed
+            return validate_summary_prose(parsed, context_data)
     except Exception as exc:
         logger.warning("Daily AI summary primary model failed | model={} error={}", SUMMARY_MODEL, str(exc))
         # Fallback to second LLM model if available
@@ -208,6 +241,8 @@ def generate_daily_summary(context_data: dict) -> dict:
                     json={
                         "model": FALLBACK_MODEL,
                         "temperature": 0,
+                        **local_options,
+                        'max_tokens': 1024,
                         "messages": [
                             {"role": "system", "content": system_prompt},
                             {"role": "user", "content": f"<context>{json.dumps(safe_context, ensure_ascii=False)}</context>"},
@@ -221,7 +256,7 @@ def generate_daily_summary(context_data: dict) -> dict:
                 if isinstance(parsed, dict):
                     parsed.setdefault("period", _period_label(context_data["period_start"], context_data["period_end"]))
                     parsed.setdefault("headline", "")
-                    return parsed
+                    return validate_summary_prose(parsed, context_data)
             except Exception as f_exc:
                 logger.warning("Fallback AI summary failed | model={} error={}", FALLBACK_MODEL, str(f_exc))
 

@@ -45,9 +45,10 @@ async def lifespan(app: FastAPI):
     """Startup & shutdown logic in a single context manager."""
     # --- Startup ---
     with database.SessionLocal() as db:
-        crud.seed_default_keywords(db)
+        # Keywords are managed explicitly in the product. Re-seeding on every
+        # startup would silently resurrect keywords removed by an administrator.
         crud.seed_default_rss_sources(db)
-        logger.info("Backend startup complete, default keywords and RSS sources seeded")
+        logger.info("Backend startup complete, monitoring keywords preserved")
     crawler.log_llm_preflight_status(force_refresh=True)
     app_scheduler.start_scheduler()
     app_scheduler.trigger_ai_summary()

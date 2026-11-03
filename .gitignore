@@ -11,6 +11,7 @@ node_modules
 dist
 dist-ssr
 *.local
+!Modelfile.local
 
 # Editor directories and files
 .vscode/*
@@ -49,3 +50,4 @@ backend/scripts/
 vite.config.ts.timestamp-*
 # Local data repair backups
 backups/*.json
+backups/*.sql

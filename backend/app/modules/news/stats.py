@@ -1,8 +1,66 @@
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from . import models
+from .visibility import public_article_condition
 from datetime import datetime, timedelta
 from collections import defaultdict
+from types import SimpleNamespace
+from .disease_catalog import (
+    canonical_disease, disease_names, belongs_to_category, matches_disease_filter,
+)
+
+
+def _disease_rows(db: Session, start_date: datetime):
+    """Read-only classification of legacy labels and source observations by article."""
+    rows = (
+        db.query(models.ArticleIdentity.id, models.ArticleIdentity.published_date,
+                 models.ArticleDetails.keywords_matched, models.DiseaseCase.disease_name)
+        .join(models.ArticleDetails, models.ArticleDetails.article_id == models.ArticleIdentity.id)
+        .outerjoin(models.DiseaseCase, models.DiseaseCase.article_id == models.ArticleIdentity.id)
+        .filter(models.ArticleIdentity.published_date >= start_date)
+        .filter(public_article_condition())
+        .all()
+    )
+    articles = {}
+    for article_id, published_date, keywords, case_disease in rows:
+        item = articles.setdefault(article_id, SimpleNamespace(
+            article_id=article_id, published_date=published_date,
+            date_str=published_date.strftime("%Y-%m-%d"), raw_names=set(),
+        ))
+        item.raw_names.update(k.strip() for k in (keywords or "").split(",") if k.strip())
+        if case_disease:
+            item.raw_names.add(case_disease)
+    for item in articles.values():
+        item.diseases = disease_names(item.raw_names)
+    return list(articles.values())
+
+
+def get_disease_breakdown(db: Session, category: str, days: int = 30):
+    rows = _disease_rows(db, datetime.utcnow() - timedelta(days=days))
+    counts = defaultdict(int)
+    total = 0
+    for row in rows:
+        members = {n for n in row.diseases if belongs_to_category(n, category)}
+        if members:
+            total += 1
+        for name in members:
+            counts[name] += 1
+    return {
+        "category": category, "days": days, "metric_type": "mention_count",
+        "total_articles": total,
+        "diseases": [{"disease_name": name, "article_count": count}
+                     for name, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))],
+    }
+
+
+def get_disease_catalog(db: Session):
+    names = {canonical_disease(k.text) for k in db.query(models.Keyword).filter(
+        models.Keyword.is_active.is_(True)).all()}
+    names.update({"virus chưa xác định", "sốt chưa rõ nguyên nhân"})
+    counts = {item["disease_name"]: item["article_count"]
+              for item in disease_mention_counts(db, months=12)}
+    return [{"disease_name": name, "article_count": counts.get(name, 0)}
+            for name in sorted(names | counts.keys())]
 
 
 def disease_mention_counts(db: Session, months: int = 1, days: int = None):
@@ -18,22 +76,12 @@ def disease_mention_counts(db: Session, months: int = 1, days: int = None):
         start_date = datetime.utcnow() - timedelta(days=months * 30)
 
     # Lấy tất cả keywords_matched của các bài báo trong khoảng thời gian
-    articles = (
-        db.query(models.ArticleDetails.keywords_matched)
-        .join(models.ArticleIdentity, models.ArticleIdentity.id == models.ArticleDetails.article_id)
-        .filter(models.ArticleIdentity.published_date >= start_date)
-        .filter(models.ArticleIdentity.is_excluded.isnot(True))
-        .all()
-    )
+    articles = _disease_rows(db, start_date)
 
     counts = defaultdict(int)
     for art in articles:
-        if art.keywords_matched:
-            # Tách các keyword bằng dấu phẩy và chuẩn hóa
-            kws = [k.strip().lower() for k in art.keywords_matched.split(",") if k.strip()]
-            # Mỗi bài báo chỉ tính 1 lần cho mỗi keyword trong bài đó
-            for kw in set(kws):
-                counts[kw] += 1
+        for kw in art.diseases:
+            counts[kw] += 1
 
     results = [{"disease_name": k, "article_count": v} for k, v in counts.items() if k]
     results.sort(key=lambda x: x["article_count"], reverse=True)
@@ -88,7 +136,7 @@ def get_trend_data(db: Session, days: int = 7):
             func.count(models.ArticleIdentity.id).label("mentions"),
         )
         .filter(models.ArticleIdentity.published_date >= start_date)
-        .filter(models.ArticleIdentity.is_excluded.isnot(True))
+        .filter(public_article_condition())
         .group_by(func.date_format(models.ArticleIdentity.published_date, "%Y-%m-%d"))
         .all()
     )
@@ -109,18 +157,11 @@ def get_trend_data(db: Session, days: int = 7):
 def get_heatmap_data(db: Session, days: int = 30):
     """Daily article mentions by disease; legacy case rows are not a time series."""
     start_date = datetime.utcnow() - timedelta(days=days - 1)
-    rows = (
-        db.query(models.ArticleIdentity.published_date, models.ArticleDetails.keywords_matched)
-        .join(models.ArticleDetails, models.ArticleDetails.article_id == models.ArticleIdentity.id)
-        .filter(models.ArticleIdentity.published_date >= start_date)
-        .filter(models.ArticleIdentity.is_excluded.isnot(True))
-        .all()
-    )
+    rows = _disease_rows(db, start_date)
     counts = defaultdict(int)
-    for published_date, keywords in rows:
-        if published_date and keywords:
-            for disease in {item.strip() for item in keywords.split(",") if item.strip()}:
-                counts[(published_date.strftime("%Y-%m-%d"), disease)] += 1
+    for row in rows:
+        for disease in row.diseases:
+            counts[(row.date_str, disease)] += 1
     return [
         {"date": day, "disease": disease, "count": count}
         for (day, disease), count in sorted(counts.items())
@@ -148,7 +189,7 @@ def get_location_heatmap_data(db: Session, days: int = 30, month: int = None, ye
         .join(models.ArticleIdentity, models.ArticleIdentity.event_id == models.NewsEvent.id)
         .filter(models.ArticleIdentity.published_date >= start_date)
         .filter(models.ArticleIdentity.published_date <= end_date)
-        .filter(models.ArticleIdentity.is_excluded.isnot(True))
+        .filter(public_article_condition())
         .filter(models.NewsEvent.status.notin_(["rejected", "closed"]))
         .filter(models.NewsEvent.location.isnot(None))
         .filter(models.NewsEvent.location.notin_(["", "Việt Nam", "unknown", "Unknown", "UNKNOWN"]))
@@ -161,9 +202,14 @@ def get_location_heatmap_data(db: Session, days: int = 30, month: int = None, ye
             "location": row.location, "total_mentions": 0, "total_cases": None, "diseases": [],
         })
         item["total_mentions"] += row.mentions
-        item["diseases"].append({
-            "disease_name": row.disease_name, "mentions": row.mentions, "cases": None,
-        })
+        name = canonical_disease(row.disease_name or "")
+        existing = next((d for d in item["diseases"] if d["disease_name"] == name), None)
+        if existing:
+            existing["mentions"] += row.mentions
+        else:
+            item["diseases"].append({
+                "disease_name": name, "mentions": row.mentions, "cases": None,
+            })
 
     locations = sorted(location_map.values(), key=lambda item: item["total_mentions"], reverse=True)[:20]
     for item in locations:
@@ -191,21 +237,12 @@ def get_interest_trends(db: Session, days: int = 30):
     if not top_disease_names:
         return {"dates": [], "diseases": [], "data": []}
 
-    articles = (
-        db.query(
-            func.date_format(models.ArticleIdentity.published_date, "%Y-%m-%d").label("date_str"),
-            models.ArticleDetails.keywords_matched
-        )
-        .join(models.ArticleIdentity, models.ArticleIdentity.id == models.ArticleDetails.article_id)
-        .filter(models.ArticleIdentity.published_date >= start_date)
-        .filter(models.ArticleIdentity.is_excluded.isnot(True))
-        .all()
-    )
+    articles = _disease_rows(db, start_date)
 
     day_map: dict = defaultdict(lambda: {d: 0 for d in top_disease_names})
     for row in articles:
-        if row.keywords_matched:
-            kws = [k.strip().lower() for k in row.keywords_matched.split(",") if k.strip()]
+        if row.diseases:
+            kws = row.diseases
             for kw in set(kws):
                 if kw in top_disease_names:
                     day_map[row.date_str][kw] += 1
@@ -231,27 +268,19 @@ def get_zscore_spikes(db, disease_name=None, window=14, days=60):
     import math
     start_date = datetime.utcnow() - timedelta(days=days + window) # Lấy dư để tính MA cho ngày đầu tiên
     
-    articles = (
-        db.query(
-            func.date_format(models.ArticleIdentity.published_date, "%Y-%m-%d").label("date_str"),
-            models.ArticleDetails.keywords_matched
-        )
-        .join(models.ArticleIdentity, models.ArticleIdentity.id == models.ArticleDetails.article_id)
-        .filter(models.ArticleIdentity.published_date >= start_date)
-        .filter(models.ArticleIdentity.is_excluded.isnot(True))
-        .all()
-    )
+    articles = _disease_rows(db, start_date)
     
     # Đếm mentions theo ngày
     daily_counts = defaultdict(int)
     for art in articles:
-        if art.keywords_matched:
-            kws = [k.strip().lower() for k in art.keywords_matched.split(",") if k.strip()]
-            if not disease_name or disease_name.lower() in kws:
+        if art.diseases:
+            kws = art.diseases
+            if matches_disease_filter(kws, disease_name):
                 daily_counts[art.date_str] += 1
                 
-    target_dates = [(datetime.utcnow() - timedelta(days=days - 1 - i)).strftime("%Y-%m-%d") for i in range(days + window)]
+    target_dates = [(datetime.utcnow() - timedelta(days=days + window - 1 - i)).strftime("%Y-%m-%d") for i in range(days + window)]
     counts = [daily_counts[d] for d in target_dates]
+    first_seen = min(daily_counts, default=None)
     
     result = []
     # Chỉ trả về dữ liệu của `days` ngày gần nhất
@@ -264,19 +293,23 @@ def get_zscore_spikes(db, disease_name=None, window=14, days=60):
         variance = sum((x - ma) ** 2 for x in window_data) / window
         std = math.sqrt(variance)
         
-        if std > 0:
+        has_history = first_seen is not None and target_dates[i - window] >= first_seen
+        if has_history and std > 0:
             zscore = (cnt - ma) / std
         else:
-            zscore = 2.0 + (cnt - ma) if cnt > ma else 0.0
+            zscore = None
             
-        spike_level = 'danger' if zscore >= 3.0 else ('alert' if zscore >= 2.0 else 'normal')
+        spike_level = ('insufficient_baseline' if zscore is None else
+                       ('danger' if zscore >= 3.0 else ('alert' if zscore >= 2.0 else 'normal')))
         result.append({
             'date': d, 
             'count': cnt, 'mention_count': cnt, 'metric_type': 'mention_count',
-            'ma': round(ma, 2), 
-            'std': round(std, 2),
-            'zscore': round(zscore, 2), 
-            'spike_level': spike_level
+            'ma': round(ma, 2) if has_history else None,
+            'std': round(std, 2) if has_history else None,
+            'zscore': round(zscore, 2) if zscore is not None else None,
+            'spike_level': spike_level, 'p_value': None,
+            'significance_test': 'not_performed',
+            'baseline_status': ('insufficient_history' if not has_history else ('zero_variance' if zscore is None else 'available')),
         })
     return result
 
@@ -285,7 +318,7 @@ def get_zscore_spikes(db, disease_name=None, window=14, days=60):
 # Prophet Time-Series Forecast
 # ===========================================================================
 
-def get_prophet_forecast(db, disease_name=None, horizon_days=7):
+def get_prophet_forecast(db, disease_name=None, horizon_days=7, interval_width=0.80):
     """
     Dự báo xu hướng nhắc đến bài báo bằng Prophet.
     Dùng ArticleDetails.keywords_matched.
@@ -293,30 +326,39 @@ def get_prophet_forecast(db, disease_name=None, horizon_days=7):
     days_history = 90
     start_date = datetime.utcnow() - timedelta(days=days_history + 14)
     
-    articles = (
-        db.query(
-            func.date_format(models.ArticleIdentity.published_date, "%Y-%m-%d").label("date_str"),
-            models.ArticleDetails.keywords_matched
-        )
-        .join(models.ArticleIdentity, models.ArticleIdentity.id == models.ArticleDetails.article_id)
-        .filter(models.ArticleIdentity.published_date >= start_date)
-        .filter(models.ArticleIdentity.is_excluded.isnot(True))
-        .all()
-    )
+    articles = _disease_rows(db, start_date)
     
     daily_counts = defaultdict(int)
     for art in articles:
-        if art.keywords_matched:
-            kws = [k.strip().lower() for k in art.keywords_matched.split(",") if k.strip()]
-            if not disease_name or disease_name.lower() in kws:
+        if art.diseases:
+            kws = art.diseases
+            if matches_disease_filter(kws, disease_name):
                 daily_counts[art.date_str] += 1
                 
-    target_dates = [(datetime.utcnow() - timedelta(days=days_history - 1 - i)).strftime("%Y-%m-%d") for i in range(days_history)]
+    today = datetime.utcnow().date()
+    earliest = min(daily_counts, default=today.isoformat())
+    first_date = max(today - timedelta(days=days_history - 1), datetime.strptime(earliest, '%Y-%m-%d').date())
+    target_dates = [(first_date + timedelta(days=i)).isoformat() for i in range((today - first_date).days + 1)]
     historical = [{"ds": d, "y": daily_counts[d]} for d in target_dates]
-    
-    if len([h for h in historical if h["y"] > 0]) < 5:
-        return {"historical": historical, "forecast": [], "disease": disease_name,
-                "horizon_days": horizon_days, "metric_type": "mention_count", "error": "Chưa đủ dữ liệu để dự báo"}
+    complete_history = [row for row in historical if row['ds'] < today.isoformat()]
+    result = {
+        'historical': historical, 'forecast': [], 'disease': disease_name,
+        'horizon_days': horizon_days, 'metric_type': 'mention_count',
+        'model_name': 'Meta Prophet', 'interval_width': interval_width,
+        'interval_type': 'prediction_interval', 'p_value': None,
+        'significance_test': 'not_performed', 'partial_day_excluded': True,
+        'history_days': len(complete_history),
+        'metrics': {'mae': None, 'rmse': None, 'eval_method': 'Chưa đủ dữ liệu kiểm định'},
+        'limitations': [
+            'Dự báo lượt bài hệ thống ghi nhận, không phải số ca bệnh.',
+            'Báo dẫn lại cùng nguồn có thể làm tăng lượt bài; chưa hiệu chỉnh syndication.',
+            'Không suy ra p < 0,05 từ Z-score hoặc khoảng dự báo.',
+            'Ngày không có bài trong cơ sở dữ liệu không chứng minh không có tin trên toàn bộ báo chí.',
+        ],
+    }
+    if len(complete_history) < 21 or sum(row['y'] > 0 for row in complete_history) < 5:
+        result['error'] = 'Chưa đủ 21 ngày lịch sử hoàn chỉnh và 5 ngày có bài để dự báo'
+        return result
     try:
         import pandas as pd
         from prophet import Prophet
@@ -324,17 +366,17 @@ def get_prophet_forecast(db, disease_name=None, horizon_days=7):
         import numpy as np
         logging.getLogger("prophet").setLevel(logging.WARNING)
         
-        df = pd.DataFrame(historical)
+        df = pd.DataFrame(complete_history)
         df["ds"] = pd.to_datetime(df["ds"])
         
         # Train model chính
         m = Prophet(weekly_seasonality=True, yearly_seasonality=False,
-                    daily_seasonality=False, uncertainty_samples=300, interval_width=0.80)
+                    daily_seasonality=False, uncertainty_samples=300, interval_width=interval_width)
         m.fit(df)
-        future = m.make_future_dataframe(periods=horizon_days)
+        future = m.make_future_dataframe(periods=horizon_days + 1)
         forecast_df = m.predict(future)
         last_hist_date = df["ds"].max()
-        future_only = forecast_df[forecast_df["ds"] > last_hist_date]
+        future_only = forecast_df[forecast_df["ds"] > pd.Timestamp(today)]
         forecast = [
             {"ds": row["ds"].strftime("%Y-%m-%d"),
              "yhat": max(0, round(float(row["yhat"]), 2)),
@@ -350,25 +392,31 @@ def get_prophet_forecast(db, disease_name=None, horizon_days=7):
         test_df = df.iloc[split_idx:]
         if len(test_df) >= 2:
             eval_model = Prophet(weekly_seasonality=True, yearly_seasonality=False,
-                                 daily_seasonality=False, interval_width=0.80)
+                                 daily_seasonality=False, interval_width=interval_width)
             eval_model.fit(train_df)
             eval_future = eval_model.make_future_dataframe(periods=len(test_df))
             eval_forecast = eval_model.predict(eval_future)
             eval_preds = eval_forecast[["ds", "yhat"]].tail(len(test_df))
             actuals = test_df["y"].values
-            preds = eval_preds["yhat"].values
+            preds = np.maximum(0, eval_preds["yhat"].values)
             mae = float(np.mean(np.abs(actuals - preds)))
             rmse = float(np.sqrt(np.mean((actuals - preds) ** 2)))
         else:
-            mae = 0
-            rmse = 0
+            mae = None
+            rmse = None
 
-        return {"historical": historical, "forecast": forecast,
-                "disease": disease_name, "horizon_days": horizon_days, "metric_type": "mention_count",
-                "metrics": {"mae": round(mae, 2), "rmse": round(rmse, 2), "eval_method": "Train 80% / Test 20%"}}
+        result.update(forecast=forecast, metrics={
+            'mae': round(mae, 2) if mae is not None else None,
+            'rmse': round(rmse, 2) if rmse is not None else None,
+            'eval_method': 'Train 80% / Test 20% theo thời gian',
+            'train_days': len(train_df), 'test_days': len(test_df),
+            'test_start': test_df['ds'].min().strftime('%Y-%m-%d') if len(test_df) else None,
+            'test_end': test_df['ds'].max().strftime('%Y-%m-%d') if len(test_df) else None,
+        })
+        return result
     except Exception as e:
-        return {"historical": historical, "forecast": [], "disease": disease_name,
-                "horizon_days": horizon_days, "metric_type": "mention_count", "error": str(e)}
+        result['error'] = str(e)
+        return result
 
 def get_keyword_timeseries(db: Session, days: int = 30):
     """
@@ -376,21 +424,12 @@ def get_keyword_timeseries(db: Session, days: int = 30):
     """
     start_date = datetime.utcnow() - timedelta(days=days - 1)
     
-    articles = (
-        db.query(
-            func.date_format(models.ArticleIdentity.published_date, "%Y-%m-%d").label("date_str"),
-            models.ArticleDetails.keywords_matched
-        )
-        .join(models.ArticleIdentity, models.ArticleIdentity.id == models.ArticleDetails.article_id)
-        .filter(models.ArticleIdentity.published_date >= start_date)
-        .filter(models.ArticleIdentity.is_excluded.isnot(True))
-        .all()
-    )
+    articles = _disease_rows(db, start_date)
     
     day_keywords = defaultdict(set)
     for art in articles:
-        if art.keywords_matched:
-            kws = [k.strip().lower() for k in art.keywords_matched.split(",") if k.strip()]
+        if art.diseases:
+            kws = art.diseases
             for kw in kws:
                 day_keywords[art.date_str].add(kw)
                 
@@ -427,24 +466,15 @@ def get_keyword_bubble_data(db: Session, days: int = 30, window: int = 14):
     import math
     start_date = datetime.utcnow() - timedelta(days=days + window)
     
-    articles = (
-        db.query(
-            func.date_format(models.ArticleIdentity.published_date, "%Y-%m-%d").label("date_str"),
-            models.ArticleDetails.keywords_matched
-        )
-        .join(models.ArticleIdentity, models.ArticleIdentity.id == models.ArticleDetails.article_id)
-        .filter(models.ArticleIdentity.published_date >= start_date)
-        .filter(models.ArticleIdentity.is_excluded.isnot(True))
-        .all()
-    )
+    articles = _disease_rows(db, start_date)
     
     # disease -> date -> count
     data_map = defaultdict(lambda: defaultdict(int))
     all_diseases = set()
     
     for art in articles:
-        if art.keywords_matched:
-            kws = [k.strip().lower() for k in art.keywords_matched.split(",") if k.strip()]
+        if art.diseases:
+            kws = art.diseases
             for kw in set(kws):
                 data_map[kw][art.date_str] += 1
                 all_diseases.add(kw)

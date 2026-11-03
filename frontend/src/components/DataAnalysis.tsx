@@ -16,6 +16,10 @@ import {
 } from "@/components/ui/dialog";
 import { useToast } from "@/components/ui/use-toast";
 import { DiseaseSelectorModal } from "@/components/DiseaseSelectorModal";
+import { DiseaseCauseBreakdown } from "@/components/DiseaseCauseBreakdown";
+import { ArticleDetailList } from "@/components/ArticleDetailList";
+import { ForecastNarrative } from "@/components/ForecastNarrative";
+import { AnalysisReportSummary } from "@/components/AnalysisReportSummary";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useAuth } from "@/contexts/AuthContext";
 
@@ -25,13 +29,17 @@ interface DataAnalysisProps {
 }
 
 const STORAGE_KEY = "epi-scout-forecast-disease";
-const CACHE_KEY_PREFIX = "epi-scout-stats-cache-";
+const CACHE_KEY_PREFIX = "epi-scout-stats-v3-cache-";
 const CACHE_TTL_MS = 5 * 60 * 1000;
 
 interface CacheEntry<T> {
   data: T;
   timestamp: number;
 }
+
+interface ForecastMetrics { mae: number | null; rmse: number | null; eval_method: string; train_days?: number; test_days?: number }
+interface ForecastDetails { error?: string; interval_width?: number; history_days?: number; limitations?: string[] }
+interface ForecastCache { series: ProphetForecast[]; metrics: ForecastMetrics | null; details: ForecastDetails }
 
 function getFromCache<T>(key: string): T | null {
   try {
@@ -65,7 +73,9 @@ const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
   const [reportType, setReportType] = useState<"signal" | "verified">("signal");
   const [zscoreSpikes, setZscoreSpikes] = useState<ZScoreSpike[]>([]);
   const [prophetForecast, setProphetForecast] = useState<ProphetForecast[]>([]);
-  const [prophetMetrics, setProphetMetrics] = useState<{ mae: number | null, rmse: number | null, eval_method: string } | null>(null);
+  const [prophetMetrics, setProphetMetrics] = useState<ForecastMetrics | null>(null);
+  const [forecastDetails, setForecastDetails] = useState<ForecastDetails>({});
+  const [intervalWidth, setIntervalWidth] = useState(0.8);
   const [forecastDisease, setForecastDisease] = useState<string | null>(() => {
     return localStorage.getItem(STORAGE_KEY);
   });
@@ -77,13 +87,19 @@ const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
   const dynamicRecommendations = useMemo(() => {
     const spikes = zscoreSpikes.filter(s => s.is_spike);
     const disease = forecastDisease || "Sởi";
+    if (!zscoreSpikes.some(row => row.z_score != null)) return [{
+      title: "Chưa đủ đường nền để đánh giá bất thường",
+      description: "Cần thêm lịch sử có độ biến thiên để tính Z-score. Chưa thể kết luận tần suất đưa tin bình thường hay bất thường.",
+      bgColor: "bg-muted/30 border-border", titleColor: "font-semibold flex items-center gap-1.5",
+      icon: <RadioTower className="h-4 w-4" />,
+    }];
 
     if (spikes.length > 0) {
       const latestSpike = spikes[spikes.length - 1];
       return [
         {
           title: "Ưu tiên kiểm tra tín hiệu báo chí",
-          description: `Phát hiện ${spikes.length} điểm bất thường cho bệnh ${disease}. Bất thường gần nhất vào ngày ${latestSpike.date} với Z-Score ${latestSpike.z_score.toFixed(2)} (${latestSpike.cases} bài viết, cao hơn TB ${latestSpike.rolling_mean.toFixed(1)}). Cần chuyên viên đối chiếu với nguồn y tế trước khi kết luận.`,
+          description: `Phát hiện ${spikes.length} điểm vượt ngưỡng theo dõi cho bệnh ${disease}. Gần nhất ngày ${latestSpike.date}: Z-Score ${latestSpike.z_score?.toFixed(2) ?? "chưa tính được"} (${latestSpike.cases} bài viết, TB ${latestSpike.rolling_mean.toFixed(1)}). Cần đối chiếu nguồn y tế; chưa kiểm định p-value.`,
           bgColor: "bg-destructive/10 border-destructive/20 text-destructive-foreground dark:text-red-400",
           titleColor: "text-destructive font-semibold flex items-center gap-1.5",
           icon: <ShieldAlert className="h-4 w-4" />
@@ -167,14 +183,20 @@ const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
   };
 
   useEffect(() => {
+    let cancelled = false;
+    const controller = new AbortController();
     const fetchForecastData = async () => {
       if (!forecastDisease) return;
 
       const zscoreCacheKey = `${CACHE_KEY_PREFIX}zscore-${forecastDisease}`;
-      const forecastCacheKey = `${CACHE_KEY_PREFIX}forecast-${forecastDisease}`;
+      const forecastCacheKey = `${CACHE_KEY_PREFIX}forecast-${forecastDisease}-${intervalWidth}`;
 
       const cachedZscore = getFromCache<ZScoreSpike[]>(zscoreCacheKey);
-      const cachedForecast = getFromCache<ProphetForecast[]>(forecastCacheKey);
+      const cachedForecast = getFromCache<ForecastCache>(forecastCacheKey);
+      setProphetMetrics(cachedForecast?.metrics ?? null);
+      setForecastDetails(cachedForecast?.details ?? {});
+      setLoadingZscore(!cachedZscore);
+      setLoadingForecast(!cachedForecast);
 
       if (!cachedZscore) {
         setZscoreSpikes([]);
@@ -187,17 +209,20 @@ const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
         setProphetMetrics(null);
         setLoadingForecast(true);
       } else {
-        setProphetForecast(cachedForecast);
+        setProphetForecast(cachedForecast.series);
       }
 
       try {
         const [zscoreRes, prophetRes] = await Promise.all([
-          cachedZscore ? Promise.resolve(new Response(JSON.stringify(cachedZscore))) : fetch(`/api/stats/zscore?disease=${encodeURIComponent(forecastDisease)}`),
-          cachedForecast ? Promise.resolve(new Response(JSON.stringify(cachedForecast))) : fetch(`/api/stats/forecast?disease=${encodeURIComponent(forecastDisease)}`),
+          cachedZscore ? Promise.resolve(new Response(JSON.stringify(cachedZscore))) : fetch(`/api/stats/zscore?disease=${encodeURIComponent(forecastDisease)}`, { signal: controller.signal }),
+          cachedForecast ? Promise.resolve(new Response(JSON.stringify(cachedForecast))) : fetch(`/api/stats/forecast?disease=${encodeURIComponent(forecastDisease)}&interval_width=${intervalWidth}`, { signal: controller.signal }),
         ]);
+        if (cancelled) return;
+        if (!zscoreRes.ok || !prophetRes.ok) throw new Error("Không tải được dữ liệu thống kê");
 
         if (zscoreRes.ok && !cachedZscore) {
           const zData = await zscoreRes.json();
+          if (cancelled) return;
           const mappedZscore = zData.map((d: any) => ({
             date: d.date,
             cases: d.count,
@@ -205,7 +230,7 @@ const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
             rolling_std: d.std ?? 0,
             z_score: d.zscore,
             is_spike: d.spike_level === 'danger' || d.spike_level === 'alert',
-            threshold: d.std > 0 ? d.ma + 2 * d.std : d.count,
+            threshold: d.std > 0 ? d.ma + 2 * d.std : null,
           }));
           setZscoreSpikes(mappedZscore);
           setToCache(zscoreCacheKey, mappedZscore);
@@ -213,6 +238,7 @@ const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
         setLoadingZscore(false);
         if (prophetRes.ok && !cachedForecast) {
           const pData = await prophetRes.json();
+          if (cancelled) return;
           const mappedForecast: ProphetForecast[] = [];
 
           if (pData.historical) {
@@ -220,9 +246,9 @@ const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
               mappedForecast.push({
                 date: h.ds,
                 actual: h.y,
-                forecast: h.y,
-                forecast_lower: h.y,
-                forecast_upper: h.y,
+                forecast: null,
+                forecast_lower: null,
+                forecast_upper: null,
                 is_future: false
               });
             });
@@ -240,7 +266,9 @@ const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
             });
           }
           setProphetForecast(mappedForecast);
-          setToCache(forecastCacheKey, mappedForecast);
+          const details = { error: pData.error, interval_width: pData.interval_width, history_days: pData.history_days, limitations: pData.limitations };
+          setForecastDetails(details);
+          setToCache(forecastCacheKey, { series: mappedForecast, metrics: pData.metrics ?? null, details });
 
           if (pData.metrics) {
             setProphetMetrics(pData.metrics);
@@ -250,13 +278,16 @@ const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
         }
         setLoadingForecast(false);
       } catch (e) {
+        if (cancelled) return;
         console.error("Failed to fetch forecast data", e);
+        setForecastDetails({ error: "Không tải được dữ liệu dự báo. Vui lòng thử lại." });
         setLoadingZscore(false);
         setLoadingForecast(false);
       }
     };
     fetchForecastData();
-  }, [forecastDisease]);
+    return () => { cancelled = true; controller.abort(); };
+  }, [forecastDisease, intervalWidth]);
 
   useEffect(() => {
     fetch("/api/events?limit=100")
@@ -572,6 +603,12 @@ const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
 
   return (
     <div className="space-y-6">
+      <AnalysisReportSummary />
+      <ArticleDetailList />
+      <details className="rounded-lg border p-4">
+        <summary className="cursor-pointer font-medium">Thống kê theo bệnh và tác nhân</summary>
+        <div className="pt-4"><DiseaseCauseBreakdown /></div>
+      </details>
       <Tabs defaultValue="forecast" className="space-y-6">
         <TabsList className="grid w-full grid-cols-2">
           <TabsTrigger value="zscore">Đột biến lượt nhắc</TabsTrigger>
@@ -639,7 +676,7 @@ const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
                     <div key={i} className="flex justify-between items-center p-3 rounded-lg bg-destructive/10 border border-destructive/20">
                       <div>
                         <div className="font-medium text-destructive">{spike.date}</div>
-                        <div className="text-sm text-muted-foreground">Z-Score: <span className="font-semibold">{spike.z_score.toFixed(2)}</span></div>
+                        <div className="text-sm text-muted-foreground">Z-Score: <span className="font-semibold">{spike.z_score?.toFixed(2) ?? "Chưa tính được"}</span></div>
                       </div>
                       <div className="text-right">
                         <div className="font-bold text-foreground">{spike.cases} bài báo</div>
@@ -649,7 +686,7 @@ const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
                   ))}
                   {zscoreSpikes.filter(s => s.is_spike).length === 0 && (
                     <div className="p-4 text-center text-sm text-muted-foreground bg-muted/50 rounded-lg">
-                      Không phát hiện điểm bất thường nào trong chu kỳ quan trắc hiện tại.
+                      {zscoreSpikes.some(row => row.z_score != null) ? "Chưa có điểm vượt ngưỡng theo dõi trong các ngày tính được Z-score." : "Chưa đủ độ biến thiên ở đường nền để tính Z-score."}
                     </div>
                   )}
                 </div>
@@ -682,7 +719,10 @@ const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
             <CardHeader className="flex flex-row items-center justify-between pb-2">
               <div className="space-y-1">
                 <CardTitle>Dự báo xu hướng báo chí</CardTitle>
-                <CardDescription>Mô hình dự báo số lượng bài báo được viết về bệnh trong tương lai (Prophet AI - khoảng tin cậy 80%)</CardDescription>
+                <CardDescription>Prophet dự báo lượt bài hệ thống ghi nhận, khoảng dự báo {Math.round(intervalWidth * 100)}%. Không phải số ca bệnh hay kiểm định p-value.</CardDescription>
+                <div className="flex gap-2 pt-2" aria-label="Khoảng dự báo">
+                  {[0.8, 0.95].map(value => <Button key={value} size="sm" variant={intervalWidth === value ? "default" : "outline"} onClick={() => setIntervalWidth(value)}>{Math.round(value * 100)}%</Button>)}
+                </div>
               </div>
               <DiseaseSelectorModal
                 selectedDiseases={[forecastDisease || ""]}
@@ -720,7 +760,7 @@ const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
                       dataKey="date"
                       stroke="hsl(var(--muted-foreground))"
                       tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }}
-                      label={{ value: "ds", position: "insideBottom", offset: -15, fill: "hsl(var(--muted-foreground))", fontSize: 12 }}
+                      label={{ value: "Ngày", position: "insideBottom", offset: -15, fill: "hsl(var(--muted-foreground))", fontSize: 12 }}
                       tickLine={false}
                       minTickGap={30}
                       interval="preserveStartEnd"
@@ -729,7 +769,7 @@ const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
                     <YAxis
                       stroke="hsl(var(--muted-foreground))"
                       tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }}
-                      label={{ value: "y", angle: -90, position: "insideLeft", offset: 10, fill: "hsl(var(--muted-foreground))", fontSize: 12 }}
+                      label={{ value: "Bài/ngày", angle: -90, position: "insideLeft", offset: 10, fill: "hsl(var(--muted-foreground))", fontSize: 12 }}
                       tickLine={false}
                       axisLine={false}
                     />
@@ -756,7 +796,7 @@ const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
                       iconSize={10}
                       formatter={(value) => {
                         const map: Record<string, string> = {
-                          forecast_upper: "Khoảng tin cậy",
+                          forecast_upper: "Khoảng dự báo",
                           forecast: "Đường dự báo",
                           actual_point: "Dữ liệu thực tế",
                         };
@@ -841,6 +881,7 @@ const DataAnalysis = ({ showOnlyReport = false }: DataAnalysisProps) => {
                   )}
                 </div>
               )}
+              {!loadingForecast && <ForecastNarrative data={prophetForecast} metrics={prophetMetrics} error={forecastDetails.error} intervalWidth={forecastDetails.interval_width ?? intervalWidth} />}
             </CardContent>
           </Card>
         </TabsContent>

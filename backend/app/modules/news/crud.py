@@ -2,6 +2,8 @@ from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func, exists, and_, or_, select, not_
 from . import models, schemas
 from datetime import datetime
+from .disease_catalog import ADDITIONAL_KEYWORDS, LEGACY_KEYWORDS, keyword_aliases, canonical_disease
+from .visibility import public_article_condition
 
 # --- Articles ---
 
@@ -9,7 +11,7 @@ def _article_query(db: Session, keyword: str | None = None, date: str | None = N
     query = db.query(models.ArticleIdentity).options(joinedload(models.ArticleIdentity.cases))
     if not include_excluded:
         query = query.filter(
-            models.ArticleIdentity.is_excluded.isnot(True)
+            public_article_condition()
         )
     if keyword:
         query = query.join(models.ArticleDetails, models.ArticleIdentity.details).filter(
@@ -45,7 +47,7 @@ def count_articles(db: Session, keyword: str | None = None, date: str | None = N
     """Count query riêng, KHÔNG joinedload(cases) — nhẹ hơn nhiều so với _article_query."""
     query = db.query(func.count(models.ArticleIdentity.id))
     if not include_excluded:
-        query = query.filter(models.ArticleIdentity.is_excluded.isnot(True))
+        query = query.filter(public_article_condition())
     if keyword:
         query = query.join(models.ArticleDetails, models.ArticleIdentity.details).filter(
             models.ArticleDetails.keywords_matched.ilike(f"%{keyword}%")
@@ -110,7 +112,7 @@ def get_recent_events(
     end_date: datetime,
 ):
     query = db.query(models.NewsEvent).filter(
-        models.NewsEvent.disease_name == disease_name,
+        func.lower(models.NewsEvent.disease_name).in_([name.lower() for name in keyword_aliases(disease_name)]),
         models.NewsEvent.event_date >= start_date,
         models.NewsEvent.event_date <= end_date,
         models.NewsEvent.status.notin_(["rejected", "closed"]),
@@ -323,7 +325,7 @@ def add_keyword(db: Session, text: str):
     if not existing:
         create_keyword(db, schemas.KeywordCreate(text=text))
 
-def seed_default_keywords(db: Session):
+def default_keyword_texts():
     defaults = [
         "cúm A", "cúm B", "cúm mùa",
         "não mô cầu", "bạch hầu", "sốt xuất huyết",
@@ -337,8 +339,26 @@ def seed_default_keywords(db: Session):
         "Legionella", "nhiễm HPV", "Whitmore", "Chikungunya",
         "Listeria",
     ]
-    for text in defaults:
-        add_keyword(db, text)
+    return list(dict.fromkeys([*defaults, *LEGACY_KEYWORDS, *ADDITIONAL_KEYWORDS]))
+
+
+def missing_default_keywords(db: Session):
+    existing = {canonical_disease(row.text) for row in db.query(models.Keyword).all()}
+    missing = []
+    for text in default_keyword_texts():
+        name = canonical_disease(text)
+        if name not in existing:
+            missing.append(text)
+            existing.add(name)
+    return missing
+
+
+def seed_default_keywords(db: Session):
+    # Add only: keep IDs, original spelling and disabled keywords unchanged.
+    # An existing disabled alias must not be re-enabled through a new alias row.
+    for text in missing_default_keywords(db):
+        db.add(models.Keyword(text=text, is_active=True))
+    db.commit()
 
 # --- RSS Sources ---
 

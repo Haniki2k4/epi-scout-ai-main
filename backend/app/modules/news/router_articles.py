@@ -12,6 +12,7 @@ from ..auth import security
 from ..auth.models import UserBookmark
 from ..evaluation.models import ArticleEvaluation
 from . import crawler, event_service, crud, models, schemas
+from .visibility import public_article_condition
 
 logger = get_logger("backend.router.articles")
 router = APIRouter(prefix="/api", tags=["articles"])
@@ -56,7 +57,8 @@ def get_new_articles_count(hours: int = 24, db: Session = Depends(get_db)):
     from datetime import timedelta
     since = datetime.now(timezone.utc) - timedelta(hours=hours)
     count = db.query(models.ArticleIdentity).filter(
-        models.ArticleIdentity.published_date >= since
+        models.ArticleIdentity.published_date >= since,
+        public_article_condition(),
     ).count()
     return {"count": count, "hours": hours}
 
@@ -72,27 +74,45 @@ def save_article(
     if existing:
         logger.warning("Save article rejected, already exists | link={}", article.link)
         raise HTTPException(status_code=400, detail="Article already saved")
-    matched_keywords = article.keywords_matched or ""
-    if matched_keywords:
-        cases = crawler.extract_case_count(
-            f"{article.title} {article.summary or ''}",
-            [kw.strip() for kw in matched_keywords.split(",") if kw.strip()],
-        )
+    content = crawler.fetch_article_content(article.link)
+    if content.status != "full_text":
+        raise HTTPException(status_code=422, detail="Chưa đọc được đầy đủ thân bài để thẩm định")
+    active_keywords = [row.text for row in db.query(models.Keyword).filter(models.Keyword.is_active.is_(True)).all()]
+    matched_keywords = crawler.matches_keywords(article.title, content.text, active_keywords)
+    if not matched_keywords:
+        raise HTTPException(status_code=422, detail="Bài không có tín hiệu dịch bệnh phù hợp")
+    label, keywords, reason, meta = crawler.llm_recheck_article(
+        article.title, content.text, [k.strip() for k in matched_keywords.split(',')], require_evidence=True,
+    )
+    if label != "relevant":
+        raise HTTPException(status_code=422, detail=reason or "Bài chưa đủ bằng chứng dịch tễ")
+    article.keywords_matched = ", ".join(keywords)
+    article.summary = content.text[:500]
+    article.llm_normalized_title = meta.get("normalized_title")
+    article.tags = None
+    article.event_id = None
+    article.event_match_score = None
+    article.dedupe_reason = None
+    if keywords:
         inferred_event, event_match_score, dedupe_reason, _ = event_service.resolve_event_for_article(
             db=db,
             title=article.title,
-            summary=article.summary or "",
-            matched_keywords=matched_keywords,
+            normalized_title=article.llm_normalized_title or article.title,
+            summary=content.text,
+            matched_keywords=article.keywords_matched,
             pub_date=article.published_date or datetime.now(timezone.utc),
-            location="Việt Nam",
-            cumulative_cases=cases,
+            location=meta.get("location"),
+            cumulative_cases=0,
             new_cases=0,
-            severity=None,
+            severity=meta.get("severity"),
         )
         article.event_id = inferred_event.id if inferred_event else None
         article.event_match_score = event_match_score
         article.dedupe_reason = dedupe_reason
     saved_article = crud.create_article(db, article)
+    saved_article.details.stage1_route = "keyword"
+    saved_article.details.llm_reason = reason[:500]
+    db.add(ArticleEvaluation(article_id=saved_article.id, llm_label=label))
     db.commit()
     db.refresh(saved_article)
     logger.info("Article saved | id={} link={}", saved_article.id, article.link)
