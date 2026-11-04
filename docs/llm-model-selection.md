@@ -5,6 +5,25 @@ Ngày kiểm tra: 03/11/2026. Người dùng chọn chạy local miễn phí tr�
 `127.0.0.1:11434`. Đã kiểm định bản 2B và đang thử tiếp bản 4B; chưa chuyển
 cấu hình backend sang local. Không kích hoạt dịch vụ trả phí.
 
+## Cập nhật 04/11/2026
+
+Hướng dẫn cài đặt có thể thực hiện trên máy khác nằm tại
+[Windows + Qwen local](windows-local-qwen-setup.md), dùng `qwen3.5:4b-q4_K_M`
+và alias `episcout-local`. Các đoạn bên dưới ghi lại khảo sát trước đó;
+ví dụ 27B không phải cấu hình cho máy 8 GB RAM.
+
+Bản 4B đã thử trên năm bài báo: 4/5 nhãn khớp nhãn kỳ vọng, 5/5 quyết định
+công khai/loại bỏ khớp (một bài được rule loại trước LLM). Các lượt gọi model
+mất khoảng 57–343 giây/bài. JSON thô vẫn có lỗi phân biệt ca mới/lũy kế,
+tử vong và năm; backend kiểm tra câu nguồn, loại đại lượng, bệnh và ngày,
+xóa số liệu không đủ bằng chứng. Kết quả này không bảo đảm mọi bài đều đúng.
+
+Kiểm thử code gần nhất: **104 tests backend đạt**, TypeScript và Vite build đạt.
+Tệp cấu hình mẫu local đã được đưa lên Git; `.env` chạy thực tế là cấu hình
+riêng của từng máy. Việc push code không tự chuyển môi trường đang chạy
+sang Qwen. Bộ thử nghiệm và kết quả trong `scratch/` là dữ liệu local,
+không phải tệp có sẵn sau khi clone.
+
 ## Kết luận
 
 Muốn không chịu quota lượt gọi của một API bên ngoài thì tự triển khai mô hình
