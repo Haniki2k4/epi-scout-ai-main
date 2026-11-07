@@ -57,6 +57,9 @@
 .queue-option:disabled { cursor: wait; }
 .queue-option:focus-visible, .keyword-option:focus-visible { outline: 2px solid hsl(var(--ring)); outline-offset: 2px; }
 .review-list { max-height: 28rem; overflow-y: auto; scrollbar-gutter: stable; }
+.llm-review-layout { gap: 0; }
+.llm-review-list { position: static; max-height: 32rem; border-bottom: 1px solid hsl(var(--border)); padding: 0 0 1rem; }
+.llm-review-layout > section { padding-top: 1rem; }
 .review-fields, .decision-form { display: grid; gap: 1rem; }
 .decision-form > button, .decision-form > [role="alert"] { grid-column: 1 / -1; justify-self: start; }
 .review-actions { border-top: 1px solid hsl(var(--border)); padding-top: 1rem; }
@@ -78,6 +81,8 @@
   .news-articles, .news-events { grid-column: 2; }
   .review-layout { grid-template-columns: minmax(15rem, .8fr) minmax(0, 1.8fr); }
   .review-list { position: sticky; top: 5.5rem; max-height: calc(100svh - 7rem); }
+  .llm-review-list { position: static; top: auto; max-height: calc(100svh - 12rem); border-right: 1px solid hsl(var(--border)); border-bottom: 0; padding: 0 1rem 0 0; }
+  .llm-review-layout > section { padding: 0 0 0 1.25rem; }
   .review-fields, .decision-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .report-layout { grid-template-columns: minmax(14rem, .7fr) minmax(0, 2fr); }
   .report-config { position: sticky; top: 5.5rem; }

@@ -2,7 +2,10 @@ from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func, exists, and_, or_, select, not_
 from . import models, schemas
 from datetime import datetime
-from .disease_catalog import ADDITIONAL_KEYWORDS, LEGACY_KEYWORDS, keyword_aliases, canonical_disease
+from .disease_catalog import (
+    ADDITIONAL_KEYWORDS, LEGACY_KEYWORDS,
+    keyword_aliases, canonical_disease,
+)
 from .visibility import public_article_condition
 
 # --- Articles ---
@@ -339,7 +342,9 @@ def default_keyword_texts():
         "Legionella", "nhiễm HPV", "Whitmore", "Chikungunya",
         "Listeria",
     ]
-    return list(dict.fromkeys([*defaults, *LEGACY_KEYWORDS, *ADDITIONAL_KEYWORDS]))
+    return list(dict.fromkeys([
+        *defaults, *LEGACY_KEYWORDS, *ADDITIONAL_KEYWORDS,
+    ]))
 
 
 def missing_default_keywords(db: Session):

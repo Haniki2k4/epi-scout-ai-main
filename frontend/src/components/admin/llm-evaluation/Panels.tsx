@@ -1,6 +1,6 @@
 import ReviewHistory from "./ReviewHistory";
 import {Loader2, Plus, Trash2} from "lucide-react";
-import { useEffect, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import DiseaseMultiSelect from "@/components/admin/DiseaseMultiSelect";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/components/ui/use-toast";
 import { fetchDiseaseOptions } from "@/lib/apiClient";
 import { keywordKeys, llmEvalKeys } from "@/lib/queryKeys";
@@ -40,6 +41,7 @@ type CaseObservationDraft = {
 };
 type ReviewDraft = { diseases: string[]; location: string; eventDate: string; caseObservations: CaseObservationDraft[] };
 type QueueView = "pending" | "processed";
+type LabelGroup = "relevant" | "other";
 const isCaseType = (value: unknown): value is CaseType => CASE_TYPES.some((option) => option.value === value);
 const isCountScope = (value: unknown): value is CountScope => COUNT_SCOPES.some((option) => option.value === value);
 const toDraft = (item: Item): ReviewDraft => ({
@@ -71,6 +73,7 @@ export function ReviewQueue() {
   const queryClient = useQueryClient();
   const [selectedItemId, setSelectedItemId] = useState<number | null>(null);
   const [view, setView] = useState<QueueView>("pending");
+  const [labelGroup, setLabelGroup] = useState<LabelGroup>("relevant");
   const [searchText, setSearchText] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [drafts, setDrafts] = useState<Record<number, ReviewDraft>>({});
@@ -91,7 +94,10 @@ export function ReviewQueue() {
   });
   const items = itemsQuery.data?.items ?? [];
   const totalItems = itemsQuery.data?.total ?? 0;
-  const selectedItem = items.find((item) => item.id === selectedItemId) ?? items[0];
+  const relevantItems = items.filter((item) => item.current_run?.llm_label === "relevant");
+  const otherItems = items.filter((item) => item.current_run?.llm_label !== "relevant");
+  const visibleItems = labelGroup === "relevant" ? relevantItems : otherItems;
+  const selectedItem = visibleItems.find((item) => item.id === selectedItemId) ?? visibleItems[0];
   useEffect(() => {
     if (view !== "processed") return;
     const timeoutId = window.setTimeout(() => setDebouncedSearch(searchText.trim()), 300);
@@ -213,9 +219,11 @@ export function ReviewQueue() {
     } finally { setSavingId(null); }
   };
 
-  const queueControls = <div className="flex flex-wrap gap-2" aria-label="Bộ lọc hàng chờ">
-    <Button variant={view === "pending" ? "default" : "outline"} onClick={() => setView("pending")}>Chưa gán nhãn</Button>
-    <Button variant={view === "processed" ? "default" : "outline"} onClick={() => setView("processed")}>Đã xử lý</Button>
+  const queueControls = <div className="flex flex-col gap-3 border-b bg-muted/20 p-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
+    <div className="inline-flex w-fit rounded-lg border bg-background p-1" aria-label="Bộ lọc hàng chờ">
+      <Button className="h-9" variant={view === "pending" ? "default" : "ghost"} onClick={() => setView("pending")}>Chưa gán nhãn</Button>
+      <Button className="h-9" variant={view === "processed" ? "default" : "ghost"} onClick={() => setView("processed")}>Đã xử lý</Button>
+    </div>
     {view === "processed" && <Input
       type="search"
       aria-label="Tìm bài báo đã xử lý"
@@ -225,23 +233,39 @@ export function ReviewQueue() {
       className="min-w-56 flex-1"
     />}
   </div>;
+  const queuePanel = (content: ReactNode) => <Card className="overflow-hidden shadow-sm">
+    <CardContent className="p-0">
+      {queueControls}
+      <div className="p-3 sm:p-5">{content}</div>
+    </CardContent>
+  </Card>;
 
   const queueError = itemsQuery.error ?? diseaseOptionsQuery.error;
-  if (itemsQuery.isLoading || diseaseOptionsQuery.isLoading) return <div className="space-y-4">{queueControls}<p>Đang tải hàng chờ…</p></div>;
-  if (queueError) return <div className="space-y-3">{queueControls}<p className="text-destructive">{queueError instanceof Error ? queueError.message : "Không tải được dữ liệu"}</p><Button onClick={() => { void itemsQuery.refetch(); void diseaseOptionsQuery.refetch(); }}>Thử lại</Button></div>;
-  if (items.length === 0) return <div className="space-y-4">{queueControls}<p className="text-muted-foreground">{view === "pending" ? "Không còn bài chưa gán nhãn." : activeSearch ? `Không tìm thấy bài báo phù hợp trong ${totalItems} bài đã xử lý.` : "Chưa có bài đã xử lý."}</p></div>;
+  if (itemsQuery.isLoading || diseaseOptionsQuery.isLoading) return queuePanel(<p className="py-8 text-center text-muted-foreground">Đang tải hàng chờ…</p>);
+  if (queueError) return queuePanel(<div className="space-y-3 py-4"><p role="alert" className="text-destructive">{queueError instanceof Error ? queueError.message : "Không tải được dữ liệu"}</p><Button onClick={() => { void itemsQuery.refetch(); void diseaseOptionsQuery.refetch(); }}>Thử lại</Button></div>);
+  if (items.length === 0) return queuePanel(<p className="py-8 text-center text-muted-foreground">{view === "pending" ? "Không còn bài chưa gán nhãn." : activeSearch ? `Không tìm thấy bài báo phù hợp trong ${totalItems} bài đã xử lý.` : "Chưa có bài đã xử lý."}</p>);
 
-  return <div className="space-y-4">{queueControls}{itemsQuery.isFetching && <p role="status" className="text-xs text-muted-foreground">Đang cập nhật nền…</p>}<div className="review-layout">
-    <aside className="review-list rounded-lg border bg-card p-3" aria-label="Bài viết trong hàng đợi">
-      <p className="mb-3 px-2 text-sm font-semibold">{view === "pending" ? "Bài chưa gán nhãn" : "Bài đã xử lý"} · {items.length}/{totalItems}</p>
-      <div className="space-y-2">{items.map((item) => <button key={item.id} type="button" className="queue-option" aria-pressed={selectedItem?.id === item.id} disabled={savingId !== null} onClick={() => setSelectedItemId(item.id)}>
+  return queuePanel(<>{itemsQuery.isFetching && <p role="status" className="mb-3 text-xs text-muted-foreground">Đang cập nhật nền…</p>}<div className="review-layout llm-review-layout">
+    <aside className="review-list llm-review-list" aria-label="Bài viết trong hàng đợi">
+      <Tabs value={labelGroup} onValueChange={(value) => {
+        const nextGroup = value as LabelGroup;
+        setLabelGroup(nextGroup);
+        const nextItems = nextGroup === "relevant" ? relevantItems : otherItems;
+        setSelectedItemId(nextItems[0]?.id ?? null);
+      }}>
+        <TabsList className="grid h-auto w-full grid-cols-2">
+          <TabsTrigger value="relevant">Liên quan · {relevantItems.length}</TabsTrigger>
+          <TabsTrigger value="other">Các tag còn lại · {otherItems.length}</TabsTrigger>
+        </TabsList>
+        {visibleItems.length === 0 ? <p className="px-2 py-3 text-sm text-muted-foreground">Không có bài trong nhóm này.</p> : <div className="mt-2 space-y-2">{visibleItems.map((item) => <button key={item.id} type="button" className="queue-option" aria-pressed={selectedItem?.id === item.id} disabled={savingId !== null} onClick={() => setSelectedItemId(item.id)}>
         <span className="block text-sm font-medium leading-relaxed">{item.title_snapshot}</span><span className="mt-2 block text-xs text-muted-foreground">{routeLabel(item.current_run?.route)} · {llmLabel(item.current_run?.llm_label)}</span>
-      </button>)}</div>
+      </button>)}</div>}
+      </Tabs>
     </aside>
-    <section aria-label="Xem và gán nhãn bài viết">{(selectedItem ? [selectedItem] : []).map((item) => {
+    <section aria-label="Xem và gán nhãn bài viết" className="min-w-0">{visibleItems.length === 0 ? <Card><CardContent className="py-10 text-center"><p className="font-medium">Không có bài trong nhóm này</p><p className="mt-1 text-sm text-muted-foreground">Chọn tab còn lại để xem các bài khác.</p></CardContent></Card> : (selectedItem ? [selectedItem] : []).map((item) => {
     const draft = drafts[item.id] ?? toDraft(item);
     const isContextRoute = item.current_run?.route === "context";
-    return <Card key={item.id}><CardContent className="space-y-4 pt-6">
+    return <div key={item.id} className="space-y-4">
       <div className="flex flex-wrap gap-2 text-sm [&>div]:break-all [&>div]:text-xs">
         <Badge>Tuyến: {routeLabel(item.current_run?.route)}</Badge>
         <Badge variant="outline">Model: {item.current_run?.model_id ?? "Chưa có"}</Badge>
@@ -296,7 +320,7 @@ export function ReviewQueue() {
           <Button type="button" variant="outline" size="sm" onClick={() => updateDraft(item.id, { caseObservations: [...draft.caseObservations, { reportedValue: "", caseType: "", countScope: "", source: {} }] })}><Plus />Thêm quan sát số ca</Button>
         </fieldset>
       </div>
-      <fieldset disabled={savingId !== null || retryingId === item.id} className="review-actions flex flex-wrap gap-2 rounded-lg bg-card py-2">
+      <fieldset disabled={savingId !== null || retryingId === item.id} className="flex flex-wrap gap-2 py-2">
         {isContextRoute ? <>
           <Button onClick={() => save(item, "relevant", "confirmed_event")}>Ca/ổ dịch thật</Button>
           <Button variant="secondary" onClick={() => save(item, "relevant", "early_signal")}>Tín hiệu sớm</Button>
@@ -305,8 +329,8 @@ export function ReviewQueue() {
         <Button variant="outline" onClick={() => save(item, "irrelevant")}>Không liên quan</Button>
         <Button variant="ghost" onClick={() => save(item, "unsure")}>Chưa chắc chắn</Button>{item.current_run && !["success", "pending"].includes(item.current_run.status) && <Button type="button" variant="secondary" disabled={retryingId !== null} aria-busy={retryingId === item.id} onClick={() => void retry(item)}>{retryingId === item.id ? <><Loader2 className="animate-spin" />Đang chạy lại…</> : "Retry LLM"}</Button>}
       </fieldset>
-    </CardContent></Card>;
-  })}</section></div></div>;
+    </div>;
+  })}</section></div></>);
 }
 export function DatasetVersions() {
   const { toast } = useToast();

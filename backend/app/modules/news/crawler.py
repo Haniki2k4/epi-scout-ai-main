@@ -4,6 +4,7 @@ from . import crud, models, schemas, event_service
 from .html_utils import decode_html_entities, trim_feed_related_titles
 from .google_news import resolve_google_news_url
 from .stage1_context import is_advisory_without_outbreak_evidence
+from .llm_prompt_rules import CONTEXT_ROUTE_CRITERIA, KEYWORD_ROUTE_CRITERIA, SYSTEM_PROMPT
 from .article_content import fetch_article_content, valid_relevance_evidence, canonical_relevance_evidence, RELEVANCE_EVIDENCE_RULES
 from .case_evidence import ground_disease_entries, source_date, source_location
 from .signal_detector import DETECTOR_VERSION, detect_context_signal
@@ -277,14 +278,7 @@ LLM_FEW_SHOT_DATASET_MAX_EXAMPLES = min(
 # LLM prompt constants  (defined at module level → zero per-call overhead)
 # ---------------------------------------------------------------------------
 
-LLM_SYSTEM_PROMPT = (
-    "Bạn là chuyên gia dịch tễ học AI. "
-    "Nhiệm vụ: phân tích bài báo, TỰ ĐỘNG DỊCH/HIỂU NỘI DUNG NƯỚC NGOÀI (nếu có) sang Tiếng Việt và trả về JSON hợp lệ. "
-    "Lưu ý: Mọi text trong JSON (tên bệnh, location, reason...) BẰNG TIẾNG VIỆT hoặc TIẾNG ANH tùy theo chủ đề nhưng phải TƯƠNG ĐƯƠNG với từ khóa y tế Việt Nam. Không giải thích thêm ngoài JSON.\n"
-    "QUAN TRỌNG: Luôn phân biệt rõ giữa 'ca xác nhận' (confirmed) và 'ca nghi nhiễm' (suspected). "
-    "CHỈ lấy số ca ĐÃ XÁC NHẬN vào trường cumulative_cases/new_cases. "
-    "Số ca nghi nhiễm phải ghi vào trường riêng 'suspected_cases'."
-)
+LLM_SYSTEM_PROMPT = SYSTEM_PROMPT
 
 # Few-shot examples (7 examples covering 4 labels):
 #   2 relevant  (ổ dịch cụ thể + nhiều bệnh cùng lúc)
@@ -348,22 +342,30 @@ Tóm tắt: Tôi mắc cúm A, vợ khuyên mua giá đỗ và huyết heo nấu
 Tiêu đề: Thanh Hóa ghi nhận thêm 15 ca mắc cúm A phải nhập viện
 Tóm tắt: CDC tỉnh Thanh Hóa cho biết vừa phát hiện chùm 15 ca mắc cúm A tại một trường mầm non.
 → {"label":"relevant","normalized_title":"Chùm 15 ca cúm A tại trường mầm non ở Thanh Hóa","matched_keywords":["cúm A"],"location":"Thanh Hóa","diseases":[{"disease_name":"cúm A","cumulative_cases":0,"new_cases":15,"suspected_cases":0,"case_status":"confirmed","event_start_date":null,"event_end_date":null}],"severity":"medium","reason":"CDC báo cáo chùm 15 ca cúm A tại trường mầm non."}
+
+### Ví dụ bổ sung — relevant (công văn hỏa tốc chính thức, chưa có ca bệnh được báo cáo)
+Tiêu đề: Bộ Y tế ra công văn hỏa tốc yêu cầu chủ động phòng chống bệnh do virus Ebola
+Tóm tắt: Cục Quản lý Khám, chữa bệnh ban hành công văn hỏa tốc gửi các cơ sở y tế, yêu cầu tăng cường giám sát và sàng lọc nghiêm ngặt bệnh Ebola.
+→ {"label":"relevant","relevance_evidence":{"signal_type":"official_alert","quote":"Cục Quản lý Khám, chữa bệnh ban hành công văn hỏa tốc gửi các cơ sở y tế, yêu cầu tăng cường giám sát và sàng lọc nghiêm ngặt bệnh Ebola."},"normalized_title":"Công văn hỏa tốc tăng cường giám sát Ebola","matched_keywords":["Ebola"],"location":"unknown","diseases":[{"disease_name":"Ebola","cumulative_cases":0,"new_cases":0,"suspected_cases":0,"case_status":"unknown","event_start_date":null,"event_end_date":null}],"severity":"medium","reason":"Công văn khẩn chính thức yêu cầu tăng cường giám sát và sàng lọc Ebola."}
+
+### Ví dụ 12 — noise (di chứng cá nhân của bệnh cũ, không phải ca mắc mới)
+Tiêu đề: Thay khớp gối trái cho người phụ nữ liệt chân phải
+Tóm tắt: Bà 63 tuổi bị liệt chân phải từ nhỏ do bại liệt; hiện được phẫu thuật thay khớp gối trái vì thoái hóa sau nhiều năm chịu lực.
+Từ khóa ứng viên: sốt, bại liệt
+→ {"label":"noise","normalized_title":"","matched_keywords":[],"location":"unknown","diseases":[],"severity":null,"reason":"Bài nói về di chứng bại liệt từ nhỏ và phẫu thuật thoái hóa khớp, không có ca mắc mới hay sự kiện dịch tễ."}
 """.strip()
 
-_CRITERIA_BLOCK = """
+_CRITERIA_BLOCK = f"""
 ## Tiêu chí phân loại
 
-**relevant** — bài phải có ÍT NHẤT MỘT trong:
-1. Ca bệnh / ổ dịch được báo cáo tại địa điểm + thời gian cụ thể, không phải lời kể trong câu hỏi tư vấn cá nhân
-2. Cảnh báo chính thức từ Bộ Y tế / CDC / WHO / chính quyền
-3. Số liệu ca mắc, tử vong, nhập viện được công bố
-4. Bùng phát bệnh truyền nhiễm đang diễn ra
+{KEYWORD_ROUTE_CRITERIA}
 
 **noise** — Bài CÓ ĐỀ CẬP tên dịch bệnh nhưng không có sự kiện dịch tễ thực. Gồm:
 - Tư vấn cá nhân: "nên ăn gì", "uống gì", "mẹo hay", "bí quyết", "kinh nghiệm", "hướng dẫn", "5 sai lầm", "7 lưu ý".
 - Bài dịch vụ / quảng cáo / review sản phẩm có nhắc đến bệnh như ngữ cảnh.
 - Bài thảo luận, so sánh hoặc giải thích triệu chứng — bệnh được nhắc để minh họa, không có ca mắc.
 - Bài thuốc dân gian, trị mẹo không có bằng chứng dịch tễ cụ thể.
+- Bài kể tiền sử bệnh cá nhân, bệnh mắc từ nhỏ, di chứng hoặc điều trị/phẫu thuật hậu quả của bệnh cũ không phải ca mắc mới. Chỉ chọn relevant nếu bài nêu rõ một ca mới hoặc sự kiện dịch tễ hiện tại.
 - Hỏi đáp độc giả / bác sĩ trả lời: "Tôi mắc cúm A", "Con tôi bị sốt" trong câu hỏi tư vấn KHÔNG phải ca bệnh báo cáo dịch tễ. Tên, tuổi, địa chỉ người hỏi (ví dụ "Huy Minh, 45 tuổi, Thanh Hóa") KHÔNG được dùng làm số ca hoặc địa điểm dịch tễ.
 - Các bài hỏi ăn gì, kiêng gì, nấu canh, xông hơi, có giúp nhanh khỏi bệnh không là noise nếu không có báo cáo dịch tễ độc lập.
 - Với noise hoặc irrelevant: bắt buộc matched_keywords=[], diseases=[], normalized_title="", location="unknown", severity=null; không suy ra 1 ca từ người gửi câu hỏi.
@@ -375,7 +377,7 @@ _CRITERIA_BLOCK = """
 - Không có keyword dịch bệnh nào trong bài.
 - **QUY TẮC BỆNH CHÍNH:** Nếu bệnh chính của bài (ví dụ: Melioidosis) KHÔNG trong danh sách keyword → irrelevant, dù có nhắc biến chứng trùng keyword.
 
-**unsure** — thông tin quá mơ hồ, chưa có xác nhận chính thức, cần xem xét thêm
+**unsure** — bài có dấu hiệu về một sự kiện mắc mới/ổ dịch/thống kê cụ thể nhưng thông tin đầu vào quá mơ hồ hoặc không đủ để xác định đó có phải sự kiện thực tế hay không. Không dùng unsure chỉ vì bài thiếu một số chi tiết phụ nếu sự kiện đã rõ.
 
 ## QUY TẮC XÁC ĐỊNH BỆNH (CỰC KỲ QUAN TRỌNG)
 
@@ -462,12 +464,17 @@ _NUMERIC_EVIDENCE_RULES = """
   chưa có mốc ngày xuất bản đầy đủ; để các trường ngày tương ứng là null.
 """.strip()
 
-_GATE_B_CRITERIA = """
-Phân loại tin y tế thực địa không có từ khóa bệnh đã cấu hình.
-Relevant: chùm ca bệnh hoặc triệu chứng bất thường, động vật chết/nghi nhiễm,
-nguồn nước/thực phẩm gây nhiều ca, hay phản ứng chống dịch tại địa phương.
-Noise/irrelevant: lời khuyên sức khỏe, dịch vụ, quảng cáo, hội thảo chung,
-ẩn dụ, thiên tai hoặc sự việc không có tín hiệu y tế thực địa.
+_GATE_B_CRITERIA = f"""
+{CONTEXT_ROUTE_CRITERIA}
+Tín hiệu động vật/môi trường hoặc phản ứng chống dịch chỉ relevant khi gắn với
+một nghi vấn cụ thể về ca mới/chùm ca/bùng phát hoặc thống kê dịch tễ; cảnh báo
+hay hoạt động phòng ngừa chung không đủ. Ngoại lệ: công văn khẩn chính thức của
+cơ quan y tế đứng đầu về bệnh truyền nhiễm cụ thể, yêu cầu hành động ứng phó rõ
+ràng như tăng cường giám sát, sàng lọc, báo cáo hoặc kiểm soát lây nhiễm là
+relevant và có thể đưa vào thông báo khẩn khi địa bàn được cảnh báo chưa có ca
+mới. Nếu địa bàn đó đã ghi nhận ca mới, bài vẫn relevant nhưng signal_type phải
+là case_report hoặc outbreak để không đưa vào thông báo khẩn. Bằng chứng phải
+được trích nguyên văn từ thân bài.
 Không suy đoán tên bệnh; khi chưa rõ bệnh trả diseases=[].
 """.strip()
 
@@ -477,6 +484,14 @@ Chỉ trả một object JSON hợp lệ. Ví dụ khi chưa xác định bệnh
  "matched_keywords":[],"location":"Hà Nội","diseases":[],
  "relevance_evidence":{"signal_type":"outbreak","quote":"Trích nguyên văn câu từ thân bài chứng minh chùm ca thực tế"},
  "severity":null,"reason":"Có chùm ca bất thường tại địa phương"}
+
+Ví dụ cảnh báo chính thức có thể relevant dù chưa có ca:
+Tiêu đề: Bộ Y tế ra công văn hỏa tốc yêu cầu chủ động phòng chống bệnh do virus Ebola
+Nội dung: Cơ quan y tế ban hành công văn hỏa tốc về Ebola, yêu cầu cơ sở y tế tăng cường giám sát và sàng lọc.
+{"label":"relevant","normalized_title":"Công văn hỏa tốc tăng cường giám sát Ebola",
+ "matched_keywords":[],"location":"unknown","diseases":[],
+ "relevance_evidence":{"signal_type":"official_alert","quote":"Trích nguyên văn đoạn thân bài nêu công văn chính thức và biện pháp giám sát, sàng lọc"},
+ "severity":"medium","reason":"Công văn khẩn yêu cầu giám sát và sàng lọc bệnh truyền nhiễm cụ thể"}
 
 label phải là một trong relevant, noise, irrelevant, unsure.
 matched_keywords luôn là mảng rỗng vì bài không qua cửa từ khóa.
@@ -1444,6 +1459,7 @@ def _build_llm_request_payload(model: str, prompt: str) -> dict:
     return payload
 
 def _call_llm_api(model: str, api_key: str, base_url: str, prompt: str) -> dict:
+    global _llm_last_actual_model
     if LLM_MAX_INPUT_BYTES and len((LLM_SYSTEM_PROMPT + prompt).encode("utf-8")) > LLM_MAX_INPUT_BYTES:
         raise LLMError("Nội dung vượt ngân sách ngữ cảnh local; chưa phân tích, cần thẩm định.")
     last_error: Exception | None = None
@@ -1461,7 +1477,8 @@ def _call_llm_api(model: str, api_key: str, base_url: str, prompt: str) -> dict:
                 timeout=LLM_RECHECK_TIMEOUT_SECONDS,
             )
             response.raise_for_status()
-            choice = response.json()["choices"][0]
+            response_data = response.json()
+            choice = response_data["choices"][0]
             if choice.get("finish_reason") == "length":
                 raise LLMError("LLM response exceeded output budget; review required")
             content = choice["message"]["content"]
@@ -2451,6 +2468,15 @@ def scan_news(
                             saved_article.details.context_signal_type = signal_match.signal_type
                             saved_article.details.context_matched_phrases = json.dumps(signal_match.matched_phrases, ensure_ascii=False)[:1000]
                             saved_article.details.context_evidence_text = signal_match.evidence_text
+                        relevance_evidence = llm_meta.get("relevance_evidence")
+                        evidence_signal_type = (
+                            relevance_evidence.get("signal_type")
+                            if isinstance(relevance_evidence, dict) else None
+                        )
+                        if llm_label == "relevant" and evidence_signal_type in {
+                            "case_report", "outbreak", "official_alert", "field_response",
+                        }:
+                            saved_article.details.context_signal_type = evidence_signal_type
 
                         from ..evaluation.models import ArticleEvaluation as EvalModel
                         db.add(EvalModel(article_id=saved_article.id, llm_label=llm_label))

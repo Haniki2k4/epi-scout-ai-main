@@ -121,6 +121,9 @@ thống kê nguy cơ chung không có sự kiện hiện tại là noise; nhắc
 Không dùng tiêu đề gợi ý bài liên quan, bình luận, menu làm bằng chứng.
 Nếu có tin dịch thật xen lời khuyên, giữ tin dịch và chỉ trích số liệu gắn trực tiếp
 với đúng bệnh, địa bàn, thời gian. Không suy ra tác nhân từ triệu chứng.
+Chỉ dùng signal_type=official_alert cho công văn khẩn khi chưa ghi nhận ca mắc mới
+tại địa bàn được cảnh báo. Nếu có ca mới tại đó, tin vẫn relevant nhưng dùng
+signal_type=case_report hoặc outbreak và không đưa vào thông báo khẩn.
 Nếu relevant, THÊM field JSON:
 "relevance_evidence": {"signal_type":"case_report|outbreak|official_alert|field_response",
 "quote":"Trích nguyên văn 1-3 câu LIỀN NHAU từ THÂN BÀI chứng minh sự kiện dịch tễ, 30-1500 ký tự"}.

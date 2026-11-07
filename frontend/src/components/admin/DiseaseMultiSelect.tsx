@@ -7,10 +7,11 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 
 const MAX_DISEASES = 20;
 
-export default function DiseaseMultiSelect({ options, value, onChange }: {
+export default function DiseaseMultiSelect({ options, value, onChange, itemLabel = "bệnh" }: {
   options: string[];
   value: string[];
   onChange: (diseases: string[]) => void;
+  itemLabel?: string;
 }) {
   const [search, setSearch] = useState("");
   const query = search.trim();
@@ -27,8 +28,8 @@ export default function DiseaseMultiSelect({ options, value, onChange }: {
   return <div className="space-y-2">
     <Popover>
       <PopoverTrigger asChild>
-        <Button type="button" variant="outline" className="w-full justify-between text-left" aria-label="Chọn nhiều bệnh đúng">
-          {value.length ? `Đã chọn ${value.length} bệnh` : "Chọn bệnh đúng"}
+        <Button type="button" variant="outline" className="w-full justify-between text-left" aria-label={`Chọn nhiều ${itemLabel} đúng`}>
+          {value.length ? `Đã chọn ${value.length} ${itemLabel}` : `Chọn ${itemLabel} đúng`}
           <ChevronDown className="h-4 w-4" />
         </Button>
       </PopoverTrigger>
@@ -39,8 +40,8 @@ export default function DiseaseMultiSelect({ options, value, onChange }: {
             onChange([...value, query]);
             setSearch("");
           }
-        }} placeholder="Tìm hoặc nhập bệnh khác..." aria-label="Tìm bệnh" />
-        <div className="max-h-60 space-y-1 overflow-y-auto" role="group" aria-label="Danh sách bệnh">
+        }} placeholder={`Tìm hoặc nhập ${itemLabel} khác...`} aria-label={`Tìm ${itemLabel}`} />
+        <div className="max-h-60 space-y-1 overflow-y-auto" role="group" aria-label={`Danh sách ${itemLabel}`}>
           {filtered.map((name) => <button key={name} type="button" onClick={() => toggle(name)}
             disabled={!selected.has(name.toLocaleLowerCase("vi-VN")) && value.length >= MAX_DISEASES}
             aria-pressed={selected.has(name.toLocaleLowerCase("vi-VN"))}
@@ -50,12 +51,12 @@ export default function DiseaseMultiSelect({ options, value, onChange }: {
           {filtered.length === 0 && <p className="px-2 py-3 text-sm text-muted-foreground">Không thấy trong danh sách gợi ý.</p>}
         </div>
         {canAdd && !hasExactOption && <Button type="button" size="sm" variant="secondary" className="w-full" onClick={() => { onChange([...value, query]); setSearch(""); }}>Thêm “{query}”</Button>}
-        <p className="text-xs text-muted-foreground">Gợi ý từ danh sách từ khóa. Có thể thêm bệnh chưa có; tối đa {MAX_DISEASES} bệnh.</p>
+        <p className="text-xs text-muted-foreground">Gợi ý từ danh sách từ khóa. Có thể thêm {itemLabel} chưa có; tối đa {MAX_DISEASES} mục.</p>
       </PopoverContent>
     </Popover>
-    {value.length > 0 && <div className="flex flex-wrap gap-2" aria-label="Bệnh đã chọn">
+    {value.length > 0 && <div className="flex flex-wrap gap-2" aria-label={`${itemLabel} đã chọn`}>
       {value.map((name) => <Badge key={name} variant="secondary" className="gap-1 py-1 text-sm">{name}
-        <button type="button" onClick={() => toggle(name)} aria-label={`Bỏ bệnh ${name}`} className="rounded-full hover:text-destructive focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><X className="h-3.5 w-3.5" /></button>
+        <button type="button" onClick={() => toggle(name)} aria-label={`Bỏ ${itemLabel} ${name}`} className="rounded-full hover:text-destructive focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><X className="h-3.5 w-3.5" /></button>
       </Badge>)}
     </div>}
   </div>;

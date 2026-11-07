@@ -2,7 +2,7 @@ import { useSearchParams } from "react-router-dom";
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Trash2, Plus, Tag, Rss, RefreshCcw, Link as LinkIcon, RadioReceiver, Power, Edit } from "lucide-react";
+import { Trash2, Plus, ListPlus, Search, Tag, Rss, RefreshCcw, Link as LinkIcon, RadioReceiver, Power, Edit } from "lucide-react";
 
 import {
   Table,
@@ -323,32 +323,50 @@ export default function ResourceManagement({ section }: { section?: "keywords" |
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <form onSubmit={handleAddKeyword} className="flex flex-wrap gap-2 mb-4">
-            <Input
-              placeholder="Ví dụ: Cúm gia cầm, Cúm A/H5N1, Bạch hầu..."
-              value={newKeyword}
-              onChange={(e) => setNewKeyword(e.target.value)}
-              disabled={createKwMutation.isPending}
-            />
-            <Button type="submit" disabled={createKwMutation.isPending} className="whitespace-nowrap">
-              {createKwMutation.isPending ? <RefreshCcw className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4 mr-1" />} Thêm
-            </Button>
+          <div className="space-y-5">
+          <form onSubmit={handleAddKeyword} className="space-y-3 rounded-lg border bg-muted/20 p-4 sm:p-5">
+            <div>
+              <Label htmlFor="new-monitoring-keyword" className="text-sm font-semibold">Thêm từ khóa mới</Label>
+              <p className="mt-1 text-sm text-muted-foreground">Nhập một từ khóa rồi bấm nút để thêm vào danh sách giám sát.</p>
+            </div>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <Input
+                id="new-monitoring-keyword"
+                placeholder="Ví dụ: Cúm gia cầm, Cúm A/H5N1, Bạch hầu..."
+                value={newKeyword}
+                onChange={(e) => setNewKeyword(e.target.value)}
+                disabled={createKwMutation.isPending}
+                className="min-w-0 flex-1 bg-background"
+              />
+              <Button type="submit" disabled={createKwMutation.isPending || !newKeyword.trim()} className="whitespace-nowrap sm:min-w-36">
+                {createKwMutation.isPending ? <RefreshCcw className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />} Thêm từ khóa
+              </Button>
+            </div>
           </form>
 
-          <Button variant="outline" className="mb-4" onClick={() => { setSelectedSuggestions([]); setSuggestionsOpen(true); }}>
-            <Plus className="h-4 w-4 mr-2" /> Bổ sung từ khóa gợi ý
-          </Button>
-
-          <div className="flex items-center justify-between mb-4">
-            <Input
-              placeholder="Tìm kiếm từ khóa..."
-              value={kwSearch}
-              onChange={(e) => setKwSearch(e.target.value)}
-              className="max-w-[200px]"
-            />
-            <Badge variant="secondary">
-              Tổng: {keywords.length} | Bật: {kwActiveCount}
-            </Badge>
+          <div className="space-y-3 border-b pb-5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h3 className="text-sm font-semibold">Danh sách từ khóa</h3>
+                <p className="mt-1 text-sm text-muted-foreground">Tìm từ khóa hiện có hoặc mở danh mục gợi ý.</p>
+              </div>
+              <Badge variant="secondary" className="whitespace-nowrap">Tổng {keywords.length} · Đang bật {kwActiveCount}</Badge>
+            </div>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <div className="relative min-w-0 flex-1">
+                <Search aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  placeholder="Tìm trong danh sách từ khóa..."
+                  value={kwSearch}
+                  onChange={(e) => setKwSearch(e.target.value)}
+                  aria-label="Tìm trong danh sách từ khóa"
+                  className="bg-background pl-9"
+                />
+              </div>
+              <Button type="button" variant="outline" className="whitespace-nowrap" onClick={() => { setSelectedSuggestions([]); setSuggestionsOpen(true); }}>
+                <ListPlus className="mr-2 h-4 w-4" />Từ khóa gợi ý
+              </Button>
+            </div>
           </div>
 
           <div className="rounded-md border border-border/50 overflow-auto max-h-[65svh]">
@@ -407,6 +425,7 @@ export default function ResourceManagement({ section }: { section?: "keywords" |
                 </TableBody>
               </Table>
             )}
+          </div>
           </div>
         </CardContent>
       </Card>}
