@@ -2,9 +2,9 @@
 Router: Stats & Events — tách từ app/main.py (Issue #12).
 Stats endpoints are public (read-only dashboard data).
 """
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Literal
 
 from ...core.database import get_db
 from ...core.logger import get_logger
@@ -58,6 +58,19 @@ def read_event_detail(event_id: int, db: Session = Depends(get_db)):
 
 
 # --- Stats (public, read-only dashboard data) ---
+
+@router.get("/stats/disease-catalog")
+def get_disease_catalog(db: Session = Depends(get_db)):
+    return stats.get_disease_catalog(db)
+
+
+@router.get("/stats/disease-breakdown")
+def get_disease_breakdown(
+    category: Literal["virus", "sốt"] = "virus",
+    days: int = Query(30, ge=1, le=366),
+    db: Session = Depends(get_db),
+):
+    return stats.get_disease_breakdown(db, category, days)
 
 @router.get("/stats/overview")
 def get_stats_overview(db: Session = Depends(get_db)):
@@ -146,8 +159,8 @@ def get_keyword_bubble(days: int = 30, window: int = 14, db: Session = Depends(g
 
 
 @router.get("/stats/forecast")
-def get_forecast(disease: str = None, horizon: int = 7, db: Session = Depends(get_db)):
+def get_forecast(disease: str = None, horizon: int = Query(7, ge=1, le=30), interval_width: float = Query(0.80, ge=0.80, le=0.95), db: Session = Depends(get_db)):
     logger.info("Prophet forecast requested | disease={} horizon={}", disease, horizon)
-    result = stats.get_prophet_forecast(db, disease_name=disease, horizon_days=horizon)
+    result = stats.get_prophet_forecast(db, disease_name=disease, horizon_days=horizon, interval_width=interval_width)
     logger.info("Prophet forecast completed")
     return result

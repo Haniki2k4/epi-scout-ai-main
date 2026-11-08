@@ -36,7 +36,7 @@ def _get_or_create_config(db) -> models.SchedulerConfig:
     if not config:
         config = models.SchedulerConfig(
             id=1,
-            is_enabled=True,
+            is_enabled=False,
             interval_hours=6,
         )
         db.add(config)
@@ -264,24 +264,9 @@ def _schedule_inference_maintenance(scheduler: AsyncIOScheduler) -> None:
 
 def start_scheduler() -> None:
     """Khởi động scheduler khi FastAPI startup."""
-    run_now = False
     with SessionLocal() as db:
         config = _get_or_create_config(db)
         interval_hours = config.interval_hours
-        
-        # Nếu chưa từng chạy hoặc lần chạy cuối đã quá lâu so với interval, cho chạy ngay
-        if not config.last_run_at:
-            run_now = True
-        else:
-            # Đảm bảo so sánh cùng múi giờ
-            last_run = config.last_run_at
-            if last_run.tzinfo is None:
-                last_run = VN_TZ.localize(last_run)
-            
-            diff = datetime.now(VN_TZ) - last_run
-            if diff.total_seconds() >= interval_hours * 3600:
-                run_now = True
-                
         # Load all user schedules
         users = db.query(auth_models.User).filter(
             auth_models.User.is_active == True,
@@ -289,7 +274,8 @@ def start_scheduler() -> None:
         ).all()
 
     scheduler = get_scheduler()
-    _reschedule_job(scheduler, interval_hours, run_now=run_now)
+    # On restart, let the regular interval elapse before the first automatic scan.
+    _reschedule_job(scheduler, interval_hours)
 
     # Đăng ký các job gửi email cá nhân
     for u in users:

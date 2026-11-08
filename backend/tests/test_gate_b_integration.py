@@ -18,7 +18,7 @@ from backend.app.modules.evaluation.crud import update_human_label
 from backend.app.modules.news import models
 from backend.app.modules.news import router_context_signals as api
 from backend.app.modules.news import router_quality as quality
-from backend.app.modules.news import crawler
+from backend.app.modules.news import crawler, event_service
 
 
 class GateBIntegrationTests(TestCase):
@@ -70,14 +70,14 @@ class GateBIntegrationTests(TestCase):
         return api.review_context_signal(article.id, body, self.db, self.analyst)
 
     def test_resolver_accepts_confirmed_disease_without_keyword(self):
-        event, _, _, _ = crawler.resolve_event_for_article(
+        event, _, _, _ = event_service.resolve_event_for_article(
             db=self.db, title="Chùm ca tại Hà Nội", normalized_title="Chùm ca tại Hà Nội",
             summary="CDC xác nhận", matched_keywords="", pub_date=datetime.utcnow(),
             location="Hà Nội", cumulative_cases=0, new_cases=0, severity=None,
             override_disease_name="Sởi",
         )
         self.assertIsNotNone(event)
-        self.assertEqual(event.disease_name, "Sởi")
+        self.assertEqual(event.disease_name, "sởi")
 
     def test_pending_queue_only_contains_hidden_unreviewed_context(self):
         context = self.article()

@@ -31,6 +31,7 @@ from .modules.evaluation import router as evaluation_router
 from .modules.evaluation import router_llm as llm_evaluation_router
 from .modules.news import router_articles, router_resources, router_stats, router_signals, router_quality, router_context_signals
 from . import scheduler as app_scheduler
+import subprocess
 
 logger = get_logger("backend.main")
 
@@ -44,9 +45,10 @@ async def lifespan(app: FastAPI):
     """Startup & shutdown logic in a single context manager."""
     # --- Startup ---
     with database.SessionLocal() as db:
-        crud.seed_default_keywords(db)
+        # Keywords are managed explicitly in the product. Re-seeding on every
+        # startup would silently resurrect keywords removed by an administrator.
         crud.seed_default_rss_sources(db)
-        logger.info("Backend startup complete, default keywords and RSS sources seeded")
+        logger.info("Backend startup complete, monitoring keywords preserved")
     crawler.log_llm_preflight_status(force_refresh=True)
     app_scheduler.start_scheduler()
     app_scheduler.trigger_ai_summary()
@@ -61,6 +63,17 @@ app = FastAPI(
     description="Hệ thống quét và tự động phân tích tin tức dịch tễ.",
     lifespan=lifespan,
 )
+
+
+@app.get("/api/admin/run-alembic", tags=["admin"])
+def trigger_alembic_upgrade():
+    result = subprocess.run(["alembic", "upgrade", "head"], capture_output=True, text=True)
+    return {
+        "returncode": result.returncode,
+        "stdout": result.stdout,
+        "stderr": result.stderr
+    }
+
 
 
 # ---------------------------------------------------------------------------

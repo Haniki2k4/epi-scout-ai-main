@@ -80,10 +80,10 @@ def label_sample(
         raise HTTPException(status_code=404, detail="Sample not found or expired")
     is_context_sample = row.stage1_route == "context" or (row.stage1_route == "none" and row.gate_b_evaluated is True)
     if is_context_sample:
-        if body.human_signal_label is None:
-            raise HTTPException(status_code=422, detail="Gate B samples require human_signal_label")
-        inferred = body.human_signal_label in {"confirmed_event", "early_signal"}
-        if body.human_relevant is not None and body.human_relevant != inferred:
+        inferred = body.human_signal_label in {"confirmed_event", "early_signal"} if body.human_signal_label else body.human_relevant
+        if inferred is None:
+            raise HTTPException(status_code=422, detail="human_relevant is required")
+        if body.human_signal_label is not None and body.human_relevant is not None and body.human_relevant != inferred:
             raise HTTPException(status_code=422, detail="human_relevant conflicts with human_signal_label")
         row.human_relevant = inferred
         row.human_signal_label = body.human_signal_label
@@ -123,7 +123,9 @@ def get_quality_metrics(
         .filter(models.RssEntrySample.expires_at >= datetime.utcnow())
         .all()
     )
-    gate_a_rows = [row for row in rows if row.human_signal_label is None]
+    gate_a_rows = [row for row in rows if row.human_signal_label is None and not (
+        row.stage1_route == "context" or (row.stage1_route == "none" and row.gate_b_evaluated is True)
+    )]
     tp = sum(row.passed_stage1 and row.human_relevant for row in gate_a_rows)
     fp = sum(row.passed_stage1 and not row.human_relevant for row in gate_a_rows)
     fn = sum(not row.passed_stage1 and row.human_relevant for row in gate_a_rows)
@@ -132,7 +134,7 @@ def get_quality_metrics(
     f1 = 2 * precision * recall / (precision + recall) if precision is not None and recall is not None and precision + recall else (0.0 if precision is not None and recall is not None else None)
     b_rows = [
         row for row in rows
-        if row.gate_b_evaluated is True and row.detector_version == DETECTOR_VERSION and row.human_signal_label in {"confirmed_event", "early_signal", "noise", "irrelevant"}
+        if row.gate_b_evaluated is True and row.detector_version == DETECTOR_VERSION and row.human_signal_label in {None, "confirmed_event", "early_signal", "noise", "irrelevant"}
         and row.stage1_route in {"context", "none"}
     ]
     b_tp = sum(bool(row.detector_matched and row.human_relevant) for row in b_rows)

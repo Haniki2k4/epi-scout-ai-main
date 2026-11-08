@@ -305,7 +305,7 @@ class SchedulerConfig(Base):
     __tablename__ = "scheduler_config"
 
     id = Column(Integer, primary_key=True, default=1)
-    is_enabled = Column(Boolean, default=True)            # Bật/tắt auto-scan
+    is_enabled = Column(Boolean, default=False)           # Auto-scan tắt mặc định
     interval_hours = Column(Integer, default=6)           # Chu kỳ quét (giờ)
     last_run_at = Column(DateTime, nullable=True)         # Thời điểm quét lần cuối (kết thúc)
     next_run_at = Column(DateTime, nullable=True)         # Thời điểm quét tiếp theo
