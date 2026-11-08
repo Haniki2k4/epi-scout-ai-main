@@ -52,49 +52,14 @@ export function DiseaseSelectorModal({
     if (open && diseases.length === 0) {
       fetchData();
     }
-  }, [open]);
+  }, [open, diseases.length]);
 
   const fetchData = async () => {
     setLoading(true);
     try {
-      const [topRes, keywordRes] = await Promise.all([
-        fetch("/api/stats/top-diseases?months=12"),
-        fetch("/api/keywords")
-      ]);
-
-      if (topRes.ok && keywordRes.ok) {
-        const topData = await topRes.json();
-        const keywordData = await keywordRes.json();
-
-        const topDict: Record<string, number> = {};
-        topData.forEach((d: any) => {
-          topDict[d.disease_name.toLowerCase()] = d.article_count;
-        });
-
-        // Tạo mảng danh sách từ khóa
-        const keywordMap = new Map<string, Disease>();
-        
-        // Thêm tất cả keyword đang active
-        keywordData.forEach((k: any) => {
-          if (k.is_active) {
-            keywordMap.set(k.text.toLowerCase(), {
-              disease_name: k.text,
-              article_count: topDict[k.text.toLowerCase()] || 0
-            });
-          }
-        });
-
-        // Nếu muốn thêm cả những bệnh trong topData mà không nằm trong keyword (dữ liệu cũ)
-        topData.forEach((d: any) => {
-          if (!keywordMap.has(d.disease_name.toLowerCase())) {
-            keywordMap.set(d.disease_name.toLowerCase(), {
-              disease_name: d.disease_name,
-              article_count: d.article_count
-            });
-          }
-        });
-
-        const combinedDiseases = Array.from(keywordMap.values());
+      const response = await fetch("/api/stats/disease-catalog");
+      if (response.ok) {
+        const combinedDiseases: Disease[] = await response.json();
         setDiseases(combinedDiseases);
 
         // Kiểm tra z-score cho 10 bệnh có article_count cao nhất

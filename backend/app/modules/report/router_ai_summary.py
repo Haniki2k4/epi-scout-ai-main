@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Query
 from sqlalchemy.orm import Session
 
 from ...core.database import get_db
@@ -10,6 +10,15 @@ router = APIRouter(prefix="/api/report", tags=["report-ai-summary"])
 
 REFRESH_LIMIT_SECONDS = 5 * 60
 _refresh_by_ip: dict[str, datetime] = {}
+
+
+@router.get('/analysis')
+def get_analysis_report(hours: int = Query(24, ge=24, le=72), skip: int = Query(0, ge=0),
+                        interval_width: float = Query(0.8, ge=0.8, le=0.95), include_all_articles: bool = False,
+                        db: Session = Depends(get_db)):
+    from .ai_summary import build_daily_summary_context
+    from .analysis import build_analysis_report
+    return build_analysis_report(build_daily_summary_context(db, scope_hours=hours, interval_width=interval_width), skip=skip, include_all_articles=include_all_articles)
 
 
 @router.get("/daily-summary")

@@ -264,7 +264,7 @@ const SchedulerConfig = () => {
         <Card>
           <CardContent className="pt-5 pb-4">
             <div className="flex items-center gap-3">
-              <RefreshCw className="h-8 w-8 text-accent shrink-0" />
+              <RefreshCw className="h-8 w-8 text-primary shrink-0" />
               <div>
                 <p className="text-xs text-muted-foreground">Quét tiếp theo</p>
                 <p className="font-semibold text-sm">{formatDateTime(status.next_run_at)}</p>

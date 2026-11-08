@@ -1,12 +1,15 @@
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { useSearchParams } from "react-router-dom";
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { Check, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import DiseaseMultiSelect from "@/components/admin/DiseaseMultiSelect";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { apiFetch, fetchDiseaseOptions } from "@/lib/apiClient";
+import { keywordKeys, qualityKeys } from "@/lib/queryKeys";
 
 const signalTypeLabels: Record<string, string> = { unexplained_cluster: "Chùm ca bất thường", animal_signal: "Tín hiệu từ động vật", environment_signal: "Tín hiệu môi trường", field_response: "Ứng phó thực địa" };
 const scanStatusLabels: Record<string, string> = { completed: "Hoàn tất", running: "Đang chạy", failed: "Thất bại" };
@@ -46,85 +49,124 @@ type SourceHealth = {
 };
 
 type Pair = { article_a_id: number; article_b_id: number; title_a: string; title_b: string; link_a: string; link_b: string; predicted_same_event: boolean };
-
-type LabelDraft = { diseases: string[]; location: string; eventDate: string; caseValue: string };
-const emptyDraft: LabelDraft = { diseases: [], location: "", eventDate: "", caseValue: "" };
+type SampleDraft = { keywords: string[] };
+const emptySampleDraft: SampleDraft = { keywords: [] };
 
 export default function QualityReview() {
   const [params, setParams] = useSearchParams();
   const section = ["review", "results", "sources"].includes(params.get("section") ?? "") ? params.get("section")! : "review";
-  const [samples, setSamples] = useState<Sample[]>([]);
+  const queryClient = useQueryClient();
+  const [sampleQueueTab, setSampleQueueTab] = useState<"related" | "unmatched">("related");
   const [selectedSampleId, setSelectedSampleId] = useState<number | null>(null);
-  const selectedSample = samples.find((sample) => sample.id === selectedSampleId) ?? samples[0];
-  const [metrics, setMetrics] = useState<Metrics | null>(null);
-  const [sources, setSources] = useState<SourceHealth[]>([]);
-  const [pairs, setPairs] = useState<Pair[]>([]);
-  const [error, setError] = useState("");
-  const [isLoading, setIsLoading] = useState(true);
+  const [sampleDrafts, setSampleDrafts] = useState<Record<number, SampleDraft>>({});
   const [savingId, setSavingId] = useState<number | null>(null);
-  const [drafts, setDrafts] = useState<Record<number, LabelDraft>>({});
-  const [diseaseOptions, setDiseaseOptions] = useState<string[]>([]);
-  const updateDraft = (id: number, field: Exclude<keyof LabelDraft, "diseases">, value: string) =>
-    setDrafts((current) => ({ ...current, [id]: { ...(current[id] ?? emptyDraft), [field]: value } }));
-
-  const updateDiseases = (id: number, diseases: string[]) => setDrafts((current) => ({ ...current, [id]: { ...(current[id] ?? emptyDraft), diseases } }));
-
-  const refresh = async () => {
-    setIsLoading(true);
-    try {
-      const responses = await Promise.all([
-        fetch("/api/quality/samples?unlabeled=true&limit=30"),
-        fetch("/api/quality/metrics"),
-        fetch("/api/quality/sources"),
-        fetch("/api/quality/event-pairs/candidates?limit=20"),
-      ]);
-      if (responses.some((response) => !response.ok)) throw new Error("Không tải được dữ liệu chất lượng");
-      const [sampleData, metricData, sourceData, pairData] = await Promise.all(responses.map((response) => response.json()));
-      setSamples(sampleData);
-      setMetrics(metricData);
-      setSources(sourceData);
-      setPairs(pairData);
-      setError("");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Không tải được dữ liệu");
-    } finally { setIsLoading(false); }
-  };
-  useEffect(() => { refresh(); }, []);
-  useEffect(() => {
-    fetch("/api/keywords?limit=1000&only_active=false")
-      .then((response) => response.ok ? response.json() : Promise.reject(new Error("Could not load disease suggestions")))
-      .then((rows: Array<{ text: string }>) => setDiseaseOptions(rows.map((row) => row.text)))
-      .catch((error: Error) => console.warn(error.message));
-  }, []);
-
-  const label = async (id: number, human_relevant: boolean, human_signal_label?: string) => {
-    const draft = drafts[id];
-    setSavingId(id);
-    try {
-      const response = await fetch(`/api/quality/samples/${id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ human_relevant, human_signal_label, human_diseases: draft?.diseases || [], human_location: draft?.location || null, human_event_date: draft?.eventDate ? `${draft.eventDate}T00:00:00` : null, human_case_value: draft?.caseValue ? Number(draft.caseValue) : null }),
-      });
-      if (!response.ok) throw new Error("Không lưu được nhãn");
-      toast.success("Đã lưu nhãn");
-      await refresh();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Không lưu được nhãn");
-    } finally { setSavingId(null); }
-  };
-  const labelPair = async (pair: Pair, same_event: boolean) => {
-    try {
-      const response = await fetch("/api/quality/event-pairs", {
+  const samplesQuery = useQuery({
+    queryKey: qualityKeys.samples(),
+    queryFn: ({ signal }) => apiFetch<Sample[]>("/api/quality/samples?unlabeled=true&limit=30", { signal }),
+    staleTime: 45_000,
+    enabled: section === "review",
+  });
+  const pairsQuery = useQuery({
+    queryKey: qualityKeys.eventPairs(),
+    queryFn: ({ signal }) => apiFetch<Pair[]>("/api/quality/event-pairs/candidates?limit=20", { signal }),
+    staleTime: 45_000,
+    enabled: section === "review",
+  });
+  const keywordOptionsQuery = useQuery({
+    queryKey: keywordKeys.diseaseOptions(),
+    queryFn: ({ signal }) => fetchDiseaseOptions(signal),
+    staleTime: 600_000,
+    enabled: section === "review",
+  });
+  const metricsQuery = useQuery({
+    queryKey: qualityKeys.metrics(),
+    queryFn: ({ signal }) => apiFetch<Metrics>("/api/quality/metrics", { signal }),
+    staleTime: 120_000,
+    enabled: section === "results" || section === "sources",
+  });
+  const sourcesQuery = useQuery({
+    queryKey: qualityKeys.sources(),
+    queryFn: ({ signal }) => apiFetch<SourceHealth[]>("/api/quality/sources", { signal }),
+    staleTime: 180_000,
+    enabled: section === "sources",
+  });
+  const samples = samplesQuery.data ?? [];
+  const relatedSamples = samples.filter((sample) => sample.passed_stage1);
+  const unmatchedSamples = samples.filter((sample) => !sample.passed_stage1);
+  const activeQueueSamples = sampleQueueTab === "related" ? relatedSamples : unmatchedSamples;
+  const pairs = pairsQuery.data ?? [];
+  const metrics = metricsQuery.data ?? null;
+  const sources = sourcesQuery.data ?? [];
+  const keywordOptions = keywordOptionsQuery.data ?? [];
+  const selectedSample = activeQueueSamples.find((sample) => sample.id === selectedSampleId) ?? activeQueueSamples[0];
+  const sampleMutation = useMutation({
+    mutationFn: ({ id, human_relevant, keywords }: {
+      id: number; human_relevant: boolean; keywords: string[]; tokenAtStart: string | null;
+    }) => apiFetch<unknown>(`/api/quality/samples/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ human_relevant, human_diseases: keywords }),
+    }),
+    onSuccess: (_result, variables) => {
+      if (localStorage.getItem("token") !== variables.tokenAtStart) return;
+      queryClient.setQueryData<Sample[]>(qualityKeys.samples(), (current) => current?.filter((sample) => sample.id !== variables.id) ?? []);
+      queryClient.invalidateQueries({ queryKey: qualityKeys.metrics() });
+    },
+  });
+  const pairMutation = useMutation({
+    mutationFn: ({ pair, same_event }: { pair: Pair; same_event: boolean; tokenAtStart: string | null }) =>
+      apiFetch<unknown>("/api/quality/event-pairs", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ article_a_id: pair.article_a_id, article_b_id: pair.article_b_id, same_event }),
-      });
-      if (!response.ok) throw new Error("Không lưu được nhãn cặp bài");
-      toast.success("Đã lưu nhãn cặp bài");
-      await refresh();
+      }),
+    onSuccess: (_result, variables) => {
+      if (localStorage.getItem("token") !== variables.tokenAtStart) return;
+      queryClient.setQueryData<Pair[]>(qualityKeys.eventPairs(), (current) => current?.filter((pair) =>
+        pair.article_a_id !== variables.pair.article_a_id || pair.article_b_id !== variables.pair.article_b_id,
+      ) ?? []);
+      queryClient.invalidateQueries({ queryKey: qualityKeys.metrics() });
+    },
+  });
+
+  const label = async (id: number, human_relevant: boolean) => {
+    const tokenAtStart = localStorage.getItem("token");
+    setSavingId(id);
+    try {
+      await sampleMutation.mutateAsync({ id, human_relevant, keywords: sampleDrafts[id]?.keywords ?? [], tokenAtStart });
+      if (localStorage.getItem("token") === tokenAtStart) toast.success("Đã lưu nhãn");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Không lưu được nhãn");
+      toast.error(err instanceof Error ? err.message : "Không lưu được nhãn");
+    } finally { setSavingId(null); }
+  };
+  const labelPair = async (pair: Pair, same_event: boolean) => {
+    const tokenAtStart = localStorage.getItem("token");
+    try {
+      await pairMutation.mutateAsync({ pair, same_event, tokenAtStart });
+      if (localStorage.getItem("token") === tokenAtStart) toast.success("Đã lưu nhãn cặp bài");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Không lưu được nhãn cặp bài");
+    }
+  };
+  const isLoading = section === "review"
+    ? samplesQuery.isLoading || pairsQuery.isLoading
+    : section === "results"
+      ? metricsQuery.isLoading
+      : metricsQuery.isLoading || sourcesQuery.isLoading;
+  const activeError = section === "review"
+    ? samplesQuery.error ?? pairsQuery.error
+    : section === "results"
+      ? metricsQuery.error
+      : metricsQuery.error ?? sourcesQuery.error;
+  const retryActiveQueries = () => {
+    if (section === "review") {
+      void samplesQuery.refetch();
+      void pairsQuery.refetch();
+    } else if (section === "results") {
+      void metricsQuery.refetch();
+    } else {
+      void metricsQuery.refetch();
+      void sourcesQuery.refetch();
     }
   };
   const percent = (value: number | null) => value === null ? "Chưa đủ mẫu" : `${(value * 100).toFixed(1)}%`;
@@ -132,8 +174,8 @@ export default function QualityReview() {
   return (
     <div className="space-y-8 text-sm">
       {isLoading && <p role="status">Đang tải dữ liệu…</p>}
-      {error && <Button variant="outline" onClick={refresh}>Thử lại</Button>}
-      {error && <p role="alert" className="rounded-lg border border-destructive/30 bg-destructive/10 p-4 text-base text-destructive">{error}</p>}
+      {activeError && <Button variant="outline" onClick={retryActiveQueries}>Thử lại</Button>}
+      {activeError && <p role="alert" className="rounded-lg border border-destructive/30 bg-destructive/10 p-4 text-base text-destructive">{activeError instanceof Error ? activeError.message : "Không tải được dữ liệu"}</p>}
 
       <Tabs value={section} onValueChange={value => setParams(current => { current.set("section", value); return current; })}>
       <TabsList className="h-auto flex flex-wrap justify-start"><TabsTrigger value="review">Hàng đợi đánh giá</TabsTrigger><TabsTrigger value="results">Kết quả Stage 1</TabsTrigger><TabsTrigger value="sources">Thống kê và lỗi nguồn</TabsTrigger></TabsList>
@@ -193,47 +235,57 @@ export default function QualityReview() {
 
       </TabsContent><TabsContent value="review">
       <section className="space-y-4" aria-labelledby="quality-samples-heading">
-        <div><h2 id="quality-samples-heading" className="text-xl font-semibold">Gán nhãn mẫu RSS</h2><p className="mt-1 text-base text-muted-foreground">Mẫu đo chất lượng, không phải hàng chờ NVYT. Với cửa B, gán nhãn cả bài khớp và không khớp detector.</p></div>
+        <div><h2 id="quality-samples-heading" className="text-xl font-semibold">Gán nhãn mẫu RSS</h2><p className="mt-1 text-base text-muted-foreground">Đọc bài và xác nhận tuyến Stage 1. Cửa B có thêm nhãn tín hiệu ngữ cảnh.</p></div>
         {!isLoading && samples.length === 0 && <Card><CardContent className="py-8 text-center text-base text-muted-foreground">Chưa có mẫu cần gán nhãn.</CardContent></Card>}
         {samples.length > 0 && <div className="review-layout">
           <aside aria-label="Bài viết chờ đánh giá" className="review-list rounded-lg border bg-card p-3">
-            <p className="mb-3 px-2 text-sm font-semibold">Bài chờ đánh giá · {samples.length}</p>
-            <div className="space-y-2">{samples.map((sample) => <button key={sample.id} type="button" className="queue-option" aria-pressed={selectedSample?.id === sample.id} disabled={savingId !== null} onClick={() => setSelectedSampleId(sample.id)}>
-              <span className="block text-sm font-medium leading-relaxed">{sample.title}</span>
-              <span className="mt-2 block text-xs text-muted-foreground">{formatDate(sample.published_date)} · {sample.stage1_route === "context" ? "Cửa B" : "Cửa A"}</span>
-            </button>)}</div>
+            <Tabs value={sampleQueueTab} onValueChange={(value) => {
+              const nextTab = value as "related" | "unmatched";
+              setSampleQueueTab(nextTab);
+              const nextSamples = nextTab === "related" ? relatedSamples : unmatchedSamples;
+              setSelectedSampleId(nextSamples[0]?.id ?? null);
+            }}>
+              <TabsList className="grid h-auto w-full grid-cols-2">
+                <TabsTrigger value="related">Liên quan · {relatedSamples.length}</TabsTrigger>
+                <TabsTrigger value="unmatched">Không khớp · {unmatchedSamples.length}</TabsTrigger>
+              </TabsList>
+              {[{ value: "related", title: "Liên quan", items: relatedSamples }, { value: "unmatched", title: "Không khớp", items: unmatchedSamples }].map(({ value, title, items }) => <TabsContent key={value} value={value} aria-label={`Tuyến ${title}`} className="space-y-2">
+                {items.length === 0 ? <p className="px-2 py-3 text-sm text-muted-foreground">Không có bài chờ đánh giá.</p> : items.map((sample) => <button key={sample.id} type="button" className="queue-option" aria-pressed={selectedSample?.id === sample.id} disabled={savingId !== null} onClick={() => setSelectedSampleId(sample.id)}>
+                <span className="block text-sm font-medium leading-relaxed">{sample.title}</span>
+                <span className="mt-2 block text-xs text-muted-foreground">{formatDate(sample.published_date)} · {sample.stage1_route === "context" ? "Cửa B" : "Cửa A"}</span>
+              </button>)}
+              </TabsContent>)}
+            </Tabs>
           </aside>
           <section aria-label="Xem và gán nhãn mẫu">
+        {activeQueueSamples.length === 0 && <Card><CardContent className="py-10 text-center"><p className="font-medium">Không có bài trong tuyến này</p><p className="mt-1 text-sm text-muted-foreground">Chọn tab còn lại để xem các bài đang chờ.</p></CardContent></Card>}
         {(selectedSample ? [selectedSample] : []).map((sample) => {
-          const isContext = sample.stage1_route === "context" || (sample.stage1_route === "none" && sample.gate_b_evaluated);
           const route = sample.stage1_route === "keyword" ? "Từ khóa" : sample.stage1_route === "context" ? "Ngữ cảnh" : sample.stage1_route === "none" ? "Không khớp" : "Dữ liệu cũ";
           const gateB = sample.gate_b_mode === "shadow" ? "Đo thử" : sample.gate_b_mode === "active" ? "Đang hoạt động" : sample.gate_b_evaluated ? "Đã kiểm tra, không khớp" : "Không áp dụng";
           return <Card key={sample.id}>
-            <CardContent className="space-y-4 pt-6">
-              <div className="flex flex-wrap gap-3 rounded-lg border bg-muted/40 p-4">
-                <div className="min-w-[120px] flex-1"><p className="text-sm text-muted-foreground">Qua cửa A</p><Badge variant={sample.passed_stage1 ? "secondary" : "outline"} className="mt-1 px-3 py-1 text-sm">{sample.passed_stage1 ? "Đạt" : "Không đạt"}</Badge></div>
-                <div className="min-w-[120px] flex-1"><p className="text-sm text-muted-foreground">Tuyến xử lý</p><p className="mt-1 text-base font-semibold">{route}</p></div>
-                <div className="min-w-[120px] flex-1"><p className="text-sm text-muted-foreground">Ngày đăng</p><p className="mt-1 text-base font-semibold">{formatDate(sample.published_date)}</p></div>
+            <CardContent className="space-y-6 p-5 sm:p-7">
+              <div className="flex flex-wrap items-center gap-2 border-b pb-4">
+                <Badge variant={sample.passed_stage1 ? "secondary" : "outline"} className="px-3 py-1.5">Cửa A · {sample.passed_stage1 ? "Đạt" : "Không đạt"}</Badge>
+                <Badge variant="outline" className="px-3 py-1.5">Tuyến · {route}</Badge>
+                {sample.stage1_route === "context" || sample.gate_b_evaluated ? <Badge variant="outline" className="px-3 py-1.5">Cửa B · {gateB}</Badge> : null}
+                {sample.context_signal_type && <Badge variant="secondary" className="px-3 py-1.5">{signalTypeLabels[sample.context_signal_type] || sample.context_signal_type}</Badge>}
+                <span className="ml-auto text-sm text-muted-foreground">Đăng {formatDate(sample.published_date)}</span>
               </div>
-              <div className="flex flex-wrap items-center gap-2 text-sm"><Badge variant="outline" className="px-3 py-1 text-sm">Cửa B: {gateB}</Badge>{sample.context_signal_type && <Badge variant="secondary" className="px-3 py-1 text-sm">{signalTypeLabels[sample.context_signal_type] || sample.context_signal_type}</Badge>}</div>
-              <a href={sample.link} target="_blank" rel="noopener noreferrer" className="block text-lg font-semibold leading-snug text-primary underline underline-offset-2">{sample.title}</a>
-              {sample.summary && <p className="text-base leading-relaxed">{sample.summary}</p>}
-              <div className="review-fields">
-                <DiseaseMultiSelect options={diseaseOptions} value={drafts[sample.id]?.diseases || []} onChange={(diseases) => updateDiseases(sample.id, diseases)} />
-                <label className="block space-y-1 text-sm"><span className="block font-medium">Địa bàn đúng</span><Input aria-label="Địa bàn đúng" placeholder="Địa bàn đúng" value={drafts[sample.id]?.location || ""} onChange={(event) => updateDraft(sample.id, "location", event.target.value)} /></label>
-                <label className="block space-y-1 text-sm"><span className="block font-medium">Ngày sự kiện đúng</span><Input aria-label="Ngày sự kiện đúng" type="date" value={drafts[sample.id]?.eventDate || ""} onChange={(event) => updateDraft(sample.id, "eventDate", event.target.value)} /></label>
-                <label className="block space-y-1 text-sm"><span className="block font-medium">Số ca đúng</span><Input aria-label="Số ca đúng" type="number" min="0" placeholder="Số ca đúng" value={drafts[sample.id]?.caseValue || ""} onChange={(event) => updateDraft(sample.id, "caseValue", event.target.value)} /></label>
+              <article className="space-y-3">
+                <a href={sample.link} target="_blank" rel="noopener noreferrer" className="block text-xl font-semibold leading-snug text-foreground decoration-primary decoration-2 underline-offset-4 hover:text-primary hover:underline sm:text-2xl">{sample.title}</a>
+                {sample.summary ? <p className="rounded-lg bg-muted/40 px-4 py-3 text-base leading-7 text-muted-foreground">{sample.summary}</p> : <p className="rounded-lg bg-muted/40 px-4 py-3 text-sm text-muted-foreground">Bài viết chưa có mô tả. Mở bài gốc để xem nội dung đầy đủ.</p>}
+              </article>
+              <div className="space-y-3 rounded-xl border bg-muted/20 p-4 sm:p-5">
+                <div>
+                  <p className="font-semibold">Từ khóa đúng</p>
+                  <p className="mt-1 text-sm text-muted-foreground">Chọn từ khóa mô tả chính xác nội dung bài viết.</p>
+                </div>
+                <DiseaseMultiSelect itemLabel="từ khóa" options={keywordOptions} value={sampleDrafts[sample.id]?.keywords ?? []}
+                  onChange={(keywords) => setSampleDrafts((current) => ({ ...current, [sample.id]: { keywords } }))} />
               </div>
-              <fieldset disabled={savingId !== null} className="review-actions flex flex-wrap gap-2 rounded-lg bg-card py-2">
-                {isContext ? <>
-                  <Button type="button" size="sm" onClick={() => label(sample.id, true, "confirmed_event")}>Ca/ổ dịch thật</Button>
-                  <Button type="button" size="sm" variant="secondary" onClick={() => label(sample.id, true, "early_signal")}>Tín hiệu sớm</Button>
-                  <Button type="button" size="sm" variant="outline" onClick={() => label(sample.id, false, "noise")}>Nhiễu</Button>
-                  <Button type="button" size="sm" variant="outline" onClick={() => label(sample.id, false, "irrelevant")}>Không liên quan</Button>
-                </> : <>
-                  <Button type="button" size="sm" onClick={() => label(sample.id, true)}>Liên quan</Button>
-                  <Button type="button" size="sm" variant="outline" onClick={() => label(sample.id, false)}>Không liên quan</Button>
-                </>}
+              <fieldset disabled={savingId !== null} className="grid grid-cols-1 gap-3 border-t pt-5 sm:grid-cols-2">
+                <Button type="button" className="h-11 justify-center gap-2" onClick={() => label(sample.id, true)}><Check className="h-4 w-4" />Liên quan</Button>
+                <Button type="button" className="h-11 justify-center gap-2" variant="outline" onClick={() => label(sample.id, false)}><X className="h-4 w-4" />Không khớp</Button>
               </fieldset>
             </CardContent>
           </Card>;

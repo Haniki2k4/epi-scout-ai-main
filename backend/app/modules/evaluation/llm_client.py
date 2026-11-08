@@ -58,6 +58,8 @@ class LlmClient:
             raise ProviderError(f"Provider HTTP {response.status_code}: {response.text[:300]}")
         try:
             raw = response.json()["choices"][0]["message"]["content"]
+            if not isinstance(raw, str):
+                raise TypeError("Provider returned no text content")
             cleaned = re.sub(r"^\s*```(?:json)?|\s*```\s*$", "", raw.strip(), flags=re.I)
             parsed = json.loads(cleaned)
         except (KeyError, IndexError, TypeError, ValueError) as exc:

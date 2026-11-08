@@ -1,8 +1,20 @@
 import ReviewHistory from "./ReviewHistory";
 import {Loader2, Plus, Trash2} from "lucide-react";
-import {useEffect,useState} from "react";import DiseaseMultiSelect from "@/components/admin/DiseaseMultiSelect";import {Card,CardContent,CardHeader,CardTitle} from "@/components/ui/card";import {Button} from "@/components/ui/button";import {Input} from "@/components/ui/input";import {Badge} from "@/components/ui/badge";import {Select,SelectContent,SelectItem,SelectTrigger,SelectValue} from "@/components/ui/select";import {useToast} from "@/components/ui/use-toast";import {llmApi,type Item,type Metrics,type Run} from "@/lib/llmEvaluationApi";
+import { type ReactNode, useEffect, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import DiseaseMultiSelect from "@/components/admin/DiseaseMultiSelect";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Badge } from "@/components/ui/badge";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useToast } from "@/components/ui/use-toast";
+import { fetchDiseaseOptions } from "@/lib/apiClient";
+import { keywordKeys, llmEvalKeys } from "@/lib/queryKeys";
+import { llmApi, type Item, type Metrics, type DatasetSummary, type DatasetVersion, type ItemList } from "@/lib/llmEvaluationApi";
 const pct=(v:number|null|undefined)=>v==null?"—":(v*100).toFixed(1)+"%";
-function useMetrics(){const[m,setM]=useState<Metrics|null>(null);const[e,setE]=useState("");useEffect(()=>{llmApi.metrics().then(setM).catch(x=>setE(x.message))},[]);return{m,e}}
+function useMetrics(){const query=useQuery({queryKey:llmEvalKeys.metrics(),queryFn:({signal})=>llmApi.metrics(signal),staleTime:120_000});return{m:query.data??null,e:query.error instanceof Error?query.error.message:"",isLoading:query.isLoading}}
 export function Overview(){const{m,e}=useMetrics();if(e)return <p className="text-destructive">{e}</p>;if(!m)return <p>Đang tải…</p>;return <div className="metric-grid">{[["Mẫu đã duyệt",m.reviewed_count],["Precision",pct(m.precision)],["Recall đầu-cuối",pct(m.end_to_end_recall)],["F1",pct(m.f1)],["Coverage",pct(m.coverage)],["Abstention",pct(m.abstention_rate)]].map(([k,v])=><Card key={String(k)}><CardHeader><CardTitle className="text-base">{k}</CardTitle></CardHeader><CardContent className="text-3xl font-semibold">{v}</CardContent></Card>)}</div>}
 export function ConfusionMatrix(){const{m,e}=useMetrics();if(e)return <p role="alert" className="text-destructive">{e}</p>;if(!m)return <p>Đang tải…</p>;const ts=["relevant","noise","irrelevant"],ps=["relevant","noise","irrelevant","unsure"];return <Card><CardHeader><CardTitle>Ma trận nhầm lẫn 3 × 4</CardTitle></CardHeader><CardContent className="overflow-x-auto"><table className="w-full min-w-[560px]"><thead><tr><th className="p-3 text-left">Ground truth</th>{ps.map(p=><th key={p} className="p-3 text-right">{p}</th>)}</tr></thead><tbody>{ts.map(t=><tr className="border-t" key={t}><th className="p-3 text-left">{t}</th>{ps.map(p=><td className="p-3 text-right" key={p}>{m.confusion_matrix[t]?.[p]??0}</td>)}</tr>)}</tbody></table><p className="mt-4 text-sm text-muted-foreground">Selective recall {pct(m.selective_recall)} · Recall đầu-cuối {pct(m.end_to_end_recall)}</p></CardContent></Card>}
 export function ProviderHealth(){const{m,e}=useMetrics();if(e)return <p role="alert" className="text-destructive">{e}</p>;if(!m)return <p>Đang tải…</p>;return <div className="grid gap-4 lg:grid-cols-2"><Card><CardHeader><CardTitle>Sức khỏe provider</CardTitle></CardHeader><CardContent><p>Tổng run: <b>{m.provider.total}</b></p><p>Thành công: <b>{pct(m.provider.success_rate)}</b></p><p>Fallback: <b>{m.provider.fallback_count} ({pct(m.provider.fallback_rate)})</b></p><p>p50/p95: <b>{m.provider.latency_p50_ms??"—"} / {m.provider.latency_p95_ms??"—"} ms</b></p></CardContent></Card><Card><CardHeader><CardTitle>Trạng thái</CardTitle></CardHeader><CardContent>{Object.entries(m.provider.status_counts).map(([k,v])=><div className="flex justify-between border-b py-2" key={k}><span>{k}</span><b>{v}</b></div>)}</CardContent></Card></div>}
@@ -29,6 +41,7 @@ type CaseObservationDraft = {
 };
 type ReviewDraft = { diseases: string[]; location: string; eventDate: string; caseObservations: CaseObservationDraft[] };
 type QueueView = "pending" | "processed";
+type LabelGroup = "relevant" | "other";
 const isCaseType = (value: unknown): value is CaseType => CASE_TYPES.some((option) => option.value === value);
 const isCountScope = (value: unknown): value is CountScope => COUNT_SCOPES.some((option) => option.value === value);
 const toDraft = (item: Item): ReviewDraft => ({
@@ -57,44 +70,110 @@ const llmLabel = (label?: string | null) => ({
 
 export function ReviewQueue() {
   const { toast } = useToast();
-  const [items, setItems] = useState<Item[]>([]);
+  const queryClient = useQueryClient();
   const [selectedItemId, setSelectedItemId] = useState<number | null>(null);
-  const selectedItem = items.find((item) => item.id === selectedItemId) ?? items[0];
   const [view, setView] = useState<QueueView>("pending");
+  const [labelGroup, setLabelGroup] = useState<LabelGroup>("relevant");
+  const [searchText, setSearchText] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [drafts, setDrafts] = useState<Record<number, ReviewDraft>>({});
-  const [diseaseOptions, setDiseaseOptions] = useState<string[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
+  const [dirtyIds, setDirtyIds] = useState<Set<number>>(() => new Set());
   const [savingId, setSavingId] = useState<number | null>(null);
   const [retryingId, setRetryingId] = useState<number | null>(null);
 
-  const load = () => {
-    setLoading(true);
-    setError("");
-    return llmApi.items(view).then((response) => {
-      setItems(response.items);
-      setDrafts(Object.fromEntries(response.items.map((item) => [item.id, toDraft(item)])));
-    }).catch((reason: Error) => setError(reason.message)).finally(() => setLoading(false));
-  };
-  useEffect(() => { void load(); }, [view]);
+  const activeSearch = view === "processed" ? debouncedSearch : "";
+  const itemsQuery = useQuery({
+    queryKey: llmEvalKeys.items(view, activeSearch),
+    queryFn: ({ signal }) => llmApi.items(view, activeSearch, signal),
+    staleTime: 45_000,
+  });
+  const diseaseOptionsQuery = useQuery({
+    queryKey: keywordKeys.diseaseOptions(),
+    queryFn: ({ signal }) => fetchDiseaseOptions(signal),
+    staleTime: 600_000,
+  });
+  const items = itemsQuery.data?.items ?? [];
+  const totalItems = itemsQuery.data?.total ?? 0;
+  const relevantItems = items.filter((item) => item.current_run?.llm_label === "relevant");
+  const otherItems = items.filter((item) => item.current_run?.llm_label !== "relevant");
+  const visibleItems = labelGroup === "relevant" ? relevantItems : otherItems;
+  const selectedItem = visibleItems.find((item) => item.id === selectedItemId) ?? visibleItems[0];
   useEffect(() => {
-    fetch("/api/keywords?limit=1000&only_active=false")
-      .then((response) => response.ok ? response.json() : Promise.reject(new Error("Không tải được danh sách bệnh")))
-      .then((rows: Array<{ text: string }>) => setDiseaseOptions(rows.map((row) => row.text)))
-      .catch((reason: Error) => console.warn(reason.message));
-  }, []);
+    if (view !== "processed") return;
+    const timeoutId = window.setTimeout(() => setDebouncedSearch(searchText.trim()), 300);
+    return () => window.clearTimeout(timeoutId);
+  }, [view, searchText]);
+  useEffect(() => {
+    const responseItems = itemsQuery.data?.items;
+    if (!responseItems) return;
+    setDrafts((current) => {
+      const next = { ...current };
+      for (const item of responseItems) {
+        if (!next[item.id] || !dirtyIds.has(item.id)) next[item.id] = toDraft(item);
+      }
+      return next;
+    });
+  }, [itemsQuery.data?.items, dirtyIds]);
+  const diseaseOptions = diseaseOptionsQuery.data ?? [];
 
-  const updateDraft = (id: number, patch: Partial<ReviewDraft>) =>
-    setDrafts((current) => ({ ...current, [id]: { ...current[id], ...patch } }));
+  const updateDraft = (id: number, patch: Partial<ReviewDraft>) => {
+    setDirtyIds((current) => new Set(current).add(id));
+    const item = items.find((candidate) => candidate.id === id);
+    const emptyDraft: ReviewDraft = { diseases: [], location: "", eventDate: "", caseObservations: [] };
+    setDrafts((current) => ({ ...current, [id]: { ...(current[id] ?? (item ? toDraft(item) : emptyDraft)), ...patch } }));
+  }
+
+  const retryMutation = useMutation({
+    mutationFn: ({ itemId }: { itemId: number; tokenAtStart: string | null; queryKey: ReturnType<typeof llmEvalKeys.items> }) => llmApi.retry(itemId),
+    onSuccess: (run, variables) => {
+      if (localStorage.getItem("token") !== variables.tokenAtStart) return;
+      queryClient.setQueryData<ItemList>(variables.queryKey, (current) => current && ({
+        ...current,
+        items: current.items.map((candidate) => candidate.id === variables.itemId
+          ? { ...candidate, current_inference_run_id: run.id, current_run: run }
+          : candidate),
+      }));
+      void queryClient.invalidateQueries({ queryKey: llmEvalKeys.metrics() });
+    },
+  });
+
+  const saveMutation = useMutation({
+    mutationFn: ({ itemId, body }: { itemId: number; body: object; tokenAtStart: string | null; view: QueueView; search: string }) => llmApi.label(itemId, body),
+    onSuccess: (updatedItem, variables) => {
+      if (localStorage.getItem("token") !== variables.tokenAtStart) return;
+      const currentKey = llmEvalKeys.items(variables.view, variables.search);
+      queryClient.setQueryData<ItemList>(currentKey, (current) => {
+        if (!current) return current;
+        if (variables.view === "pending") {
+          return {
+            ...current,
+            items: current.items.filter((candidate) => candidate.id !== updatedItem.id),
+            total: Math.max(0, current.total - 1),
+          };
+        }
+        return { ...current, items: current.items.map((candidate) => candidate.id === updatedItem.id ? updatedItem : candidate) };
+      });
+      if (variables.view === "pending") {
+        void queryClient.invalidateQueries({ queryKey: ["llm-evaluations", "items", { view: "processed" }] });
+      }
+      setDirtyIds((current) => { const next = new Set(current); next.delete(updatedItem.id); return next; });
+      setDrafts((current) => ({ ...current, [updatedItem.id]: toDraft(updatedItem) }));
+      void queryClient.invalidateQueries({ queryKey: llmEvalKeys.metrics() });
+      void queryClient.invalidateQueries({ queryKey: llmEvalKeys.datasetSummary() });
+      void queryClient.invalidateQueries({ queryKey: llmEvalKeys.detail(updatedItem.id) });
+    },
+  });
 
   const retry = async (item: Item) => {
+    const tokenAtStart = localStorage.getItem("token");
     setRetryingId(item.id);
     try {
-      const run: Run = await llmApi.retry(item.id);
-      setItems((current) => current.map((candidate) => candidate.id === item.id
-        ? { ...candidate, current_inference_run_id: run.id, current_run: run }
-        : candidate));
-      toast({ title: "Đã chạy lại LLM cho bài viết" });
+      await retryMutation.mutateAsync({
+        itemId: item.id,
+        tokenAtStart,
+        queryKey: llmEvalKeys.items(view, activeSearch),
+      });
+      if (localStorage.getItem("token") === tokenAtStart) toast({ title: "Đã chạy lại LLM cho bài viết" });
     } catch (reason) {
       toast({ title: "Retry thất bại", description: reason instanceof Error ? reason.message : "Lỗi", variant: "destructive" });
     } finally {
@@ -121,7 +200,8 @@ export function ReviewQueue() {
     }));
     try {
       setSavingId(item.id);
-      const updated = await llmApi.label(item.id, {
+      const tokenAtStart = localStorage.getItem("token");
+      await saveMutation.mutateAsync({ itemId: item.id, view, search: activeSearch, tokenAtStart, body: {
         expected_revision: item.label_revision,
         reviewed_inference_run_id: item.current_run?.id ?? item.current_inference_run_id,
         human_label: label,
@@ -132,37 +212,60 @@ export function ReviewQueue() {
         human_case_observations: observations,
         eligible_for_training: label !== "unsure",
         reason: "Đánh giá thủ công",
-      });
-      setItems((current) => view === "pending"
-        ? current.filter((candidate) => candidate.id !== item.id)
-        : current.map((candidate) => candidate.id === item.id ? updated : candidate));
-      setDrafts((current) => ({ ...current, [item.id]: toDraft(updated) }));
-      toast({ title: "Đã lưu đánh giá" });
+      } });
+      if (localStorage.getItem("token") === tokenAtStart) toast({ title: "Đã lưu đánh giá" });
     } catch (reason) {
       toast({ title: "Không thể lưu", description: reason instanceof Error ? reason.message : "Lỗi", variant: "destructive" });
     } finally { setSavingId(null); }
   };
 
-  const queueControls = <div className="flex flex-wrap gap-2" aria-label="Bộ lọc hàng chờ">
-    <Button variant={view === "pending" ? "default" : "outline"} onClick={() => setView("pending")}>Chưa gán nhãn</Button>
-    <Button variant={view === "processed" ? "default" : "outline"} onClick={() => setView("processed")}>Đã xử lý</Button>
+  const queueControls = <div className="flex flex-col gap-3 border-b bg-muted/20 p-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
+    <div className="inline-flex w-fit rounded-lg border bg-background p-1" aria-label="Bộ lọc hàng chờ">
+      <Button className="h-9" variant={view === "pending" ? "default" : "ghost"} onClick={() => setView("pending")}>Chưa gán nhãn</Button>
+      <Button className="h-9" variant={view === "processed" ? "default" : "ghost"} onClick={() => setView("processed")}>Đã xử lý</Button>
+    </div>
+    {view === "processed" && <Input
+      type="search"
+      aria-label="Tìm bài báo đã xử lý"
+      placeholder="Tìm theo tiêu đề, nội dung hoặc URL…"
+      value={searchText}
+      onChange={(event) => setSearchText(event.target.value)}
+      className="min-w-56 flex-1"
+    />}
   </div>;
+  const queuePanel = (content: ReactNode) => <Card className="overflow-hidden shadow-sm">
+    <CardContent className="p-0">
+      {queueControls}
+      <div className="p-3 sm:p-5">{content}</div>
+    </CardContent>
+  </Card>;
 
-  if (loading) return <div className="space-y-4">{queueControls}<p>Đang tải hàng chờ…</p></div>;
-  if (error) return <div className="space-y-3"><p className="text-destructive">{error}</p><Button onClick={load}>Thử lại</Button></div>;
-  if (items.length === 0) return <div className="space-y-4">{queueControls}<p className="text-muted-foreground">{view === "pending" ? "Không còn bài chưa gán nhãn." : "Chưa có bài đã xử lý."}</p></div>;
+  const queueError = itemsQuery.error ?? diseaseOptionsQuery.error;
+  if (itemsQuery.isLoading || diseaseOptionsQuery.isLoading) return queuePanel(<p className="py-8 text-center text-muted-foreground">Đang tải hàng chờ…</p>);
+  if (queueError) return queuePanel(<div className="space-y-3 py-4"><p role="alert" className="text-destructive">{queueError instanceof Error ? queueError.message : "Không tải được dữ liệu"}</p><Button onClick={() => { void itemsQuery.refetch(); void diseaseOptionsQuery.refetch(); }}>Thử lại</Button></div>);
+  if (items.length === 0) return queuePanel(<p className="py-8 text-center text-muted-foreground">{view === "pending" ? "Không còn bài chưa gán nhãn." : activeSearch ? `Không tìm thấy bài báo phù hợp trong ${totalItems} bài đã xử lý.` : "Chưa có bài đã xử lý."}</p>);
 
-  return <div className="space-y-4">{queueControls}<div className="review-layout">
-    <aside className="review-list rounded-lg border bg-card p-3" aria-label="Bài viết trong hàng đợi">
-      <p className="mb-3 px-2 text-sm font-semibold">{view === "pending" ? "Bài chưa gán nhãn" : "Bài đã xử lý"} · {items.length}</p>
-      <div className="space-y-2">{items.map((item) => <button key={item.id} type="button" className="queue-option" aria-pressed={selectedItem?.id === item.id} disabled={savingId !== null} onClick={() => setSelectedItemId(item.id)}>
+  return queuePanel(<>{itemsQuery.isFetching && <p role="status" className="mb-3 text-xs text-muted-foreground">Đang cập nhật nền…</p>}<div className="review-layout llm-review-layout">
+    <aside className="review-list llm-review-list" aria-label="Bài viết trong hàng đợi">
+      <Tabs value={labelGroup} onValueChange={(value) => {
+        const nextGroup = value as LabelGroup;
+        setLabelGroup(nextGroup);
+        const nextItems = nextGroup === "relevant" ? relevantItems : otherItems;
+        setSelectedItemId(nextItems[0]?.id ?? null);
+      }}>
+        <TabsList className="grid h-auto w-full grid-cols-2">
+          <TabsTrigger value="relevant">Liên quan · {relevantItems.length}</TabsTrigger>
+          <TabsTrigger value="other">Các tag còn lại · {otherItems.length}</TabsTrigger>
+        </TabsList>
+        {visibleItems.length === 0 ? <p className="px-2 py-3 text-sm text-muted-foreground">Không có bài trong nhóm này.</p> : <div className="mt-2 space-y-2">{visibleItems.map((item) => <button key={item.id} type="button" className="queue-option" aria-pressed={selectedItem?.id === item.id} disabled={savingId !== null} onClick={() => setSelectedItemId(item.id)}>
         <span className="block text-sm font-medium leading-relaxed">{item.title_snapshot}</span><span className="mt-2 block text-xs text-muted-foreground">{routeLabel(item.current_run?.route)} · {llmLabel(item.current_run?.llm_label)}</span>
-      </button>)}</div>
+      </button>)}</div>}
+      </Tabs>
     </aside>
-    <section aria-label="Xem và gán nhãn bài viết">{(selectedItem ? [selectedItem] : []).map((item) => {
+    <section aria-label="Xem và gán nhãn bài viết" className="min-w-0">{visibleItems.length === 0 ? <Card><CardContent className="py-10 text-center"><p className="font-medium">Không có bài trong nhóm này</p><p className="mt-1 text-sm text-muted-foreground">Chọn tab còn lại để xem các bài khác.</p></CardContent></Card> : (selectedItem ? [selectedItem] : []).map((item) => {
     const draft = drafts[item.id] ?? toDraft(item);
     const isContextRoute = item.current_run?.route === "context";
-    return <Card key={item.id}><CardContent className="space-y-4 pt-6">
+    return <div key={item.id} className="space-y-4">
       <div className="flex flex-wrap gap-2 text-sm [&>div]:break-all [&>div]:text-xs">
         <Badge>Tuyến: {routeLabel(item.current_run?.route)}</Badge>
         <Badge variant="outline">Model: {item.current_run?.model_id ?? "Chưa có"}</Badge>
@@ -217,7 +320,7 @@ export function ReviewQueue() {
           <Button type="button" variant="outline" size="sm" onClick={() => updateDraft(item.id, { caseObservations: [...draft.caseObservations, { reportedValue: "", caseType: "", countScope: "", source: {} }] })}><Plus />Thêm quan sát số ca</Button>
         </fieldset>
       </div>
-      <fieldset disabled={savingId !== null || retryingId === item.id} className="review-actions flex flex-wrap gap-2 rounded-lg bg-card py-2">
+      <fieldset disabled={savingId !== null || retryingId === item.id} className="flex flex-wrap gap-2 py-2">
         {isContextRoute ? <>
           <Button onClick={() => save(item, "relevant", "confirmed_event")}>Ca/ổ dịch thật</Button>
           <Button variant="secondary" onClick={() => save(item, "relevant", "early_signal")}>Tín hiệu sớm</Button>
@@ -226,7 +329,88 @@ export function ReviewQueue() {
         <Button variant="outline" onClick={() => save(item, "irrelevant")}>Không liên quan</Button>
         <Button variant="ghost" onClick={() => save(item, "unsure")}>Chưa chắc chắn</Button>{item.current_run && !["success", "pending"].includes(item.current_run.status) && <Button type="button" variant="secondary" disabled={retryingId !== null} aria-busy={retryingId === item.id} onClick={() => void retry(item)}>{retryingId === item.id ? <><Loader2 className="animate-spin" />Đang chạy lại…</> : "Retry LLM"}</Button>}
       </fieldset>
-    </CardContent></Card>;
-  })}</section></div></div>;
+    </div>;
+  })}</section></div></>);
 }
-export function DatasetVersions(){const{toast}=useToast();const[v,setV]=useState<any[]>([]);const[s,setS]=useState<any>();const[tag,setTag]=useState("");const load=()=>Promise.all([llmApi.versions(),llmApi.summary()]).then(([a,b])=>{setV(a);setS(b)});useEffect(()=>{load().catch(()=>{})},[]);const create=()=>llmApi.create({version_tag:tag,split_strategy:"temporal_grouped",split_seed:42,notes:null}).then(()=>{setTag("");load()}).catch(e=>toast({title:"Lỗi",description:e.message,variant:"destructive"}));return <div className="space-y-4"><Card><CardContent className="pt-6"><p className="text-3xl font-semibold">{s?.eligible_count??0}</p><p className="text-sm text-muted-foreground">mẫu đủ điều kiện · {JSON.stringify(s?.label_distribution??{})}</p><div className="mt-4 flex gap-2"><Input value={tag} onChange={e=>setTag(e.target.value)} placeholder="2026.09-v1"/><Button disabled={!tag} onClick={create}>Tạo version</Button></div></CardContent></Card>{v.map(x=><Card key={x.id}><CardContent className="flex items-center justify-between pt-6"><div><b>{x.version}</b><p className="text-sm">{x.status} · {x.sample_count} mẫu</p></div><div className="flex gap-2">{x.status==="draft"&&<Button variant="outline" onClick={()=>llmApi.freeze(x.id).then(load)}>Freeze</Button>}<Button variant="outline" onClick={()=>llmApi.download(x.id,"jsonl").catch(e=>toast({title:"Lỗi tải",description:e.message,variant:"destructive"}))}>JSONL</Button><Button variant="outline" onClick={()=>llmApi.download(x.id,"csv").catch(e=>toast({title:"Lỗi tải",description:e.message,variant:"destructive"}))}>CSV</Button><Button variant="outline" onClick={()=>llmApi.download(x.id,"excel").catch(e=>toast({title:"Lỗi tải",description:e.message,variant:"destructive"}))}>Excel</Button></div></CardContent></Card>)}</div>}
+export function DatasetVersions() {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const [tag, setTag] = useState("");
+  const summaryQuery = useQuery({
+    queryKey: llmEvalKeys.datasetSummary(),
+    queryFn: ({ signal }) => llmApi.summary(signal),
+    staleTime: 120_000,
+  });
+  const versionsQuery = useQuery({
+    queryKey: llmEvalKeys.datasetVersions(),
+    queryFn: ({ signal }) => llmApi.versions(signal),
+    staleTime: 180_000,
+  });
+  const createMutation = useMutation({
+    mutationFn: ({ versionTag }: { versionTag: string; tokenAtStart: string | null }) => llmApi.create({
+      version_tag: versionTag,
+      split_strategy: "temporal_grouped",
+      split_seed: 42,
+      notes: null,
+    }),
+    onSuccess: (_version, variables) => {
+      if (localStorage.getItem("token") !== variables.tokenAtStart) return;
+      setTag("");
+      void queryClient.invalidateQueries({ queryKey: llmEvalKeys.datasetVersions() });
+    },
+  });
+  const freezeMutation = useMutation({
+    mutationFn: ({ id }: { id: number; tokenAtStart: string | null }) => llmApi.freeze(id),
+    onSuccess: (_version, variables) => {
+      if (localStorage.getItem("token") !== variables.tokenAtStart) return;
+      void queryClient.invalidateQueries({ queryKey: llmEvalKeys.datasetVersions() });
+    },
+  });
+  const versions: DatasetVersion[] = versionsQuery.data ?? [];
+  const summary: DatasetSummary | undefined = summaryQuery.data;
+  const queryError = versionsQuery.error ?? summaryQuery.error;
+
+  const create = async () => {
+    try {
+      await createMutation.mutateAsync({ versionTag: tag, tokenAtStart: localStorage.getItem("token") });
+    } catch (error) {
+      toast({ title: "Lỗi", description: error instanceof Error ? error.message : "Không thể tạo version", variant: "destructive" });
+    }
+  };
+
+  const freeze = async (id: number) => {
+    try {
+      await freezeMutation.mutateAsync({ id, tokenAtStart: localStorage.getItem("token") });
+    } catch (error) {
+      toast({ title: "Lỗi", description: error instanceof Error ? error.message : "Không thể freeze version", variant: "destructive" });
+    }
+  };
+
+  if (versionsQuery.isLoading || summaryQuery.isLoading) return <p role="status">Đang tải dataset…</p>;
+  if (queryError) return <div role="alert" className="space-y-2 text-destructive">
+    <p>{queryError instanceof Error ? queryError.message : "Không tải được dataset"}</p>
+    <Button variant="outline" onClick={() => { void versionsQuery.refetch(); void summaryQuery.refetch(); }}>Thử lại</Button>
+  </div>;
+
+  return <div className="space-y-4">
+    <Card><CardContent className="pt-6">
+      <p className="text-3xl font-semibold">{summary?.eligible_count ?? 0}</p>
+      <p className="text-sm text-muted-foreground">mẫu đủ điều kiện · {JSON.stringify(summary?.label_distribution ?? {})}</p>
+      <div className="mt-4 flex gap-2">
+        <Input value={tag} onChange={(event) => setTag(event.target.value)} placeholder="2026.09-v1" />
+        <Button disabled={!tag.trim() || createMutation.isPending} onClick={() => void create()}>
+          {createMutation.isPending ? "Đang tạo…" : "Tạo version"}
+        </Button>
+      </div>
+    </CardContent></Card>
+    {versions.map((version) => <Card key={version.id}><CardContent className="flex items-center justify-between pt-6">
+      <div><b>{version.version}</b><p className="text-sm">{version.status} · {version.sample_count} mẫu</p></div>
+      <div className="flex gap-2">
+        {version.status === "draft" && <Button variant="outline" disabled={freezeMutation.isPending} onClick={() => void freeze(version.id)}>Freeze</Button>}
+        <Button variant="outline" onClick={() => void llmApi.download(version.id, "jsonl").catch((error: Error) => toast({ title: "Lỗi tải", description: error.message, variant: "destructive" }))}>JSONL</Button>
+        <Button variant="outline" onClick={() => void llmApi.download(version.id, "csv").catch((error: Error) => toast({ title: "Lỗi tải", description: error.message, variant: "destructive" }))}>CSV</Button>
+        <Button variant="outline" onClick={() => void llmApi.download(version.id, "excel").catch((error: Error) => toast({ title: "Lỗi tải", description: error.message, variant: "destructive" }))}>Excel</Button>
+      </div>
+    </CardContent></Card>)}
+  </div>;
+}

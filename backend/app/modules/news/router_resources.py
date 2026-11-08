@@ -6,11 +6,13 @@ import re
 from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 from typing import List
+from pydantic import BaseModel, Field
 
 from ...core.database import get_db
 from ...core.logger import get_logger
 from ..auth import security
-from . import crud, schemas
+from . import crud, schemas, models
+from .disease_catalog import canonical_disease, keyword_aliases, belongs_to_category
 
 logger = get_logger("backend.router.resources")
 router = APIRouter(prefix="/api", tags=["resources"])
@@ -39,6 +41,35 @@ def parse_keywords_input(text: str) -> list[str]:
 
 
 # --- Keywords ---
+
+class KeywordSuggestionImport(BaseModel):
+    keywords: list[str] = Field(min_length=1, max_length=1000)
+
+
+@router.get("/keywords/suggestions")
+def keyword_suggestions(db: Session = Depends(get_db), current_admin=Depends(security.require_admin_role)):
+    return [
+        {"text": text, "canonical_name": canonical_disease(text),
+         "aliases": list(keyword_aliases(text)),
+         "groups": [group for group in ("virus", "sốt") if belongs_to_category(canonical_disease(text), group)]}
+        for text in crud.missing_default_keywords(db)
+    ]
+
+
+@router.post("/keywords/import-suggestions")
+def import_keyword_suggestions(
+    body: KeywordSuggestionImport, db: Session = Depends(get_db),
+    current_admin=Depends(security.require_admin_role),
+):
+    approved = {canonical_disease(text): text for text in crud.default_keyword_texts()}
+    selected = list(dict.fromkeys(canonical_disease(text) for text in body.keywords))
+    if any(name not in approved for name in selected):
+        raise HTTPException(status_code=400, detail="Danh sách chứa mục không thuộc bộ từ khóa gợi ý")
+    existing = {canonical_disease(row.text) for row in db.query(models.Keyword).all()}
+    added = [approved[name] for name in selected if name not in existing]
+    db.add_all([models.Keyword(text=text, is_active=True) for text in added])
+    db.commit()
+    return {"added_count": len(added), "skipped_count": len(selected) - len(added), "added_keywords": added}
 
 @router.get("/keywords", response_model=List[schemas.KeywordDTO])
 def read_keywords(
@@ -77,16 +108,24 @@ def create_keyword(
         )
 
     created_keywords = []
+    existing_names = {canonical_disease(row.text) for row in db.query(models.Keyword).all()}
     for item in keywords:
-        existing = crud.get_keyword_by_text(db, item)
-        if existing:
+        name = canonical_disease(item)
+        if name in existing_names:
             logger.info("Create keyword skipped | reason=already_exists keyword={}", item)
             continue
-        created_keywords.append(crud.create_keyword(db, schemas.KeywordCreate(text=item)))
+        row = models.Keyword(text=item, is_active=keyword.is_active)
+        db.add(row)
+        created_keywords.append(row)
+        existing_names.add(name)
 
     if not created_keywords:
         logger.warning("Create keyword rejected | reason=all_keywords_exist")
-        raise HTTPException(status_code=400, detail="Keyword already exists")
+        raise HTTPException(status_code=400, detail="Từ khóa hoặc tên đồng nghĩa đã có. Hãy bật lại mục hiện có nếu đang tắt.")
+
+    db.commit()
+    for row in created_keywords:
+        db.refresh(row)
 
     logger.info("Create keyword completed | created_count={}", len(created_keywords))
     return created_keywords[0] if len(created_keywords) == 1 else created_keywords
@@ -121,6 +160,16 @@ def update_keyword_api(
 
     if len(keyword.text) > KEYWORD_MAX_LENGTH:
         raise HTTPException(status_code=400, detail=f"Từ khóa vượt quá {KEYWORD_MAX_LENGTH} ký tự")
+
+    original = db.get(models.Keyword, keyword_id)
+    if not original:
+        raise HTTPException(status_code=404, detail="Không tìm thấy từ khóa")
+    name = canonical_disease(keyword.text)
+    if canonical_disease(original.text) != name and any(
+        row.id != keyword_id and canonical_disease(row.text) == name
+        for row in db.query(models.Keyword).all()
+    ):
+        raise HTTPException(status_code=409, detail="Tên bệnh hoặc tên đồng nghĩa đã có ở mục khác")
 
     updated = crud.update_keyword(db, keyword_id, keyword.text.strip())
     if not updated:

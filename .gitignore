@@ -11,6 +11,7 @@ node_modules
 dist
 dist-ssr
 *.local
+!Modelfile.local
 
 # Editor directories and files
 .vscode/*
@@ -42,7 +43,11 @@ docs/draft.ini
 backup.sql
 backups/
 
+scripts/
+backend/scripts/
+
 # Vite cache artifacts
 vite.config.ts.timestamp-*
 # Local data repair backups
 backups/*.json
+backups/*.sql

@@ -4,7 +4,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from ...core.database import get_db
@@ -63,6 +63,7 @@ def list_items(
     review_status: str | None = None, route: str | None = None,
     model_id: str | None = None, prompt_version: str | None = None,
     llm_label: str | None = None, human_label: str | None = None,
+    search: str | None = Query(default=None, max_length=200),
     benchmark_only: bool = False, skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200), db: Session = Depends(get_db),
     _=Depends(require_reviewer_role),
@@ -79,6 +80,15 @@ def list_items(
         query = query.filter(models.LlmEvaluationItem.review_status == review_status)
     if human_label:
         query = query.filter(models.LlmEvaluationItem.human_label == human_label)
+    search_term = (search or "").strip()
+    if search_term:
+        escaped_term = search_term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        search_pattern = f"%{escaped_term}%"
+        query = query.filter(or_(
+            models.LlmEvaluationItem.title_snapshot.ilike(search_pattern, escape="\\"),
+            models.LlmEvaluationItem.summary_snapshot.ilike(search_pattern, escape="\\"),
+            models.LlmEvaluationItem.canonical_url.ilike(search_pattern, escape="\\"),
+        ))
     if route:
         query = query.filter(models.LlmInferenceRun.input_stage1_route == route)
     if model_id:

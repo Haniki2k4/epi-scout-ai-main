@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from ...core.logger import get_logger
 from . import crud, models
+from .disease_catalog import canonical_disease
 
 logger = get_logger("backend.news.event_service")
 _embedding_model = None
@@ -72,6 +73,7 @@ def resolve_event_for_article(
     disease = override_disease_name or _primary_keyword(matched_keywords)
     if not disease:
         return None, None, None, 0
+    disease = canonical_disease(disease)
     normalized_location = _normalize(location) or None
     compare_title = (normalized_title or title).strip()
     observed_at = event_date or pub_date

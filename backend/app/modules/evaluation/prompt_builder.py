@@ -2,14 +2,18 @@ import hashlib
 import json
 import os
 from typing import Any
+from ..news.llm_prompt_rules import (
+    CONTEXT_ROUTE_CRITERIA,
+    KEYWORD_ROUTE_CRITERIA,
+    SYSTEM_PROMPT,
+)
 
-PROMPT_VERSION = os.getenv("LLM_PROMPT_VERSION", "v1.0").strip()
+PROMPT_VERSION = os.getenv("LLM_PROMPT_VERSION", "v1.2").strip()
 SCHEMA_VERSION = "stage2-v1"
 
-SYSTEM_PROMPT = "Bạn là chuyên gia dịch tễ. Chỉ trả JSON hợp lệ, không thêm văn bản ngoài JSON."
 CRITERIA = {
-    "keyword": "Phân loại relevant, noise, irrelevant hoặc unsure. Relevant cần sự kiện dịch tễ thực; bài tư vấn hoặc dùng sai nghĩa là noise.",
-    "context": "Phát hiện chùm ca bất thường, tín hiệu động vật/môi trường hoặc phản ứng thực địa. Không suy đoán tên bệnh.",
+    "keyword": KEYWORD_ROUTE_CRITERIA,
+    "context": CONTEXT_ROUTE_CRITERIA,
 }
 OUTPUT_SCHEMA = '{"label":"relevant|noise|irrelevant|unsure","reason":"...","matched_keywords":[],"location":null,"diseases":[]}'
 

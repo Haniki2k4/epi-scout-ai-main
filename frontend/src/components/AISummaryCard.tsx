@@ -8,7 +8,7 @@ import { useToast } from "@/components/ui/use-toast";
 type SummaryItem = {
   text: string;
   evidence_count: number;
-  confidence: "high" | "medium" | "low";
+  confidence: "high" | "medium" | "low" | "unassessed";
 };
 
 type DailySummary = {
@@ -21,6 +21,7 @@ type DailySummary = {
 };
 
 const confidenceLabel: Record<SummaryItem["confidence"], string> = {
+  unassessed: "Chưa đánh giá",
   high: "Cao",
   medium: "Trung bình",
   low: "Thấp",

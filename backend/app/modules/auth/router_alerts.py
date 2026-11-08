@@ -3,7 +3,7 @@ Router Custom Alerts - Cho phép mỗi user tạo bộ lọc bài báo riêng th
 """
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import or_
+from sqlalchemy import and_, or_
 from pydantic import BaseModel, Field
 from typing import Optional, List
 from datetime import datetime
@@ -210,9 +210,14 @@ def get_important_signals(
     min_score: int = 2,
     db: Session = Depends(get_db),
 ):
-    """Lấy các tín hiệu cảnh báo quan trọng (score >= 2) trong N giờ qua."""
+    """Lấy tín hiệu quan trọng nhưng không gồm bài đã phân loại là ca bệnh/ổ dịch."""
     from datetime import timedelta
     since = datetime.utcnow() - timedelta(hours=hours)
+
+    not_case_event = or_(
+        news_models.ArticleDetails.context_signal_type.is_(None),
+        ~news_models.ArticleDetails.context_signal_type.in_(("case_report", "outbreak")),
+    )
     
     query = (
         db.query(news_models.ArticleIdentity)
@@ -220,8 +225,14 @@ def get_important_signals(
         .join(news_models.ArticleDetails, news_models.ArticleIdentity.details)
         .filter(
             news_models.ArticleIdentity.published_date >= since,
-            news_models.ArticleDetails.outbreak_relevance_score >= min_score,
-            news_models.ArticleDetails.is_suspected_false_positive == False,
+            not_case_event,
+            or_(
+                news_models.ArticleDetails.context_signal_type == "official_alert",
+                and_(
+                    news_models.ArticleDetails.outbreak_relevance_score >= min_score,
+                    news_models.ArticleDetails.is_suspected_false_positive.is_(False),
+                ),
+            ),
         )
         .order_by(news_models.ArticleDetails.outbreak_relevance_score.desc())
     )
