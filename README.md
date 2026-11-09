@@ -2,6 +2,14 @@
 
 EpiScout AI là hệ thống giám sát thông tin dịch tễ từ báo điện tử. Hệ thống thu thập bài viết, phát hiện tín hiệu bệnh truyền nhiễm, hỗ trợ nhân viên y tế xác nhận và gom nhiều bài báo về cùng một sự kiện.
 
+## Cài và chạy local trên Windows
+
+Xem [hướng dẫn cài môi trường và Qwen local](docs/windows-local-qwen-setup.md): Python 3.12, Node.js 22, MySQL, Ollama và Qwen3.5 4B, cấu hình mẫu, khởi tạo DB mới và chạy giao diện cổng **8080** / backend **8001**.
+
+- Backend local: [`.env.qwen.example`](.env.qwen.example)
+- Proxy frontend: [`frontend/.env.development.example`](frontend/.env.development.example)
+- Model: [`Modelfile.local`](Modelfile.local)
+
 ## Mục tiêu
 
 - Phát hiện sớm ca bệnh, ổ dịch và hiện tượng y tế bất thường.
