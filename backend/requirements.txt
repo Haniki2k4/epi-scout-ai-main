@@ -24,3 +24,5 @@ python-docx
 PyJWT
 bcrypt
 prophet
+matplotlib
+Pillow

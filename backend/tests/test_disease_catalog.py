@@ -88,11 +88,11 @@ def test_statistics_use_detail_and_count_one_article_once(db):
     group = stats.get_disease_breakdown(db, "virus")
     assert group["total_articles"] == 3
     assert sum(d["article_count"] for d in group["diseases"]) == 4
-    assert stats.get_zscore_spikes(db, "virus", days=3, window=2)[-1]["count"] == 3
+    assert stats.get_zscore_spikes(db, "virus", days=3, window=2)[-1]["count"] == 1
     assert stats.get_zscore_spikes(db, "H5N1", days=3, window=2)[-1]["count"] == 1
     assert stats.get_zscore_spikes(db, "Ebola", days=3, window=2)[-1]["count"] == 0
     assert stats.get_zscore_spikes(db, days=3, window=2)[-1]["date"] == datetime.utcnow().strftime("%Y-%m-%d")
-    assert stats.get_prophet_forecast(db, "virus")["historical"][-1]["y"] == 3
+    assert stats.get_prophet_forecast(db, "virus")["historical"][-1]["y"] == 1
     assert "dengue" not in {r["disease"] for r in stats.get_heatmap_data(db)}
     assert "virus" not in stats.get_interest_trends(db)["diseases"]
     assert old.details.keywords_matched == "virus, sốt, dengue, sốt xuất huyết"

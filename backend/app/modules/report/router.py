@@ -18,6 +18,10 @@ from .generator import get_report_data
 from .docx_builder import build_word_report
 from .excel_builder import build_ebs_excel
 from .email_sender import send_report_email
+from .interactive_export import (
+    InteractiveReportRequest, build_interactive_data, build_interactive_word,
+    create_interactive_snapshot, get_interactive_snapshot,
+)
 from ...core.logger import get_logger
 
 logger = get_logger("backend.report.router")
@@ -38,6 +42,27 @@ class SendEmailRequest(BaseModel):
     attach_docx: bool = True
     attach_excel: bool = True
     custom_recipients: Optional[List[str]] = None  # Ghi đè danh sách người nhận
+
+
+@router.post('/interactive-data')
+def get_interactive_report_data(body: InteractiveReportRequest, db: Session = Depends(get_db)):
+    return create_interactive_snapshot(db, body)
+
+
+@router.post('/interactive-export')
+def export_interactive_report(
+    body: InteractiveReportRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_active_user),
+):
+    report = get_interactive_snapshot(body) if body.snapshot_id else build_interactive_data(db, body)
+    if report is None:
+        raise HTTPException(status_code=410, detail='Bản dữ liệu đã hết hạn. Vui lòng tải lại phân tích rồi xuất Word.')
+    content = build_interactive_word(report)
+    media_type = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    filename = f"PhanTich_{body.mode}_{datetime.utcnow():%Y%m%d_%H%M}.docx"
+    return Response(content=content, media_type=media_type,
+                    headers={'Content-Disposition': f'attachment; filename={filename}'})
 
 
 @router.post("/generate")

@@ -266,7 +266,8 @@ def get_zscore_spikes(db, disease_name=None, window=14, days=60):
     Dùng ArticleDetails.keywords_matched để đồng bộ với các biểu đồ khác.
     """
     import math
-    start_date = datetime.utcnow() - timedelta(days=days + window) # Lấy dư để tính MA cho ngày đầu tiên
+    today = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    start_date = today - timedelta(days=days + window - 1)
     
     articles = _disease_rows(db, start_date)
     
@@ -275,12 +276,13 @@ def get_zscore_spikes(db, disease_name=None, window=14, days=60):
     for art in articles:
         if art.diseases:
             kws = art.diseases
-            if matches_disease_filter(kws, disease_name):
+            if not disease_name or canonical_disease(disease_name) in kws:
                 daily_counts[art.date_str] += 1
                 
-    target_dates = [(datetime.utcnow() - timedelta(days=days + window - 1 - i)).strftime("%Y-%m-%d") for i in range(days + window)]
-    counts = [daily_counts[d] for d in target_dates]
-    first_seen = min(daily_counts, default=None)
+    target_dates = [(start_date + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(days + window)]
+    # Coverage belongs to the source corpus, not the first mention of this disease.
+    first_seen = min((art.date_str for art in articles), default=None)
+    counts = [daily_counts.get(d, 0) for d in target_dates]
     
     result = []
     # Chỉ trả về dữ liệu của `days` ngày gần nhất
@@ -332,7 +334,7 @@ def get_prophet_forecast(db, disease_name=None, horizon_days=7, interval_width=0
     for art in articles:
         if art.diseases:
             kws = art.diseases
-            if matches_disease_filter(kws, disease_name):
+            if not disease_name or canonical_disease(disease_name) in kws:
                 daily_counts[art.date_str] += 1
                 
     today = datetime.utcnow().date()
