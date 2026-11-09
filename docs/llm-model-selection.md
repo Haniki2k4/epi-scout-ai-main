@@ -1,5 +1,95 @@
 # Lựa chọn mô hình cho EpiScout AI
 
+## Cấu hình đang sử dụng từ 09/11/2026
+
+Đã cập nhật checkout `D:\do-an\epi-scout-ai-main` từ `origin/main`, commit
+`758f94f`, rồi chuyển các thiết lập LLM trong `.env` sang API Ollama nội bộ.
+Giữ nguyên database/JWT/SMTP, keyword, quy tắc lọc, schema và bước kiểm tra
+bằng chứng. `.env` cũ đã được sao lưu trong
+`D:\do-an\.local-tools\workspace-backups`.
+
+Model `episcout-local` là alias của `qwen3.5:4b-q4_K_M` đã có trên máy,
+context 65.536 token, tối đa 4.096 token đầu ra, bốn luồng CPU. Profile
+có thể sao chép từ [`.env.local.example`](../.env.local.example):
+
+```dotenv
+LLM_RECHECK_ENABLED=true
+LLM_RECHECK_MODEL=episcout-local
+LLM_SUMMARY_MODEL=episcout-local
+LLM_FALLBACK_MODEL=
+OPENAI_BASE_URL=http://127.0.0.1:11434/v1
+OPENAI_API_KEY=ollama
+LLM_REASONING_EFFORT=none
+LLM_MAX_INPUT_BYTES=57344
+LLM_RECHECK_TIMEOUT_SECONDS=600
+LLM_SUMMARY_TIMEOUT_SECONDS=600
+LLM_MAX_RETRIES=1
+```
+
+`ollama` chỉ là placeholder cho giao thức tương thích OpenAI. Bóc tách,
+chạy lại đánh giá và tóm tắt đều dùng cấu hình local; không có model fallback
+cloud. Không phát sinh phí API hay phụ thuộc quota miễn phí của bên thứ ba.
+Windows và model vẫn dùng CPU, RAM và điện; website tin tức vẫn có thể giới
+hạn lượt tải. Model không tự thu thập tin: pipeline RSS/đọc thân bài hiện có
+tiếp tục đảm nhiệm phần này.
+
+Khởi chạy từ PowerShell:
+
+```powershell
+Set-Location 'D:\do-an\epi-scout-ai-main'
+.\start-local-model.ps1
+.\start-backend.ps1
+```
+
+Script backend tự khởi động Ollama khi `.env` dùng endpoint local; script
+Ollama kiểm tra alias `episcout-local` và tạo từ `Modelfile.local` nếu chưa
+có. Runtime portable vẫn ở `D:\do-an\.local-tools\ollama`.
+
+Bản 4B được ưu tiên thay cho 2B vì kiểm định trước đây phát hiện lỗi bóc tách
+ở bản 2B. Bản 4B cũng có thể nhầm; kiểm tra bằng chứng và thẩm định của con
+người vẫn bắt buộc theo quy trình hiện có. Máy 8 GB RAM xử lý từng bài và có
+thể cần vài phút/bài. Không diễn giải kết quả thử nhỏ thành độ chính xác trên
+toàn bộ nguồn tin. Nội dung vượt ngân sách byte bị từ chối, không âm thầm cắt
+rồi coi là đã đọc đủ bài.
+
+Kiểm thử hồi quy sau tích hợp: **104 passed**. Các mock cũ của ba tệp test
+được cập nhật theo hợp đồng trả về `(parsed, requested_model, actual_model)`
+đã có trên `main`; không thay đổi điều kiện kiểm tra hoặc tiêu chí nghiệp vụ.
+
+Kiểm định model thật sau tích hợp dùng hai bài giả lập có sẵn, ví dụ built-in
+của dự án và bước kiểm tra bằng chứng thật. Tắt ví dụ bổ sung từ workbook
+trong lần đo này để tránh trộn dữ liệu tham khảo với dữ liệu kiểm định;
+cấu hình chạy ứng dụng vẫn giữ nguyên lựa chọn few-shot hiện có.
+Không ghi dữ liệu kiểm định vào bảng bài báo/sự kiện.
+
+| Bài giả lập | Kết quả | Thời gian |
+| --- | --- | --- |
+| CDC Thanh Hóa ghi nhận sốt xuất huyết | `relevant`; giữ riêng 8 ca mới, 120 ca lũy kế, 2 ca nghi nhiễm trong `diseases`; có observation và câu nguồn | 305,6 giây |
+| Bài viêm mao mạch dị ứng, phủ định thủy đậu/tay chân miệng | Bị loại đúng; model trả `noise` thay vì nhãn chuẩn `irrelevant`, không giữ số ca/bệnh | 162,3 giây |
+
+Đúng quyết định giữ/loại: **2/2**, đúng nhãn chính xác: **1/2**. Đây chỉ là
+hai mẫu kiểm tra kết nối và hành vi, không phải ước lượng chất lượng trên
+nguồn tin thực tế. Kết quả chi tiết nằm trong
+`scratch/local-integration-20261109.jsonl`. Model vẫn bỏ trống ngày sự kiện
+ở bài đầu; không tự bổ sung ngày chưa bóc tách được. Không thể coi bản 4B là
+bộ bóc tách đã đạt độ chính xác production chỉ dựa trên lần kiểm tra này.
+
+API model được kiểm tra theo URL cấu hình và trả HTTP 200. Lần kiểm tra ban
+đầu database báo `OperationalError`. Kiểm tra lại ngày 09/11/2026 sau khi
+MySQL Docker sẵn sàng: `SELECT 1` thành công, dùng cấu hình database local
+`EpiScoutDB_latest_20261103` hiện có, không thay mật khẩu hay nhập lại dữ liệu.
+Backend main chạy tại `127.0.0.1:8001`, frontend main tại `127.0.0.1:8081`.
+Health check, trang frontend và API đọc bài qua proxy frontend đều trả HTTP
+200; đọc được 225 bài công khai và 76 keyword đang bật tại thời điểm kiểm tra.
+Startup xác nhận preflight `episcout-local` OK. Chưa kích hoạt lượt quét mới
+để kiểm thử ghi dữ liệu. Theo yêu cầu người dùng, đã dừng backend/frontend
+bản cũ tại 8000/8080 cùng lượt quét đang chạy; hai cổng này không còn dịch vụ
+lắng nghe. Bản cũ dùng database `EpiScoutDB` khác với bản main; không xóa hay
+nhập lại dữ liệu của database đó. Bản main tại 8001/8081 đã kiểm tra lại health
+và API đọc bài thành công sau chuyển đổi.
+
+## Hồ sơ kiểm định trước lần tích hợp này
+
 Ngày kiểm tra: 03/11/2026. Người dùng chọn chạy local miễn phí trên máy hiện tại.
 Đã cài Ollama CPU portable tại `D:\do-an\.local-tools\ollama`, chỉ nghe trên
 `127.0.0.1:11434`. Đã kiểm định bản 2B và đang thử tiếp bản 4B; chưa chuyển

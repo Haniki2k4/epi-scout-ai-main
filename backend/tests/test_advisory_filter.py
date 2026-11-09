@@ -49,12 +49,12 @@ def test_rejected_llm_labels_cannot_leak_case_data(monkeypatch, label):
     monkeypatch.setattr(crawler, "_get_llm_cooldown_status", lambda: (False, ""))
     monkeypatch.setattr(crawler, "_llm_session_is_fallback", False)
     monkeypatch.setattr(crawler, "_llm_circuit_state", "CLOSED")
-    monkeypatch.setattr(crawler, "_call_llm_api", lambda *args: {
+    monkeypatch.setattr(crawler, "_call_llm_api", lambda *args: ({
         "label": label, "matched_keywords": ["cúm A"], "location": "Thanh Hóa",
         "normalized_title": "Một ca cúm", "new_cases": 1, "severity": "medium",
         "diseases": [{"disease_name": "cúm A", "new_cases": 1}],
         "event_start_date": "2026-11-03",
-    })
+    }, "episcout-local", "episcout-local"))
     actual, keywords, _, meta = crawler.llm_recheck_article("Dinh dưỡng khi mắc cúm A", "Bác sĩ tư vấn", ["cúm A"])
     assert actual == label and keywords == []
     assert meta["diseases"] == [] and meta["location"] == "unknown"

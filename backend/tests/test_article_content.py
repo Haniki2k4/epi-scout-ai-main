@@ -61,7 +61,7 @@ def test_local_provider_without_fallback_does_not_call_an_empty_model(monkeypatc
     calls = []
     def provider(model, *args):
         calls.append(model)
-        return {'label': 'irrelevant', 'reason': 'Tin kinh tế'}
+        return {'label': 'irrelevant', 'reason': 'Tin kinh tế'}, model, model
     monkeypatch.setattr(crawler, '_call_llm_api', provider)
     label, _, _, _ = crawler.llm_recheck_article('Cơn sốt mua bán', 'Tin kinh tế thị trường', ['sốt'])
     assert label == 'irrelevant' and calls == ['episcout-local']
@@ -78,10 +78,10 @@ def test_llm_relevant_without_evidence_is_quarantined(monkeypatch, evidence, mat
     monkeypatch.setattr(crawler, '_get_llm_cooldown_status', lambda: (False, ''))
     monkeypatch.setattr(crawler, '_llm_session_is_fallback', False)
     monkeypatch.setattr(crawler, '_llm_circuit_state', 'CLOSED')
-    monkeypatch.setattr(crawler, '_call_llm_api', lambda *args: {
+    monkeypatch.setattr(crawler, '_call_llm_api', lambda *args: ({
         'label': 'relevant', 'matched_keywords': matched, 'relevance_evidence': evidence,
         'diseases': [{'disease_name': 'cúm A', 'new_cases': 15}],
-    })
+    }, 'episcout-local', 'episcout-local'))
     label, keywords, _, meta = crawler.llm_recheck_article(
         '15 ca cúm A', 'CDC Thanh Hóa ghi nhận 15 ca cúm A tại trường mầm non.', ['cúm A'], require_evidence=True,
     )

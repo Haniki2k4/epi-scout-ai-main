@@ -148,11 +148,11 @@ def test_llm_pipeline_accepts_alias_and_rejects_unlisted_cause(monkeypatch):
     monkeypatch.setattr(crawler, "_get_llm_cooldown_status", lambda: (False, ""))
     monkeypatch.setattr(crawler, "_llm_session_is_fallback", False)
     monkeypatch.setattr(crawler, "_llm_circuit_state", "CLOSED")
-    monkeypatch.setattr(crawler, "_call_llm_api", lambda *args: {
+    monkeypatch.setattr(crawler, "_call_llm_api", lambda *args: ({
         "label": "relevant", "matched_keywords": ["melioidosis"], "reason": "3 ca được nguồn nêu rõ",
         "diseases": [{"disease_name": "melioidosis", "new_cases": 3},
                      {"disease_name": "Ebola", "new_cases": 99}],
-    })
+    }, "episcout-local", "episcout-local"))
     label, matched, reason, meta = crawler.llm_recheck_article(
         "3 ca Whitmore", "Các ca đang được điều trị", ["Whitmore"])
     assert label == "relevant" and matched == ["Whitmore"]
